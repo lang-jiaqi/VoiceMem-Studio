@@ -27,8 +27,23 @@ from pathlib import Path
 
 import numpy as np
 
+from voicemem import gate as _gate_mod
 from voicemem.memory_api import build_memory_context
 from voicemem.utils.audio.stream_io import resample
+
+
+def empty_result():
+    """"这一轮不需要记忆"时交出去的空结果。
+
+    不用 ``None``：调用方（demo 的 hits_payload / note_hits / 回放挑选…）拿到的
+    一直是 SearchResult，突然变成 None 就是一串 AttributeError。空结果让"没检索"
+    和"检索了但一条都没有"走同一条代码路径。
+    """
+    from voicemem.leftbrain.cognitive_graph.query_slot_classifier import QueryClassification
+    from voicemem.orchestrator import SearchResult
+    return SearchResult(hits=[], classification=QueryClassification(slots=[], entities=[]),
+                        related_summaries={}, slot_mem_ids=set(),
+                        final_candidate_ids=set(), search_mode="gated")
 
 
 @dataclass
@@ -36,6 +51,10 @@ class Turn:
     """一轮说完（或打字）时、投机预取早已算好的记忆结果——调用方拿来直接回复，不再搜。"""
     text: str
     result: object
+    #: 轮次闸门判的路（见 voicemem/gate.py）。``deep`` = 检索过了；其余两路没检索，
+    #: ``result`` 是空的。调用方据此决定提不提示"我不知道"——浅轮上提那句，
+    #: "讲个笑话"会被答成"我不知道"。
+    route: str = _gate_mod.DEEP
 
     @property
     def memory_context(self) -> str:
@@ -61,6 +80,11 @@ class StreamState:
     def memory_context(self) -> str:
         m = self.turn.result if self.turn else self.memory
         return build_memory_context(m) if m is not None else ""
+
+    @property
+    def route(self) -> str:
+        """这一轮闸门判的路。没说完那一轮还没最终判定，按 deep 报。"""
+        return self.turn.route if self.turn else _gate_mod.DEEP
 
     # ── 记忆结果 ───────────────────────────────────────────────────────────────
 
@@ -240,8 +264,11 @@ class VoiceStream:
 
     def __init__(self, vm, *, on_partial=None, spec_min_chars=6,
                  gamble_s=0.2, confirm_s=0.3, src_rate=24000, vad_threshold=None,
-                 emotion=None):
+                 emotion=None, gate=_gate_mod.route):
         self.vm = vm
+        #: 轮次闸门：``text -> "deep" | "shallow" | "backchannel"``。
+        #: ``None`` = 关掉闸门，每轮都检索（原来的行为）。传自己的函数就换掉判定。
+        self.gate = gate
         #: 投机检索时带给 Search 的情绪提示（调用方可随时改写这个属性）。
         #:
         #: **右脑没有它就基本是空转的。** 右脑的情感记录几乎全部只挂在「情绪」
@@ -271,6 +298,7 @@ class VoiceStream:
         self._spoke = False
         self._spec = None
         self._spec_text = ""
+        self._route = _gate_mod.DEEP    # 本轮闸门判的路（见 _gate）
         self._last_memory = None   # 最新算好的投机记忆（SearchResult）
         self._pcm = []             # 本轮音频（16k 单声道），供 StreamState 按需做感知
         self._pcm_len = 0          # 已攒样本数，超上限就丢最早的（见 _MAX_TURN_S）
@@ -292,6 +320,25 @@ class VoiceStream:
                 self._vad = make_vad(threshold=self.vad_threshold)
         return self._vad
 
+    # ── 轮次闸门：这一句要不要检索 ──────────────────────────────────────────
+    #
+    # 闸门在**检索之前**，不在注入之前。放注入前的话检索照跑了，省下的只是几行
+    # prompt——而检索才是这条路上的活儿。
+    #
+    # 判定随文本增长反复做，不是一锤子买卖：前 6 个字判成浅、涨到 12 个字冒出
+    # "我上次"翻成深，那时再起检索也来得及（投机本来就是重复起的）。反过来
+    # 由深翻浅就把已起的那次 cancel 掉。真正定生死的是**说完那一刻**那次判——
+    # 那时整句在手，实测深句漏检约 1.4%，而只看前 15 个字是 46%。
+    def _gate(self, text) -> str:
+        if self.gate is None:
+            return _gate_mod.DEEP
+        try:
+            return self.gate(text)
+        except Exception as e:
+            # 闸门自己坏了，宁可多检索一次，也不能因此把记忆丢了。
+            print(f"[gate] 判定失败（{type(e).__name__}: {e}）→ 按 deep 走", flush=True)
+            return _gate_mod.DEEP
+
     # ── 投机预取（本地分类器 + 本地向量 Search，0 LLM/网络，放线程里跟读麦克风并发）──
     async def _speculate(self, text) -> Turn:
         t0 = time.time()
@@ -304,15 +351,23 @@ class VoiceStream:
         result = await asyncio.to_thread(work)
         print(f"[speculate] {text[:24]!r} -> {len(result.hits)} hits  "
               f"{(time.time()-t0)*1000:.0f}ms", flush=True)
-        return Turn(text, result)
+        return Turn(text, result, route=_gate_mod.DEEP)
 
     def _kick(self, text):
-        """文本够长且变化了就（重）起后台投机。"""
-        if text and text != self._spec_text and len(text) >= self.spec_min_chars:
+        """文本够长且变化了就（重）起后台投机——闸门放行的话。"""
+        if not (text and text != self._spec_text and len(text) >= self.spec_min_chars):
+            return
+        self._route = self._gate(text)
+        if self._route != _gate_mod.DEEP:
+            # 这一句不需要记忆：不起检索，已经在跑的那次也掐掉。
             if self._spec:
                 self._spec.cancel()
-            self._spec_text = text
-            self._spec = asyncio.create_task(self._speculate(text))
+            self._spec, self._spec_text = None, text
+            return
+        if self._spec:
+            self._spec.cancel()
+        self._spec_text = text
+        self._spec = asyncio.create_task(self._speculate(text))
 
     def _ready_memory(self):
         """取最新算好的投机记忆（SearchResult）；没算好就保持上一份/None。"""
@@ -324,14 +379,28 @@ class VoiceStream:
         return self._last_memory
 
     async def _confirm(self) -> Turn:
+        """说完那一刻：拿整句再判一次，这次的判定说了算。
+
+        整句在手是这一步和前面每一次判的区别，也是准确率的来源——判别信息大量落在
+        句子中后段（实测：只看前 6 字，深句漏检 84%；前 15 字 55%；整句 20%）。
+        """
+        self._route = self._gate(self._text)
+        if self._route != _gate_mod.DEEP:
+            if self._spec:
+                self._spec.cancel()
+                self._spec = None
+            print(f"[gate] {self._route}：{self._text[:16]!r} → 不检索", flush=True)
+            return Turn(self._text, empty_result(), route=self._route)
         try:
+            # 前面几次判成浅、这次翻成深：那时没起检索，现在补一次。晚了一点，
+            # 但整句的判定比前缀准得多，宁可晚也不能不查。
             turn = await (self._spec or self._speculate(self._text))
         except asyncio.CancelledError:
             turn = await self._speculate(self._text)
         # flush() 可能补出投机时还没解码出来的尾字：文本以最终版为准，记忆沿用已预取
         # 的结果（差的是最后几个字，为它重跑一次 Search 就把投机的收益还回去了）。
         if turn.text != self._text:
-            turn = Turn(self._text, turn.result)
+            turn = Turn(self._text, turn.result, route=self._route)
         return turn
 
     def _reset_turn(self):
@@ -339,11 +408,15 @@ class VoiceStream:
             self._asr.reset()
         self._text, self._silence, self._spoke = "", 0.0, False
         self._spec, self._spec_text, self._last_memory = None, "", None
+        self._route = _gate_mod.DEEP
         self._pcm, self._pcm_len = [], 0
         self._preroll = []
 
     async def feed_text(self, text) -> Turn:
-        """打字轮：直接投机一次返回 Turn。"""
+        """打字轮：闸门放行才检索。"""
+        self._route = self._gate(text)
+        if self._route != _gate_mod.DEEP:
+            return Turn(text, empty_result(), route=self._route)
         return await self._speculate(text)
 
     async def feed_partial(self, text, ended: bool = False) -> StreamState:

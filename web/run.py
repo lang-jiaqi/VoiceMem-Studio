@@ -103,6 +103,7 @@ from audio_timeline import AudioTimeline, SpeechRateEstimator  # noqa: E402
 from session_context import SessionBuffer            # noqa: E402
 from voicemem import VoiceMem                        # noqa: E402
 from voicemem.audio_timing import TimedAudioChunk    # noqa: E402
+from voicemem import gate                            # noqa: E402  轮次闸门（三路判定）
 
 BARGE_DEBUG = os.environ.get("BARGE_DEBUG", "1") != "0"
 BARGE_THRESHOLD = float(os.environ.get("BARGE_THRESHOLD", "0.45"))  # 越小越容易被打断
@@ -1117,6 +1118,7 @@ class Pending:
     stranger: bool = False       # 声纹认出说话的不是这个记忆库的主人
     replay: str = ""             # 该把哪条记忆当时那段原声放回来（memory_id），空=不放
     emotion: str = ""            # 上一轮感知到的情绪，用来给这一轮定语气
+    route: str = gate.DEEP       # 轮次闸门判的路：deep 才注入事实记忆，见 voicemem/gate.py
 
 
 # ══════════════════ 两条控制流（各 ~10 行，只消费预取好的 Pending）══════════════════
@@ -1375,8 +1377,10 @@ async def voicemem_llm_tts(pending, send, send_audio, owner, timeline,
     # 算完还常常因为"把握不够"被丢掉，纯浪费。
     # 先用文本语义那份（毫秒级）把标签发出去，声学放后台跑，可信了再补一条
     # tag_update 覆盖 UI 上的情绪。
-    note_hits(pending.result)      # 让脑图快照保证这几条在图上
-    await send({"type": "memory_hits",
+    if gate.needs_memory(pending.route):
+        note_hits(pending.result)  # 让脑图快照保证这几条在图上。浅轮不记：这几条
+                                   # 没进 prompt，算成"命中"会把记忆热度统计弄脏
+    await send({"type": "memory_hits", "route": pending.route,
                 **fill_tags(utils.hits_payload(pending.result, has_audio=audio_of,
                                               cluster_of=hit_cluster),
                             pending.text, pending.audio_path or "", acoustic=False)})
@@ -1478,9 +1482,14 @@ async def voicemem_llm_tts(pending, send, send_audio, owner, timeline,
         # 人设和「右脑不许念出来」的约束就悄悄没了。
         # 走核心回复层（人设在 CONFIG.reply.llm.config.system，见 voicemem/reply.py
         # 的 compose_system：system + memory_context，和 realtime 那条拼出来的一样）。
+        # 闸门判成浅/附和的轮次，核心那边压根没检索（见 voicemem/stream.py 的
+        # _confirm），memory_context 天然是空的。这里只剩一件事：**别发那句"明说
+        # 不知道"**——它是给"该查却查空了"用的，浅轮上发它，"讲个笑话"会被答成
+        # "我不知道"。
         ctx = _STRANGER if pending.stranger else pending.memory_context
-        if not pending.stranger and not (ctx or "").strip():
-            ctx = _NO_MEMORY_NOTE          # 一条都没检索到：明说不知道，别编
+        if (not pending.stranger and gate.needs_memory(pending.route)
+                and not (ctx or "").strip()):
+            ctx = _NO_MEMORY_NOTE          # 该检索却一条都没有：明说不知道，别编
         # 情绪不再拼进文本 prompt：那是**发声指示**（"压低、放软、留停顿"），
         # 让文字模型理解一遍再指望 TTS 猜出来，中间隔了两层。TTS 后端的 instruction
         # 参数就是收这个的，该搬过去。搬之前 pending.emotion 这一路暂时没有出口。
@@ -1573,8 +1582,10 @@ async def start_realtime_turn(pending, conn, send, timeline,
     response.done 会被下一轮读到，当成自己说完了。
     """
     await send({"type": "user_transcript", "text": pending.text})
-    note_hits(pending.result)      # 让脑图快照保证这几条在图上
-    await send({"type": "memory_hits",
+    if gate.needs_memory(pending.route):
+        note_hits(pending.result)  # 让脑图快照保证这几条在图上。浅轮不记：这几条
+                                   # 没进 prompt，算成"命中"会把记忆热度统计弄脏
+    await send({"type": "memory_hits", "route": pending.route,
                 **fill_tags(utils.hits_payload(pending.result, has_audio=audio_of,
                                               cluster_of=hit_cluster),
                             pending.text, pending.audio_path or "", acoustic=False)})
@@ -1594,12 +1605,14 @@ async def start_realtime_turn(pending, conn, send, timeline,
     # 明明检索到了"叫墨墨"，模型还答"你刚提过但我没听清"）。
     print(f"[lat] 本地判完说完 → 发 response.create", flush=True)
     await conn.response.create(response={
-        "instructions": _realtime_instructions(pending.memory_context, pending.stranger,
-                                               replay=bool(pending.replay),
-                                               emotion=pending.emotion,
-                                               text=pending.text,
-                                               context_session=context_session,
-                                               context_space=context_space),
+        "instructions": _realtime_instructions(
+            pending.memory_context,      # 浅轮核心没检索过，这里本来就是空的
+            pending.stranger,
+            replay=bool(pending.replay),
+            emotion=pending.emotion,
+            text=pending.text,
+            context_session=context_session,
+            context_space=context_space),
     })
     await send({"type": "answer_start", "output_id": timeline.output_id,
                 "sample_rate": timeline.sample_rate})
@@ -1785,40 +1798,13 @@ ECHO_FUZZY_MIN = int(os.environ.get("VOICEMEM_ECHO_FUZZY_MIN", "4"))
 #: 判据是**新增的这一段整个都是附和词**：说"对，不过我想说的是…"时，新增里
 #: 除了"对"还有别的，照样打断。代价只是纯附和的那次不打断，本来也不该打断。
 BACKCHANNEL_ON = os.environ.get("VOICEMEM_BACKCHANNEL", "1") != "0"
-def _bc_norm(s: str) -> str:
-    """归一化：去掉空格和标点，只留字母数字。词表和输入走同一个函数，
-    免得"got it"（词表里有空格）永远匹配不上"gotit"（输入已去空格）。"""
-    return "".join(ch for ch in (s or "") if ch.isalnum()).casefold()
-
-
-#: 按长度倒序贪心切分，所以"对的"要排在"对"前面。
-_BACKCHANNEL_RAW = {
-    # 中文
-    "嗯嗯", "嗯哼", "对对", "对啊", "对的", "是的", "是啊", "好的", "好呀", "行吧",
-    "知道了", "明白", "懂了", "原来如此", "这样啊",
-    "嗯", "呃", "哦", "噢", "喔", "欸", "诶", "啊", "唉", "对", "是", "好", "行",
-    # 英文
-    "uh-huh", "mhm", "mm-hmm", "yeah", "yep", "yes", "okay", "ok", "right",
-    "sure", "gotcha", "got it", "i see", "cool", "nice", "wow", "hmm", "huh",
-}
-_BACKCHANNEL = sorted({_bc_norm(w) for w in _BACKCHANNEL_RAW}, key=len, reverse=True)
-
+# 附和词表搬进核心（voicemem/gate.py）：打断判定和"要不要检索"用的是同一张表，
+# demo 和核心各留一份的话，改一处漏一处。这里只保留 demo 自己的开关。
+_bc_norm = gate.norm
 
 def _is_backchannel(new_chars: str) -> bool:
-    """新增的这几个字是不是纯附和。整段都能被词表切完才算。"""
-    if not BACKCHANNEL_ON:
-        return False
-    s = _bc_norm(new_chars)
-    if not s:
-        return False
-    while s:
-        for w in _BACKCHANNEL:
-            if s.startswith(w):
-                s = s[len(w):]
-                break
-        else:
-            return False
-    return True
+    """新增的这几个字是不是纯附和。"""
+    return bool(BACKCHANNEL_ON) and gate.is_backchannel(new_chars)
 
 
 def _is_echo(new_chars: str, said: str) -> bool:
@@ -1930,7 +1916,8 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                 turn = await stream.feed_text(data["text"])
                 yield Pending(turn.text, turn.memory_context, turn.result, spoken=False,
                               replay=_replay_id(turn.text, turn.result),
-                              emotion=owner.get("emotion", ""))
+                              emotion=owner.get("emotion", ""),
+                              route=turn.route)
             continue
         if msg.get("bytes") is None:
             continue
@@ -2079,7 +2066,8 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                               save_turn_audio, getattr(st, "_pcm", None)),
                           stranger=stranger,
                           replay="" if stranger else _replay_id(st.turn.text, st.turn.result),
-                          emotion=owner.get("emotion", ""))
+                          emotion=owner.get("emotion", ""),
+                          route=st.turn.route)
 
 
 
