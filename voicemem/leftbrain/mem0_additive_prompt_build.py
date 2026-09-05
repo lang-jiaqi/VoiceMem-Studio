@@ -13,13 +13,33 @@ from pathlib import Path
 PAST_MESSAGE_TRUNCATION_LIMIT = 300
 
 
-def load_additive_system_prompt() -> str:
-    """载入与 Mem0 ``ADDITIVE_EXTRACTION_PROMPT`` 一致的 system 正文。"""
-    p = Path(__file__).resolve().parent / "data" / "additive_extraction_prompt.txt"
+def _load(name: str) -> str:
+    p = Path(__file__).resolve().parent / "data" / name
     text = p.read_text(encoding="utf-8").strip()
     if not text:
-        raise RuntimeError(f"Additive system prompt missing or empty: {p}")
+        raise RuntimeError(f"System prompt missing or empty: {p}")
     return text
+
+
+def load_additive_system_prompt() -> str:
+    """载入与 Mem0 ``ADDITIVE_EXTRACTION_PROMPT`` 一致的 system 正文。"""
+    return _load("additive_extraction_prompt.txt")
+
+
+def load_three_stage_prompt() -> str:
+    """三步版 system 正文：先判存不存 → 再判左脑右脑 → 最后各按各的形状写。
+
+    换掉 mem0 那份 474 行的原因不是它写得差，是它**不是为这件事写的**：它假设输入
+    是打字聊天，没有右脑这个概念，于是 voicemem 需要的三件事全靠往后面贴 addendum
+    ——「什么不值得记」贴在 system 末尾第四段，「左右脑分流」压根没有，右脑的字段
+    只能贴到用户消息里。结果是最要紧的那条约束躺在最长的 prompt 的尾巴上。实测就
+    是不生效：库里躺着「用户用中文问候，内容是"你好"」「助手用中文回应用户的问候」
+    这种条目，两条都是那段 addendum 明令禁止的形状，而它当时已经在 prompt 里了。
+
+    所以重排成三步，把判断放在最前面：不值得存的在第一步就停住，根本走不到抽取。
+    ``VOICEMEM_EXTRACTION_PROMPT=upstream`` 换回原来那份。
+    """
+    return _load("three_stage_extraction_prompt.txt")
 
 
 def _truncate_content(text: str, limit: int = PAST_MESSAGE_TRUNCATION_LIMIT) -> str:

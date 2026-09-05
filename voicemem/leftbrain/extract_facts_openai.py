@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from voicemem.leftbrain.mem0_additive_prompt_build import (
+    load_three_stage_prompt,
     generate_additive_extraction_prompt,
     load_additive_system_prompt,
 )
@@ -272,7 +273,14 @@ class OpenAIMem0V3AdditiveExtractor:
 
     def __init__(self, config: OpenAIAdditiveExtractorConfig | None = None) -> None:
         self._cfg = config or OpenAIAdditiveExtractorConfig()
-        self._system = load_additive_system_prompt() + _LANGUAGE_RULE + _ATTRIBUTE_ADDENDUM + _VOICE_ADDENDUM
+        # 三步版把 _ATTRIBUTE_ADDENDUM / _VOICE_ADDENDUM 的内容收进了正文（分别在
+        # 「3a 左脑」和「STEP 1」里），所以不再往后面贴——那两段本来就是因为原 prompt
+        # 里没地方放才贴在末尾的，而贴在末尾正是它们不生效的原因。
+        if os.environ.get("VOICEMEM_EXTRACTION_PROMPT", "three_stage") == "upstream":
+            self._system = (load_additive_system_prompt() + _LANGUAGE_RULE
+                            + _ATTRIBUTE_ADDENDUM + _VOICE_ADDENDUM)
+        else:
+            self._system = load_three_stage_prompt() + _LANGUAGE_RULE
 
     def extract(
         self,
