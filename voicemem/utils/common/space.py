@@ -159,34 +159,63 @@ def vectors(memory_root) -> Path:
     return d
 
 
-def check_dims(memory_root, dims: int) -> None:
-    """这个 space 是用多少维建的？跟当前 embedder 对不上就说人话。
+def check_embedding(memory_root, dims: int, model: str = "") -> None:
+    """这个 space 是用哪个 embedding 建的？跟当前的对不上就说人话。
 
-    维度是**空间的属性**：一个 space 里的向量必须同一个 embedder 产出的。
-    不检查的话，报错来自 qdrant 深处——``shapes (227,384) and (1536,) not
-    aligned``，看不出是"换了 embedding"造成的。
+    embedding 是**空间的属性**：一个 space 里的向量必须同一个模型产出的，混了就是
+    一半记忆检索不到。不检查的话，报错来自 qdrant 深处——``shapes (227,384) and
+    (1536,) not aligned``，看不出是"换了 embedding"造成的。
+
+    **光比维度不够。** ``bge-small-en-v1.5`` 和 ``multilingual-e5-small`` 都是 384
+    维，拿前者去读后者建的库，维度检查全过，然后安静地返回一堆语义无关的邻居——
+    不报错的错最难查。所以模型名也要比。
+
+    老空间（这个字段加进来之前建的）没记模型名：维度对得上就放行，由 describe()
+    把当前模型补记上。补记等于"相信你现在用的就是当初建库那个"——没别的办法，
+    但会打一行说明，中途换过模型的人看得见。
     """
     import json as _json
     path = json_path(memory_root)
     if not path.is_file():
         return
     try:
-        old = (_json.loads(path.read_text(encoding="utf-8")).get("mem0") or {}).get("dims")
+        mem0 = _json.loads(path.read_text(encoding="utf-8")).get("mem0") or {}
     except Exception:
         return
-    if not old or int(old) == int(dims):
-        return
-    raise ValueError(
-        f"这个 memory space 是用 {old} 维的 embedding 建的，你现在用的是 {dims} 维。\n"
-        f"  space: {Path(memory_root)}\n"
-        f"一个 space 只能配一种 embedding。两个办法：\n"
-        f"  · 换个新 space：VoiceMem(space=\"我的名字\")\n"
-        f"  · 或者换回原来的 embedding（{old} 维通常是本地 E5，"
-        f"1536 维是 OpenAI text-embedding-3-small）")
+    old_dims, old_model = mem0.get("dims"), (mem0.get("model") or "")
+
+    if old_dims and int(old_dims) != int(dims):
+        raise ValueError(
+            f"这个 memory space 是用 {old_dims} 维的 embedding 建的，你现在用的是 {dims} 维。\n"
+            f"  space: {Path(memory_root)}\n"
+            f"一个 space 只能配一种 embedding。两个办法：\n"
+            f"  · 换个新 space：VoiceMem(space=\"我的名字\")\n"
+            f"  · 或者换回原来的 embedding（384 维通常是本地 e5 / bge-en，"
+            f"512 维是 bge-zh，1536 维是 OpenAI text-embedding-3-small）")
+
+    if old_model and model and old_model != model:
+        raise ValueError(
+            f"这个 memory space 是用 {old_model!r} 建的，你现在用的是 {model!r}"
+            f"（两者都是 {dims} 维，所以维度检查拦不住）。\n"
+            f"  space: {Path(memory_root)}\n"
+            f"照这样跑下去不会报错，只会检索出一堆语义无关的记忆。三个办法：\n"
+            f"  · 换回 {old_model!r}\n"
+            f"  · 换个新 space：VoiceMem(space=\"我的名字\")\n"
+            f"  · 全库重算向量：python3 tools/reembed.py <space> --apply")
+
+    if not old_model and model and old_dims:
+        print(f"[space] 这个空间没记录 embedding 模型，按当前的 {model!r} 补记。"
+              f"如果建库之后换过模型，跑 tools/reembed.py 重算向量。", flush=True)
+
+
+def check_dims(memory_root, dims: int) -> None:
+    """老名字，只比维度。新代码用 ``check_embedding``（它还比模型名）。"""
+    check_embedding(memory_root, dims)
 
 
 def describe(memory_root, *, user_id: str = "", mode: str = "",
-             dims: int | None = None, counts: dict | None = None) -> dict:
+             dims: int | None = None, counts: dict | None = None,
+             embed_model: str = "") -> dict:
     """写/更新空间描述文件 ``<space>.json``，返回写进去的内容。
 
     分四块，跟论文里的结构对应：
@@ -240,8 +269,10 @@ def describe(memory_root, *, user_id: str = "", mode: str = "",
         },
         "mem0": {
             "role": "底层记忆引擎（向量检索）",
-            # 维度绑定这个 space：换 embedding 就得换 space，见 check_dims()
+            # embedding 绑定这个 space：换了就得换 space（或 reembed），
+            # 见 check_embedding()。维度和模型名都要记——两个不同模型可能同维度。
             "dims": dims or (old.get("mem0") or {}).get("dims"),
+            "model": embed_model or (old.get("mem0") or {}).get("model", ""),
             "vector_store": "qdrant (local)",
             "path": "vectors/",
             "collection": "voicemem",

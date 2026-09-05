@@ -34,9 +34,12 @@
 
 provider → 内置实现 的映射（傻瓜清晰，一眼看懂）：
 
-    embedding.provider     local  -> LocalE5Embedder（本地 E5，0 网络）
+    embedding.provider     local  -> LocalEmbedder（本地句向量，0 网络；
+                                     config.model 选哪个：e5 / e5-base / bge /
+                                     bge-zh / bge-en，见 local_embedder.REGISTRY）
                            openai -> OpenAILocalEmbedder（OpenAI Embeddings API）
-    slots.provider         local  -> LocalQueryClassifier（本地 E5，0 LLM）
+    slots.provider         local  -> LocalQueryClassifier（本地句向量，0 LLM，
+                                     跟 embedding 用同一个模型）
                            openai -> QuerySlotClassifier（单次 LLM）
     vad.provider           silero -> make_vad（内置，config 可给 model / threshold）
                            custom -> config.obj 那个对象（要有 is_speech(frame)->bool）
@@ -74,12 +77,13 @@ def _bad(component: str, provider, known) -> None:
 
 
 def _embedding_factory(provider, cfg):
-    """embedding：local -> 本地 E5；openai -> OpenAILocalEmbedder；
+    """embedding：local -> 本地句向量；openai -> OpenAILocalEmbedder；
     其余名字转给 mem0 的 EmbedderFactory（ollama / huggingface / gemini / …）。"""
     if provider == "local":
         def make():
-            from voicemem.leftbrain.local_e5_embedder import LocalE5Embedder
-            return LocalE5Embedder()
+            from voicemem.leftbrain.local_embedder import LocalEmbedder
+            # config.model 选注册表里的哪一条；不给就是 env / 默认（e5）。
+            return LocalEmbedder(cfg.get("model"), language=cfg.get("language", ""))
         return make
     if provider == "openai":
         def make():
@@ -114,11 +118,17 @@ def _slots_factory(provider, cfg):
     if provider == "local":
         def make():
             from voicemem.leftbrain.cognitive_graph.local_query_classifier import LocalQueryClassifier
-            # 和本地 embedder 共享一份 E5（省一份内存），除非调用方显式传了 model。
+            # 和本地 embedder 共享同一份权重（省一份内存），除非调用方显式传了
+            # model。**必须是同一个模型**：槽描述和查询分别用两个模型编码的话，
+            # 它们落在两个互不相干的向量空间里，余弦比出来的是噪声。
             kw = dict(cfg)
             if "model" not in kw:
-                from voicemem.leftbrain.local_e5_embedder import shared_e5
-                kw["model"] = shared_e5()
+                from voicemem.leftbrain.local_embedder import (
+                    resolve, resolve_path, shared_model)
+                # language 留在 kw 里：分类器要用同一个语言解析出同一份前缀，
+                # pop 掉的话权重共享了、前缀却各算各的。
+                kw["model"] = shared_model(resolve_path(
+                    resolve(language=kw.get("language", ""))))
             return LocalQueryClassifier(**kw)
         return make
     if provider == "openai":

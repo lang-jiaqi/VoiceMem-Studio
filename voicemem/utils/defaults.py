@@ -16,7 +16,7 @@ def default_utils(base_url, memory_root):
         from voicemem.leftbrain.local_memory_store import OpenAILocalEmbedder, OpenAILocalEmbedderConfig
         return OpenAILocalEmbedder(OpenAILocalEmbedderConfig(base_url=base_url))
     def slots():
-        # 默认本地 E5 分类器：0 LLM、0 网络——投机预取那 0–300ms 预算里不能走网络，
+        # 默认本地句向量分类器：0 LLM、0 网络——投机预取那 0–300ms 预算里不能走网络，
         # 而 Classify 就在那条路上（voicemem/stream.py 的 _speculate）。
         # sentence-transformers 不在基础依赖里（随 [demo] extra 装），缺了就回落到
         # LLM 版并打一行说明——静默回落等于悄悄开始花钱。
@@ -24,8 +24,15 @@ def default_utils(base_url, memory_root):
         if os.environ.get("VOICEMEM_SLOTS", "local").lower() != "openai":
             try:
                 from voicemem.leftbrain.cognitive_graph.local_query_classifier import LocalQueryClassifier
-                from voicemem.leftbrain.local_e5_embedder import shared_e5
-                return LocalQueryClassifier(model=shared_e5())   # 和本地 embedder 共享一份 E5
+                from voicemem.leftbrain.local_embedder import (
+                    resolve, resolve_path, shared_model)
+                # 语言显式从**这个空间**读，不走进程全局：同一进程开两个不同语言
+                # 的空间时，全局那份是后建的那个（issue #9 的同一个根子）。
+                from voicemem.lang import resolve_for_space
+                spec = resolve(language=resolve_for_space(memory_root))
+                # 和本地 embedder 共享同一份权重（省一份内存），也保证槽描述和
+                # 查询编码在同一个向量空间里。
+                return LocalQueryClassifier(model=shared_model(resolve_path(spec)))
             except ImportError as e:
                 print(f"[slots] 本地分类器不可用（{e}）→ 回落 LLM 版 QuerySlotClassifier。"
                       "装 sentence-transformers（或 pip install -e '.[demo]'）可用本地版。",

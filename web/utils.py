@@ -14,10 +14,19 @@ from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-# 本地 E5 embedder（memory embedding + slot 分类共享一份模型）已提进核心，见
-# voicemem/leftbrain/local_e5_embedder.py；这里 re-export 保持 `utils.LocalE5Embedder`
-# / `utils.shared_e5()` 的既有调用点不变（run.py 用它注入 VoiceMem(embedding=...)）。
+# 本地句向量（memory embedding + slot 分类 + 语义情绪原型共享一份模型）在核心里，
+# 见 voicemem/leftbrain/local_embedder.py。demo 侧要的是"跟记忆库同一个模型"，
+# 而不是"E5"——用哪个由注册表/空间语言决定，所以这里给一个和模型无关的入口。
+# 老名字 LocalE5Embedder / shared_e5 一起 re-export，既有调用点不变。
 from voicemem.leftbrain.local_e5_embedder import LocalE5Embedder, shared_e5  # noqa: F401
+from voicemem.leftbrain.local_embedder import (  # noqa: F401
+    LocalEmbedder, resolve, resolve_path, shared_model,
+)
+
+
+def shared_embed_model():
+    """当前生效的那份本地句向量模型（跟记忆库用的是同一个）。"""
+    return shared_model(resolve_path(resolve()))
 from voicemem.llm_config import resolve_model
 
 HERE = Path(__file__).resolve().parent

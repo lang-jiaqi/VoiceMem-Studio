@@ -6,11 +6,11 @@
 
     from voicemem import VoiceMem
     from voicemem.leftbrain.cognitive_graph.local_query_classifier import LocalQueryClassifier
-    vm = VoiceMem(slots=lambda: LocalQueryClassifier())    # slots 走本地 E5，0 LLM
+    vm = VoiceMem(slots=lambda: LocalQueryClassifier())    # slots 走本地模型，0 LLM
     vm.search("我在哪工作")                                  # Classify 不再打 LLM
 
 设计取舍（都如实说明，不藏）：
-- **slots**：E5 余弦 vs 7 个 base-7 槽描述取 top-k（实测 ~93% 和 LLM 一致）。
+- **slots**：句向量余弦 vs 7 个 base-7 槽描述取 top-k（E5 上实测 ~93% 和 LLM 一致）。
 - **entities**：默认空 → 走 voicemem 既有的 slot-only 缩窄（不是新的坏状态）。开放域
   实体识别**不是必须 LLM**：传 ``ner=<callable: query -> list[str]>`` 即可接本地
   NER（gliner / spaCy 等）把实体也本地化。
@@ -18,8 +18,13 @@
   写入侧维护，不在 search 热路径。``engine.Classify`` 检测到没有 ``classify_child``
   会自动跳过下钻，只走 base-7。
 
-E5 的 ``"query: "`` / ``"passage: "`` 前缀是必须的（不是装饰）。模型首次用自动下载；
-传 ``model=`` 可复用一个已加载的 SentenceTransformer（如和本地 embedder 共享，省一份内存）。
+前缀（E5 的 ``"query: "`` / ``"passage: "``、BGE 的空前缀）是各家自己的约定、不是
+装饰，所以**跟着模型走**：这里不再写死，而是从 ``local_embedder.REGISTRY`` 取当前
+模型那一条。用哪个模型由 ``VOICEMEM_LOCAL_EMBED_MODEL`` / 空间语言决定，和记忆向量
+是同一个决定——两边用不同模型的话，槽描述和查询就落在两个空间里，分类会失准。
+
+模型首次用自动下载；传 ``model=`` 可复用一个已加载的 SentenceTransformer（和本地
+embedder 共享，省一份内存）。
 """
 from __future__ import annotations
 
@@ -28,14 +33,6 @@ from typing import Callable, Sequence
 import numpy as np
 
 from voicemem.leftbrain.cognitive_graph.query_slot_classifier import QueryClassification
-
-# 跟记忆向量共用同一份 E5（models/embedding/），省一份权重
-def _model_name() -> str:
-    from voicemem.utils.common.paths import hf_model
-    return hf_model("embedding", "intfloat/multilingual-e5-small", "e5")
-
-
-_MODEL_NAME = _model_name()
 
 # 和内置 LLM 分类器同一套 base-7 槽描述（故意保持一致，是同一个分类决策的本地近似）。
 _SLOT_DESCRIPTIONS = {
@@ -50,16 +47,19 @@ _SLOT_DESCRIPTIONS = {
 
 
 class LocalQueryClassifier:
-    """query → QueryClassification(slots, entities)，本地 E5，无 LLM/网络。"""
+    """query → QueryClassification(slots, entities)，本地模型，无 LLM/网络。"""
 
     def __init__(
         self,
-        model_name: str = _MODEL_NAME,
+        model_name: str | None = None,
         model=None,
         ner: Callable[[str], Sequence[str]] | None = None,
         top_k: int = 2,
+        language: str = "",
     ) -> None:
-        self._model_name = model_name
+        from voicemem.leftbrain.local_embedder import resolve, resolve_path
+        self._spec = resolve(language=language)
+        self._model_name = model_name or resolve_path(self._spec)
         self._model = model                 # 可复用已加载的 SentenceTransformer
         self._ner = ner                     # 可选本地实体识别（默认无 → slot-only）
         self._top_k = top_k
@@ -68,20 +68,22 @@ class LocalQueryClassifier:
 
     def _m(self):
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(self._model_name)
+            from voicemem.leftbrain.local_embedder import shared_model
+            self._model = shared_model(self._model_name)
         return self._model
 
     def _slots_matrix(self):
         if self._slot_embs is None:
-            texts = [f"passage: {k}: {v}" for k, v in _SLOT_DESCRIPTIONS.items()]
+            pre = self._spec.passage_prefix
+            texts = [f"{pre}{k}: {v}" for k, v in _SLOT_DESCRIPTIONS.items()]
             self._slot_embs = np.asarray(self._m().encode(texts, normalize_embeddings=True))
         return self._slot_embs
 
     def classify(self, query: str, extra_slots=None) -> QueryClassification:
         """base-7 里挑 top-k 个 slot（E5 余弦）+ 可选本地实体。extra_slots（动态子
         slot 候选）本地版忽略——子 slot 下钻交给 LLM 版/写入侧维护。"""
-        q = np.asarray(self._m().encode([f"query: {query}"], normalize_embeddings=True)[0])
+        q = np.asarray(self._m().encode([f"{self._spec.query_prefix}{query}"],
+                                        normalize_embeddings=True)[0])
         order = np.argsort(-(self._slots_matrix() @ q))[: self._top_k]
         slots = [self._slot_names[i] for i in order]
         entities = list(self._ner(query)) if self._ner else []

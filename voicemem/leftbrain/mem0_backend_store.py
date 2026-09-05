@@ -207,8 +207,10 @@ class Mem0BackendStore:
         from voicemem.utils.common import space as _space
         # 换了 embedding 又指向同一个 space 时，在这儿就说清楚，别等 qdrant 抛
         # "shapes (n,384) and (1536,) not aligned"
-        _space.check_dims(memory_root, embedder.dimensions)
-        _space.describe(memory_root, dims=embedder.dimensions)
+        _embed_model = str(getattr(embedder, "model_name", "") or "")
+        _space.check_embedding(memory_root, embedder.dimensions, _embed_model)
+        _space.describe(memory_root, dims=embedder.dimensions,
+                        embed_model=_embed_model)
         qdrant_path = _space.vectors(memory_root)
         qdrant_path.mkdir(parents=True, exist_ok=True)
         cache_key = str(qdrant_path.resolve())

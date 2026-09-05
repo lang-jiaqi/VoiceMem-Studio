@@ -964,7 +964,7 @@ def _realtime_instructions(memory_context: str, stranger: bool = False,
 
 
 # ══════════════════ 统一配置入口：一个 dict 配齐所有本地/api 模型 ══════════════════
-# 打开这个 dict 就知道每个模型走本地还是 api。记忆侧（embedding/slots）走本地 E5
+# 打开这个 dict 就知道每个模型走本地还是 api。记忆侧（embedding/slots）走本地句向量
 # → 整条 search 0 LLM、0 网络（实测 Search 本体 ~10ms）；reply 段（回复用的
 # llm/tts/realtime）也在这一处配，省得分散在各处 env。缺省项走内置默认。
 # 想外挂一份自定义 config：--config path.json（或 VOICEMEM_CONFIG）整体覆盖。
@@ -972,8 +972,10 @@ CONFIG = {
     "mode": "multi_modal",
     "memory_root": ARGS.memory_root or None,
     "space": ARGS.space,
-    "embedding": {"provider": "local"},              # 记忆向量走本地 E5（0 网络）
-    "slots":     {"provider": "local"},              # slot 分类走本地 E5（0 LLM）
+    # 用哪个本地模型见 local_embedder.REGISTRY：默认 e5（多语）；加 "model": "bge"
+    # 按空间语言选中/英那一版。换模型要 tools/reembed.py 重算老库，见 check_embedding。
+    "embedding": {"provider": "local"},              # 记忆向量走本地模型（0 网络）
+    "slots":     {"provider": "local"},              # slot 分类走同一个模型（0 LLM）
     # reply：回复用模型（核心不管，web 读）。默认全走 OpenAI api。
     "reply": {
         "llm":      {"provider": "openai", "config": {"model": utils.CHAT_MODEL,
@@ -1175,7 +1177,12 @@ _PROTO = {}
 
 def _emotion_by_meaning(text: str) -> str:
     """语义最近邻。够像**而且**跟第二名拉开差距才给标签，否则空——
-    模棱两可时不标，比标错强。"""
+    模棱两可时不标，比标错强。
+
+    用的是**记忆库那一份**句向量模型（``utils.shared_embed_model()``），不是单独
+    再加载一个。注意下面两个阈值（0.80 / 0.02）是跟着模型的余弦分布调的：换了
+    embedding 模型要重调，不重调不会报错，只会变成"几乎不打标签"或"乱打标签"。
+    """
     import numpy as np
     if not _PROTO:
         labels, sents = [], []
@@ -1183,9 +1190,10 @@ def _emotion_by_meaning(text: str) -> str:
             labels += [k] * len(vs)
             sents += vs
         _PROTO["labels"] = labels
-        _PROTO["V"] = np.array(utils.shared_e5().encode(sents, normalize_embeddings=True),
-                               dtype=np.float32)
-    q = np.array(utils.shared_e5().encode([text], normalize_embeddings=True),
+        _PROTO["V"] = np.array(
+            utils.shared_embed_model().encode(sents, normalize_embeddings=True),
+            dtype=np.float32)
+    q = np.array(utils.shared_embed_model().encode([text], normalize_embeddings=True),
                  dtype=np.float32)[0]
     sims = _PROTO["V"] @ q
     i = int(np.argmax(sims))

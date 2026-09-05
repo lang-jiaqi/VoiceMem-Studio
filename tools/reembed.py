@@ -4,10 +4,11 @@
 `rb_traits` / `graph_entities` 里可能存着上一个 embedder 算的向量。
 维度不符的会被跳过（有警告），右脑检索和实体去重因此失效，直到重新 embed。
 
-跑：python3 tools/reembed.py <space> [--apply] [--local]
-不加 --apply 只统计；--local 按 web demo 的配置（本地 E5）来算，
-不加就是默认 embedder（OpenAI）。**必须跟你实际运行时的配置一致**，
-否则算出来的维度不对，等于没修。
+跑：python3 tools/reembed.py <space> [--apply] [--local] [--model KEY]
+不加 --apply 只统计；--local 按 web demo 的配置（本地句向量）来算，
+不加就是默认 embedder（OpenAI）。--model 选本地哪一个（e5 / e5-base /
+bge / bge-zh / bge-en，见 local_embedder.REGISTRY），不给就是 env / 默认。
+**必须跟你实际运行时的配置一致**，否则算出来的维度不对，等于没修。
 """
 import sqlite3
 import sys
@@ -28,8 +29,11 @@ def main() -> None:
     # qdrant 的文件锁（"Storage folder ... already accessed by another instance"）。
     # 迁移改的是 sqlite 里的向量列，跟向量库无关。
     if "--local" in sys.argv:                     # 跟 web demo 的配置对齐
-        from voicemem.leftbrain.local_e5_embedder import LocalE5Embedder
-        e = LocalE5Embedder()
+        from voicemem.leftbrain.local_embedder import LocalEmbedder
+        key = (sys.argv[sys.argv.index("--model") + 1]
+               if "--model" in sys.argv else None)
+        e = LocalEmbedder(key)
+        print(f"[reembed] 本地模型：{e.model_name}（{e.dimensions} 维）")
         embed = e.embed_query_text
     else:
         from voicemem.leftbrain.local_memory_store import (
