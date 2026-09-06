@@ -69,7 +69,7 @@ class LocalQueryClassifier:
     def _m(self):
         if self._model is None:
             from voicemem.leftbrain.local_embedder import shared_model
-            self._model = shared_model(self._model_name)
+            self._model = shared_model(self._model_name, self._spec.tokenizer_kwargs)
         return self._model
 
     def _slots_matrix(self):

@@ -238,23 +238,29 @@ class VoiceMem:
             self._reply_norm = normalize(self._reply_src or openai_reply())
         return self._reply_norm
 
-    def reply_stream(self, turn_or_text, memory_context=""):
+    def reply_stream(self, turn_or_text, memory_context="", history=None):
         """流式回复：``async for delta in vm.reply_stream(turn)``。
 
         第一个参数可直接给 ``Turn``/``StreamState``（自动拆出 text 与 memory_context），
         也可以给一段文本 + 自己渲染好的 memory_context。
+
+        ``history``：user/assistant 交替的历史消息。给了它，发出去的就是
+        ``[system 人设][历史各轮][记忆 + 这轮的话]``——前面是稳定前缀，服务端的
+        prompt 缓存才复用得上（缓存只认最长公共前缀，把每轮都变的记忆放前面，
+        后面一个 token 都省不了）。不给就是老行为，两条消息。
 
         说完的这句自动登记给记忆层（``capture`` → ``remember_reply``），下次
         ``ingest()`` 就带上 agent 这半边，调用方一行不用改。
         """
         from voicemem.reply import capture, unpack
         text, ctx = unpack(turn_or_text, memory_context)
-        return capture(self._reply_fn()(text, ctx),
+        return capture(self._reply_fn()(text, ctx, history),
                        lambda answer: self._o.remember_reply(text, answer))
 
-    async def reply(self, turn_or_text, memory_context=""):
+    async def reply(self, turn_or_text, memory_context="", history=None):
         """收全的回复：``answer = await vm.reply(turn)``。内部就是把 reply_stream 拼起来。"""
-        return "".join([d async for d in self.reply_stream(turn_or_text, memory_context)])
+        return "".join([d async for d in self.reply_stream(turn_or_text, memory_context,
+                                                           history)])
 
     def test(self):
         """启动自检：只测本 mode 需要的 util，打印 4 档速度表。"""

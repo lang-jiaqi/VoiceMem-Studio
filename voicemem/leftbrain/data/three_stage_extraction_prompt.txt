@@ -8,20 +8,30 @@ Work in three steps, in this order. Do not merge them, do not skip one.
     STEP 2  For what survives: left brain, right brain, or both?
     STEP 3  Write each side in the shape that side needs.
 
-Most turns of live speech carry nothing. Stopping at Step 1 is the single most
-common correct outcome — not a failure.
+Your default is to EXTRACT. Step 1 is a filter for junk, not a reason to skip
+work: drop something only when you are confident it carries no lasting value.
 
 
 ════════════════════════════════════════════════════════════════════════════
 # STEP 1 — IS ANY OF THIS WORTH STORING?
 
-One test, applied to every candidate:
+Go through the turn carefully and pull out everything it says about the user's
+world. Then check each candidate against one test:
 
     Would this still be useful to know a week from now, in a DIFFERENT
     conversation?
 
-If no, it is not a memory. These are the ways speech fails that test. None of
-them may ever be stored:
+**When you are not sure, keep it.** The two errors are not equal: a fact you
+drop is gone forever and the assistant will look like it forgot; an extra
+memory only costs a few tokens. Drop something only when it clearly falls into
+one of the categories below — do not invent new reasons to skip.
+
+Small talk and passing remarks still count. "我妹妹刚考完试" said in passing is a
+fact about the user's family; "我昨天路过那家店" is where they were. Extract those.
+A turn can also carry several unrelated things at once — get all of them, not
+just the one the user seemed to be asking about.
+
+These are the only things that may never be stored:
 
 - **The conversation about itself.** Audibility and connection checks from
   either side ("can you hear me?", "能听到吗", "在吗") and the replies to them.
@@ -53,7 +63,10 @@ Why this step is strict: junk from this list is worded like the CURRENT
 conversation, so it scores high on the very next query and pushes real memories
 out of top-k. The allergy stops being retrieved exactly when it matters.
 
-Nothing survives? Return {"memory": [], "emotion": "", "traits": []} and stop.
+If — and only if — everything in the turn falls into those categories, return
+{"memory": [], "emotion": "", "traits": []} and stop. That happens, but it is
+not the usual outcome: most turns where a person says something about
+themselves carry at least one fact.
 
 
 ════════════════════════════════════════════════════════════════════════════
@@ -104,8 +117,18 @@ than a typed paragraph, and inflating it invents detail that was never said.
 - **Self-contained.** Resolve every pronoun and reference against Last k
   Messages. A memory that needs the surrounding turn to make sense is broken.
 - **Temporally grounded.** Resolve EVERY relative time reference against
-  Observation Date, never against Current Date. "上周去了巴黎" is useless six
-  months later; "在 2023 年 5 月 15 日那周去了巴黎" is meaningful forever.
+  **Observation Date** — when the conversation actually happened. Never against
+  Current Date, which may be years later.
+
+      "yesterday"              → the day before Observation Date
+      "last week"              → the week preceding Observation Date
+      "next month"             → the month following Observation Date
+      "recently"               → shortly before Observation Date
+      "just finished", "today" → on or near Observation Date
+
+  "上周去了巴黎" is useless six months later; "在 2023 年 5 月 15 日那周去了巴黎"
+  is meaningful forever. This is the single most common way a memory becomes
+  worthless, so ground every one of them.
 - **Specific.** Keep proper nouns, product names, titles, numbers, and
   qualifiers exactly as said. Never generalize "三只猫" into "几只猫".
 - **Contextually rich, not atomic.** Prefer one memory carrying the fact and
@@ -181,6 +204,17 @@ Exactly three top-level keys, always all three:
 
 Shown as (turn → the three steps → output). Follow the reasoning, not the words.
 
+**Small talk still counts**
+  User: "对了我妹妹昨天刚考完试，我们晚上出去吃了顿饭"  (Observation Date 2026-09-05)
+  Step 1: two facts about the user's family and what they did → both survive.
+  Step 2: LEFT (events, no tendency stated).
+  {"memory": [
+     {"id": "0", "text": "用户的妹妹在 2026 年 9 月 4 日考完了试",
+      "attributed_to": "user", "attribute": "", "linked_memory_ids": []},
+     {"id": "1", "text": "用户在 2026 年 9 月 4 日晚上和妹妹一起出去吃了饭",
+      "attributed_to": "user", "attribute": "", "linked_memory_ids": []}],
+   "emotion": "", "traits": []}
+
 **Nothing survives Step 1**
   User: "喂，能听到吗"
   Step 1: audibility check, about the conversation → nothing survives.
@@ -207,6 +241,19 @@ Shown as (turn → the three steps → output). Follow the reasoning, not the wo
    "attributed_to": "user", "attribute": "", "linked_memory_ids": []}],
    "emotion": "烦躁",
    "traits": [{"slot": "喜好与厌恶", "label": "不喜欢开长会"}]}
+
+**Vague time reference with a historical Observation Date**
+  Existing Memories: [{"id": "0", "text": "User started reading 'The Hitchhiker's
+    Guide to the Galaxy' on January 16, 2022"}]
+  User: "I've actually listened to Ready Player One as an audiobook recently and
+    enjoyed the pop culture references."
+  Observation Date: 2022-01-16   Current Date: 2026-02-18
+  Step 3: "recently" is grounded to the OBSERVATION date (Jan 2022), not the
+  current date (Feb 2026). The Hitchhiker's memory already exists — not re-extracted.
+  {"memory": [{"id": "0", "text": "User listened to the Ready Player One audiobook
+    around early January 2022 and enjoyed the pop culture references",
+    "attributed_to": "user", "attribute": "", "linked_memory_ids": ["0"]}],
+   "emotion": "", "traits": []}
 
 **Request stripped, fact kept**
   User: "我下周要考GRE，你有什么书推荐吗"  (Observation Date 2026-09-05)

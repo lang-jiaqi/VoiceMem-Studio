@@ -276,7 +276,12 @@ class OpenAIMem0V3AdditiveExtractor:
         # 三步版把 _ATTRIBUTE_ADDENDUM / _VOICE_ADDENDUM 的内容收进了正文（分别在
         # 「3a 左脑」和「STEP 1」里），所以不再往后面贴——那两段本来就是因为原 prompt
         # 里没地方放才贴在末尾的，而贴在末尾正是它们不生效的原因。
-        if os.environ.get("VOICEMEM_EXTRACTION_PROMPT", "three_stage") == "upstream":
+        # 默认回到 upstream：三步版在 LoCoMo 上实测更差（conv-26 / 199 题，
+        # 34.7% vs 40.2%；single_hop 54.3 vs 67.1、temporal 29.7 vs 40.5）。
+        # 把「什么不值得记」提到最前面确实压住了垃圾（逐句对比里 10 句赢 4 句），
+        # 但整体重写把 upstream 那套抽取和时间锚定的功力一起砍掉了——代价太大。
+        # 正确的做法是**只把那一段前置**，不是整份重写。见 three_stage 那个文件头。
+        if os.environ.get("VOICEMEM_EXTRACTION_PROMPT", "upstream") == "upstream":
             self._system = (load_additive_system_prompt() + _LANGUAGE_RULE
                             + _ATTRIBUTE_ADDENDUM + _VOICE_ADDENDUM)
         else:

@@ -127,8 +127,8 @@ def _slots_factory(provider, cfg):
                     resolve, resolve_path, shared_model)
                 # language 留在 kw 里：分类器要用同一个语言解析出同一份前缀，
                 # pop 掉的话权重共享了、前缀却各算各的。
-                kw["model"] = shared_model(resolve_path(
-                    resolve(language=kw.get("language", ""))))
+                _spec = resolve(language=kw.get("language", ""))
+                kw["model"] = shared_model(resolve_path(_spec), _spec.tokenizer_kwargs)
             return LocalQueryClassifier(**kw)
         return make
     if provider == "openai":
@@ -314,7 +314,10 @@ def build_kwargs(config: dict) -> dict:
     tts_seg = config.get("tts")
     if tts_seg is None:
         _r = config.get("reply") or {}
-        if any(k in _r for k in _REPLY_DEMO_KEYS):
+        # reply 也可以直接是个**可调用对象**（自己写的 provider / 本地模型），
+        # 那时它不是 dict，`k in _r` 会 TypeError。踩过：传了个 LocalLLM 进来，
+        # 启动直接炸在 "argument of type 'LocalLLM' is not iterable"。
+        if isinstance(_r, dict) and any(k in _r for k in _REPLY_DEMO_KEYS):
             tts_seg = _r.get("tts")
     if tts_seg is not None:
         provider, cfg = _split(tts_seg)
@@ -324,9 +327,14 @@ def build_kwargs(config: dict) -> dict:
     #    {"llm","tts","realtime"} 嵌套（核心只取 llm，tts/realtime 仍由 web 自己读）。──
     if "reply" in config:
         seg = config["reply"] or {}
-        if any(k in seg for k in _REPLY_DEMO_KEYS):
-            seg = seg.get("llm") or {}
-        provider, cfg = _split(seg)
-        kwargs["reply"] = _reply_factory(provider, cfg)
+        # 直接给一个**可调用对象**（自己写的 provider / 本地模型）就原样透传，
+        # 不走 provider 那套解析——VoiceMem(reply=fn) 本来就收这个形状。
+        if callable(seg):
+            kwargs["reply"] = seg
+        else:
+            if any(k in seg for k in _REPLY_DEMO_KEYS):
+                seg = seg.get("llm") or {}
+            provider, cfg = _split(seg)
+            kwargs["reply"] = _reply_factory(provider, cfg)
 
     return kwargs

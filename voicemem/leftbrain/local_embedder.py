@@ -44,6 +44,10 @@ class LocalEmbedModel:
     dims: int = 0
     #: 这个模型认哪种语言。``""`` = 多语，任何空间都能用。
     language: str = ""
+    #: 建 SentenceTransformer 时要额外传的 tokenizer 参数。Qwen3-Embedding 用
+    #: last-token pooling，必须 ``padding_side="left"``——不传不会报错，只是
+    #: 池化取到 padding 上，向量安静地变差。
+    tokenizer_kwargs: tuple = ()
     note: str = ""
 
 
@@ -68,6 +72,15 @@ REGISTRY: dict[str, LocalEmbedModel] = {
         key="bge-zh", repo="BAAI/bge-small-zh-v1.5", kind="embedding-bge-zh",
         dims=512, language="zh",
         note="只认中文。95MB / 4 层，比 E5 小快很多；层数少，容量也少，要实测。"),
+    "qwen": LocalEmbedModel(
+        key="qwen", repo="Qwen/Qwen3-Embedding-0.6B", kind="embedding-qwen",
+        # 官方 config_sentence_transformers.json 里的 query prompt，原样照抄；
+        # document 侧不加前缀。
+        query_prefix=("Instruct: Given a web search query, retrieve relevant "
+                      "passages that answer the query\nQuery:"),
+        dims=1024, tokenizer_kwargs=(("padding_side", "left"),),
+        note="多语、榜上最强的一档，但 28 层 ×1024、~1.2GB —— 是不是塞得进投机"
+             "预取那 0–300ms 预算，用 evals/embed_latency.py 量了再说。"),
     "bge-en": LocalEmbedModel(
         key="bge-en", repo="BAAI/bge-small-en-v1.5", kind="embedding-bge-en",
         dims=384, language="en",
@@ -130,8 +143,12 @@ def resolve_path(model: LocalEmbedModel) -> str:
 
 
 @lru_cache(maxsize=4)
-def shared_model(path: str):
-    """按路径缓存 SentenceTransformer：记忆向量和 slot 分类共用一份，省一份权重。"""
+def shared_model(path: str, tokenizer_kwargs: tuple = ()):
+    """按路径缓存 SentenceTransformer：记忆向量和 slot 分类共用一份，省一份权重。
+
+    ``tokenizer_kwargs`` 走元组而不是 dict，因为 lru_cache 的键必须可哈希；同一个
+    模型配不同 tokenizer 参数会各缓存一份，这是对的——它们不是同一个编码器。
+    """
     if os.environ.get("VOICEMEM_VERBOSE", "0") == "0":
         # 每次启动刷一条 "Loading weights: 100%|███"（transformers 的 tqdm），
         # 模型在本地、一瞬间就加载完，这条除了吓人没有信息量。
@@ -141,7 +158,16 @@ def shared_model(path: str):
         except Exception:
             pass
     from sentence_transformers import SentenceTransformer
-    return SentenceTransformer(path)
+    if not tokenizer_kwargs:
+        return SentenceTransformer(path)
+    # sentence-transformers 6.x 把 tokenizer_kwargs 改名成 processor_kwargs，旧名
+    # 还认但会打 DeprecationWarning。两个名字都试：这个参数不是可有可无的装饰，
+    # Qwen 的 last-token pooling 少了它会静默取到 padding 上。
+    kw = dict(tokenizer_kwargs)
+    try:
+        return SentenceTransformer(path, processor_kwargs=kw)
+    except TypeError:
+        return SentenceTransformer(path, tokenizer_kwargs=kw)
 
 
 class LocalEmbedder:
@@ -164,12 +190,12 @@ class LocalEmbedder:
     def dimensions(self) -> int:
         if self.model.dims:
             return self.model.dims          # 注册表里有就别为了问一句维度去加载模型
-        m = shared_model(self._path)
+        m = shared_model(self._path, self.model.tokenizer_kwargs)
         fn = getattr(m, "get_embedding_dimension", None) or m.get_sentence_embedding_dimension
         return fn()
 
     def _encode(self, texts, prefix):
-        return np.asarray(shared_model(self._path).encode(
+        return np.asarray(shared_model(self._path, self.model.tokenizer_kwargs).encode(
             [f"{prefix}{t}" for t in texts], normalize_embeddings=True))
 
     def embed_texts(self, texts):

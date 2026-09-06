@@ -76,7 +76,22 @@ def _coerce_slot_v2(raw: str) -> SlotV2:
 
 # 跟 slot_split/graph_entity_store.py 用同一个阈值——两边都是"同一个实体的
 # 语义去重"这件事，标准不该不一样。
-SEMANTIC_MATCH_THRESHOLD = 0.65
+#
+# **0.94 不是拍的，是照默认 embedder（本地 E5）的实测分布定的**。E5 对短名词的
+# 余弦基线本来就高，两个毫无关系的同类实体照样有 0.78~0.92：
+#
+#     该合并    项目A|A项目 0.973   sprint planning|sprint plan 0.986
+#               morning run|morning jog 0.953   医疗影像公司|医疗影像创业公司 0.985
+#     不该合并  深圳|成都 0.916     Singapore|Tokyo 0.863
+#               Singapore|primary school 0.792  Japanese|shellfish allergy 0.776
+#
+# 原来的 0.65 落在两组**下面**，于是任意两个同类型实体都判成同一个：一个库里
+# 每种 entity_type 最后只剩第一个节点，后来的全被 merge 进去（灌 10 条各带 2~3 个
+# 实体的干净数据，24 个实体注解塌成 8 个节点）。而它只影响图谱，检索照常能用，
+# 所以不会报错、只是脑图越用越秃。
+# 0.94 之上两组完全分开。缩写（新加坡国立大学|NUS 0.835）合并不了是对的——那是
+# 别名，该走 aliases，不该靠语义相似度撞。
+SEMANTIC_MATCH_THRESHOLD = 0.94
 
 # entity_edges 的 weight 是"这条关系被观察/复述过几次"的累加计数（首次创建
 # 为 1，之后每次同一条边再被抽取到就 +1——不是像 confidence 那样取 max 封顶）。
