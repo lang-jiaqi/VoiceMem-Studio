@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +52,8 @@ class Turn:
     """一轮说完（或打字）时、投机预取早已算好的记忆结果——调用方拿来直接回复，不再搜。"""
     text: str
     result: object
+    #: 复核之前的流式转写（见 StreamState.raw_text）。
+    raw_text: str = ""
     #: 轮次闸门判的路（见 voicemem/gate.py）。``deep`` = 检索过了；其余两路没检索，
     #: ``result`` 是空的。调用方据此决定提不提示"我不知道"——浅轮上提那句，
     #: "讲个笑话"会被答成"我不知道"。
@@ -75,6 +78,24 @@ class StreamState:
     turn: Turn | None          # 一轮说完才有，否则 None
     _vm: object = None         # 惰性感知要用到的能力（utils）；调用方不用管
     _pcm: object = None        # 本轮 16k 单声道音频，供声纹/情绪按需分析
+    #: 这一刻已经静了多久（秒）。调用方拿它做「说到一半的停顿」判断——
+    #: 附和（backchannel）就靠它：人停 100ms 时"嗯"一声，比等一轮说完再回应自然。
+    #: 内部那两个门槛（gamble_s 200ms 赌说完 / confirm_s 300ms 确认）用的是同一个量。
+    silence: float = 0.0
+    #: 这一轮用户已经开过口了吗。没开过口时的静音是「还没开始」，不是「停顿」。
+    spoke: bool = False
+    #: 复核**之前**的那份流式转写。
+    #:
+    #: 调用方要拿"说话中途的文本"跟"说完时的文本"比（提前生成就靠它判赌没赌对），
+    #: 而中途只有流式那份。拿它去比复核后的文本，等于拿两个模型的输出对齐——用词
+    #: 永远不一样，比出来的差异是模型分歧，不是"他又说了话"。
+    raw_text: str = ""
+    #: 最近一次 EOT 打分（0~1，越大越像「这句话齐了」）。没启用 EOT 时是 0。
+    #:
+    #: **说话期间也在算**，不只静音时。用途是两个，阈值不一样：
+    #:   判回合结束  要 silence + 高分（只看分会在句子中途的完整点切断）
+    #:   提前起跑生成 只看分就够——赌错了取消重来，代价是钱不是体验
+    eot_score: float = 0.0
 
     @property
     def memory_context(self) -> str:
@@ -242,6 +263,25 @@ SOUND_LEVEL = float(os.environ.get("VOICEMEM_SOUND_LEVEL", "0.01"))
 #: 回放挑候选时分不清"用户说话那轮"和"音乐那轮"，放出来是用户自己的声音。
 SOUND_ONLY_TEXT = "用户放了一段声音给我听。"
 
+#: 打印每一轮是「语义判完」还是「等满兜底」结束的，以及当时的分数。
+#: 这两条路的延迟差好几百毫秒，不打日志根本分不清 EOT 到底有没有起作用。
+EOT_DEBUG = os.environ.get("VOICEMEM_EOT_DEBUG", "0") != "0"
+#: 打印「流式转写 → 离线复核」的前后对比。
+REFINE_DEBUG = os.environ.get("VOICEMEM_REFINE_DEBUG", "0") != "0"
+#: 分数要连续高过这个值、持续这么久，才认。见 feed() 里那段。
+EOT_HOT_LEVEL = float(os.environ.get("VOICEMEM_EOT_HOT_LEVEL", "0.85"))
+#: 文本侧的收尾信号：句末标点，或中文的句末语气词。
+#: **为什么要有它**：Smart-Turn 是纯声学的，对升调疑问句判不准——实测
+#: "我的饮食禁忌是什么？" 只有 0.38，而同一批陈述句是 0.97。可这种句子恰恰是
+#: 对话里最常见的一类，靠声学永远等不到高分，只能干等 confirm_s 兜底。
+#: 文本这边信号很干净：问号、句号、或"吗/呢/吧"结尾就是说完了。
+_TEXT_DONE = re.compile(r"[。！？!?…]\s*$|[吗呢吧嘛呗]\s*[。！？!?]?\s*$")
+#: 文本说"完了"时，声学分数至少要有这么高才认——低于它说明声学明确判定
+#: "还在说"（句子中间的停顿常在 0.1 以下），那就别拿文本去推翻它。
+EOT_TEXT_MIN = float(os.environ.get("VOICEMEM_EOT_TEXT_MIN", "0.3"))
+EOT_HOT_S = float(os.environ.get("VOICEMEM_EOT_HOT_S", "0.15"))
+_UNSET = object()
+
 
 class VoiceStream:
     """核心流式输入会话：边喂边投机，说完时交出 Turn。
@@ -264,10 +304,39 @@ class VoiceStream:
 
     def __init__(self, vm, *, on_partial=None, spec_min_chars=6,
                  gamble_s=0.2, confirm_s=0.3, src_rate=24000, vad_threshold=None,
-                 emotion=None, gate=_gate_mod.route):
+                 emotion=None, gate=_gate_mod.route, eot=None,
+                 eot_min_s=float(os.environ.get("VOICEMEM_EOT_MIN_SILENCE", "0")),
+                 eot_ends_turn=os.environ.get("VOICEMEM_EOT_ENDS_TURN", "0") != "0"):
         self.vm = vm
+        #: 语义判「说完了没」（见 voicemem/utils/audio/eot.py）。``None`` = 不用，
+        #: 回合仍按 confirm_s 掐表判——原来的行为。
+        #:
+        #: 用上它之后 confirm_s 的角色变了：它不再是"多久算说完"，而是"EOT 都没
+        #: 表态时的兜底上限"。所以可以放宽（比如 0.8s）而不牺牲速度——真正决定
+        #: 何时结束的是 EOT，掐表只在它拿不准时兜底。
+        self.eot = eot
+        #: 静音至少这么久才问 EOT。**默认 0 = 不要求静音**，纯看语义。
+        #:
+        #: 代价要知道：只看语义会在**句子中途的完整点**切断。实测一句 8.4 秒的话，
+        #: 说到 5.5s 时 EOT 已经 0.87（"...what I'm going to do next week" 本身
+        #: 就是完整的），而他接着说了 "which is my schedule"——0 的话就在那儿切了。
+        #: 换来的是"说完立刻结束"，一点都不等。
+        #:
+        #: 觉得被切断太多就设 ``VOICEMEM_EOT_MIN_SILENCE=0.1``：要求语气落下来
+        #: 100ms 才算数，能挡掉大部分句中误判，代价是慢 100ms。
+        self.eot_min_s = eot_min_s
+        #: EOT 能不能直接结束回合。**默认不能**——回合结束交给 VAD 掐表，EOT 只
+        #: 负责「提前下注生成」。
+        #:
+        #: 这不是保守，是实测：拿真实录音打分，一句完整的话说完时也只有 0.10~0.64
+        #: （非母语英语、疑问句尾更低），拿它当结束判据要么切不断要么乱切。而同一
+        #: 批数据里，句子中间稳定在 0.01~0.05——**相对高低是可信的，绝对值不可信**。
+        #: 所以它适合做"要不要赌一把"，不适合做"这一轮结束了"。
+        self.eot_ends_turn = eot_ends_turn
         #: 轮次闸门：``text -> "deep" | "shallow" | "backchannel"``。
-        #: ``None`` = 关掉闸门，每轮都检索（原来的行为）。传自己的函数就换掉判定。
+        #:
+        #: 默认就是 ``voicemem/gate.py`` 的三路判定（附和/浅/深）。
+        #: ``None`` = 关掉闸门，每轮都检索（原来的行为）；传自己的函数就换掉判定。
         self.gate = gate
         #: 投机检索时带给 Search 的情绪提示（调用方可随时改写这个属性）。
         #:
@@ -298,6 +367,11 @@ class VoiceStream:
         self._spoke = False
         self._spec = None
         self._spec_text = ""
+        self._eot_wait = 0.0                # 距上次问 EOT 过了多久（节流用）
+        self._eot_score = 0.0               # 最近一次 EOT 打分
+        self._raw_text = ""                 # 复核前的流式转写
+        self._eot_hot = 0.0                 # 分数连续高了多久
+        self._final_asr = _UNSET            # 离线复核 ASR（懒加载）
         self._route = _gate_mod.DEEP    # 本轮闸门判的路（见 _gate）
         self._last_memory = None   # 最新算好的投机记忆（SearchResult）
         self._pcm = []             # 本轮音频（16k 单声道），供 StreamState 按需做感知
@@ -351,7 +425,7 @@ class VoiceStream:
         result = await asyncio.to_thread(work)
         print(f"[speculate] {text[:24]!r} -> {len(result.hits)} hits  "
               f"{(time.time()-t0)*1000:.0f}ms", flush=True)
-        return Turn(text, result, route=_gate_mod.DEEP)
+        return Turn(text, result, raw_text=text, route=_gate_mod.DEEP)
 
     def _kick(self, text):
         """文本够长且变化了就（重）起后台投机——闸门放行的话。"""
@@ -378,6 +452,32 @@ class VoiceStream:
                 pass
         return self._last_memory
 
+    @property
+    def final_asr(self):
+        """离线复核 ASR，取不到就是 None（沿用流式那份文本）。"""
+        if self._final_asr is _UNSET:
+            try:
+                self._final_asr = self.vm.utils.get("asr_final")
+            except Exception as e:
+                print(f"[asr] 离线复核不可用（{type(e).__name__}: {e}）", flush=True)
+                self._final_asr = None
+        return self._final_asr
+
+    def _refine(self, pcm) -> None:
+        """整轮重转。转出空的就保留流式那份——宁可用差的，也不能把一轮弄没。"""
+        if pcm is None or not len(pcm) or self.final_asr is None:
+            return
+        try:
+            text = self.final_asr.transcribe(pcm)
+        except Exception as e:
+            print(f"[asr] 复核失败（{type(e).__name__}: {e}）→ 沿用流式转写", flush=True)
+            return
+        if text and text != self._text:
+            if REFINE_DEBUG:
+                print(f"[asr] 复核：{self._text!r} → {text!r}", flush=True)
+            self._raw_text = self._text
+            self._text = text
+
     async def _confirm(self) -> Turn:
         """说完那一刻：拿整句再判一次，这次的判定说了算。
 
@@ -390,7 +490,8 @@ class VoiceStream:
                 self._spec.cancel()
                 self._spec = None
             print(f"[gate] {self._route}：{self._text[:16]!r} → 不检索", flush=True)
-            return Turn(self._text, empty_result(), route=self._route)
+            return Turn(self._text, empty_result(), raw_text=self._raw_text or self._text,
+                        route=self._route)
         try:
             # 前面几次判成浅、这次翻成深：那时没起检索，现在补一次。晚了一点，
             # 但整句的判定比前缀准得多，宁可晚也不能不查。
@@ -400,7 +501,8 @@ class VoiceStream:
         # flush() 可能补出投机时还没解码出来的尾字：文本以最终版为准，记忆沿用已预取
         # 的结果（差的是最后几个字，为它重跑一次 Search 就把投机的收益还回去了）。
         if turn.text != self._text:
-            turn = Turn(self._text, turn.result, route=self._route)
+            turn = Turn(self._text, turn.result, raw_text=self._raw_text or self._text,
+                        route=self._route)
         return turn
 
     def _reset_turn(self):
@@ -409,6 +511,10 @@ class VoiceStream:
         self._text, self._silence, self._spoke = "", 0.0, False
         self._spec, self._spec_text, self._last_memory = None, "", None
         self._route = _gate_mod.DEEP
+        self._eot_wait = 0.0
+        self._eot_score = 0.0
+        self._raw_text = ""
+        self._eot_hot = 0.0
         self._pcm, self._pcm_len = [], 0
         self._preroll = []
 
@@ -437,7 +543,8 @@ class VoiceStream:
             self._reset_turn()
             return StreamState("turn_over", turn.text, None, turn, self.vm)
         return StreamState("<speak>" if new else "<silence>", self._text,
-                           self._ready_memory(), None, self.vm)
+                           self._ready_memory(), None, self.vm,
+                           silence=self._silence, spoke=self._spoke)
 
     async def feed(self, pcm_bytes) -> StreamState:
         """喂一块 PCM16（``src_rate``，默认 24k）：内置流式 ASR + silero VAD + 投机。
@@ -500,13 +607,56 @@ class VoiceStream:
         # 一个字都没转出来的这一轮多半是音乐，别拿对话的 300ms 去切它，
         # 见 SOUND_ONLY_SILENCE_S。
         need_silence = self.confirm_s if self._text.strip() else SOUND_ONLY_SILENCE_S
-        if self._spoke and self._silence >= need_silence and (self._text.strip() or sound_only):
+        # 语义判完：静音过了 eot_min_s（100ms）就开始问 EOT，它说齐了立刻结束，
+        # 不用等满 confirm_s。两个条件都要，理由见 __init__ 里 eot_min_s 那段。
+        semantic_done = False
+        # 说话期间也打分（供上层提前起跑生成用），静音期间的那次才参与回合判定。
+        if self.eot is not None and self._spoke and self._text.strip() and self._pcm:
+            self._eot_wait += len(frame) / 16000.0
+            if self._eot_wait >= 0.04:          # 15ms 一次，每帧都问是浪费
+                self._eot_wait = 0.0
+                try:
+                    _p = self.eot.score(np.concatenate(self._pcm))
+                    # **要连续高才算**，单帧不作数。实测句子中间会冒孤立的假高峰
+                    # （英文 1.4s 处 0.75、中文 0.6s 处 0.97，前后都是 0.01），
+                    # 而真正说完时是连着一串 0.9+。只看单帧就会在两个词之后下注，
+                    # 那份回复只听到 "I want"，必然作废——等于赌了个必输的。
+                    self._eot_hot = (self._eot_hot + 0.04) if _p >= EOT_HOT_LEVEL else 0.0
+                    # 两条路认一条：声学连续高（陈述句走这条），或者文本已经收了尾
+                    # 而声学也没在说"还没完"（疑问句走这条）。
+                    _text_done = bool(_TEXT_DONE.search(self._text or ""))
+                    self._eot_score = _p if (
+                        self._eot_hot >= EOT_HOT_S
+                        or (_text_done and _p >= EOT_TEXT_MIN)) else 0.0
+                    # 只有「静音够久」那次才算数——只看分数会在句子中途的语义完整点
+                    # 切断（实测一句 8.4s 的话，5.5s 处就已经 0.87）。
+                    semantic_done = (self.eot_ends_turn and _p >= self.eot.threshold
+                                     and self.eot_min_s <= self._silence < need_silence)
+                    if EOT_DEBUG and self._silence > 0:
+                        print(f"[eot] 静音 {self._silence*1000:3.0f}ms  分数 {_p:.2f}"
+                              f"  {'→ 结束' if semantic_done else ''}", flush=True)
+                except Exception as e:
+                    print(f"[eot] 判定失败（{type(e).__name__}: {e}）→ 退回掐表",
+                          flush=True)
+                    self.eot = None
+        if self._spoke and (semantic_done or self._silence >= need_silence) \
+                and (self._text.strip() or sound_only):
+            if EOT_DEBUG and self.eot is not None:
+                print(f"[eot] 回合结束：{'语义判定' if semantic_done else f'兜底掐表 {need_silence*1000:.0f}ms'}"
+                      f"（静音 {self._silence*1000:.0f}ms）", flush=True)
             flush = getattr(self._asr, "flush", None)      # 块式 ASR（paraformer）把不足
             if flush is not None:                          # 一块的尾巴补零吐出来
                 self._text = flush() or self._text
-            turn = await self._confirm()                   # VAD 确认说完 → 交出预算记忆
             pcm = np.concatenate(self._pcm) if self._pcm else None
+            # 说完了：用离线模型把整轮**重转一遍**，这份才进记忆、才给回复模型。
+            # 流式那份是为低延迟牺牲了准确率的，只配用来判打断/EOT/闸门。
+            # 见 utils/audio/asr.py 的 OfflineASR：实测同一批录音，流式把
+            # "Everything is good." 转成 "Everything is going"，离线一字不差，37ms。
+            self._refine(pcm)
+            turn = await self._confirm()                   # VAD 确认说完 → 交出预算记忆
             self._reset_turn()
             return StreamState("turn_over", turn.text, None, turn, self.vm, pcm)
         return StreamState("<speak>" if speaking else "<silence>", self._text,
-                           self._ready_memory(), None, self.vm)
+                           self._ready_memory(), None, self.vm,
+                           silence=self._silence, spoke=self._spoke,
+                           eot_score=self._eot_score)
