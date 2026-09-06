@@ -506,6 +506,8 @@ const I18N = {
     backendGone:'后端断开了。',
     switching:'正在切到「{0}」…', switched:'已切到「{0}」', switchFailed:'切不过去',
     created:'已创建「{0}」',
+    langKept:'界面切了，但空间「{0}」已有记忆，回复仍用{1}——一个记忆库只能一种语言，混存会让一半记忆检索不到。要换语言请新建一个空间。',
+    langZh:'中文', langEn:'英文',
     turnsN:'{0} 轮', memN:'{0} 条记忆',
     andMore:'…还有 {0} 条',
     spaceStat:'{0} 条事实 · {1} 条画像',
@@ -554,6 +556,8 @@ const I18N = {
     backendGone:'Backend disconnected.',
     switching:'Switching to “{0}”…', switched:'Now in “{0}”', switchFailed:'Could not switch',
     created:'Created “{0}”',
+    langKept:'UI switched, but space “{0}” already has memories, so replies stay in {1} — one library, one language; mixing makes half the memories unretrievable. Create a new space to switch.',
+    langZh:'Chinese', langEn:'English',
     turnsN:'{0} turns', memN:'{0} memories',
     andMore:'…and {0} more',
     spaceStat:'{0} facts · {1} profile notes',
@@ -575,6 +579,9 @@ const I18N = {
     disconnected:'{0}. Disconnected.',
   },
 };
+// 用户手动选过语言吗。没选过时界面**跟当前空间的语言走**（见 loadSpaces）——
+// 以前这里写死 'zh'，而空间默认是 en，于是一打开就是「中文界面 + 英文回答」。
+const LANG_CHOSEN = !!localStorage.getItem('vm-lang');
 let LANG = localStorage.getItem('vm-lang') || 'zh';
 function i18n(key, ...args){
   const s = (I18N[LANG] && I18N[LANG][key]) || (I18N.zh[key]) || key;
@@ -1104,8 +1111,14 @@ async function loadSpaces(){
         SPACE_IDS.push(it.id);
       }
       SPACES[it.id].count=it.count;
+      SPACES[it.id].language=it.language||'en';
     }
     if(d.active && SPACES[d.active]) activeSpace=d.active;
+    // 没手动选过语言：界面跟当前空间走，别让界面和回答一个中文一个英文。
+    const sl=SPACES[activeSpace] && SPACES[activeSpace].language;
+    if(!LANG_CHOSEN && sl && sl!==LANG){
+      LANG=sl; if($('langSel')) $('langSel').value=LANG; applyLang();
+    }
     fillSpaceSel();
     renderSpaces();
   }catch(e){ console.warn('[space] 列不出来', e); }
@@ -1133,7 +1146,8 @@ if($('spaceSel')) $('spaceSel').addEventListener('change',e=>switchSpace(e.targe
    独立的弹窗，不跟「新对话」抢 #mask（那个还得先选空间才能建对话）。 */
 function openSpaceNew(){
   const el=$('spaceNewName'); if(el){ el.value=''; }
-  const lg=$('spaceNewLang'); if(lg){ lg.value='en'; }   // 默认英文
+  // 默认跟界面语言：中文界面建出英文库，用户是不会注意到的，直到回答是英文。
+  const lg=$('spaceNewLang'); if(lg){ lg.value=LANG; }
   $('spaceMask').classList.add('on');
   setTimeout(()=>el&&el.focus(),50);
 }
@@ -1143,7 +1157,7 @@ async function doCreateSpace(){
   const el=$('spaceNewName'), name=(el.value||'').trim();
   if(!name){ toast(i18n('needName')); el.focus(); return; }
   const btn=$('spaceNewOk'); btn.disabled=true; btn.textContent=i18n('spaceCreating');
-  const id=await createSpace(name, ($('spaceNewLang')||{}).value||'en');
+  const id=await createSpace(name, ($('spaceNewLang')||{}).value||LANG);
   btn.disabled=false; btn.textContent=i18n('spaceCreate');
   if(!id) return;                       // createSpace 里已经 toast 过原因了
   closeSpaceNew();
@@ -1166,7 +1180,7 @@ if($('spaceMask')) $('spaceMask').addEventListener('click',e=>{
 async function createSpace(name, language){
   const r=await fetch('/api/spaces',{method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name, language:language||'en'})});
+    body:JSON.stringify({name, language:language||LANG})});
   if(!r.ok){
     const msg=r.status===409?i18n('nameTaken'):(r.status===400?i18n('nameBad'):i18n('createFailed'));
     toast(msg); return '';
@@ -1398,7 +1412,7 @@ if($('newSpaceAdd')) $('newSpaceAdd').addEventListener('click',async()=>{
   const el=$('newSpaceName'), name=(el.value||'').trim();
   if(!name){ toast(i18n('needName')); el.focus(); return; }
   const btn=$('newSpaceAdd'); btn.disabled=true; btn.textContent=i18n('spaceCreating');
-  const id=await createSpace(name, ($('spaceNewLang')||{}).value||'en');
+  const id=await createSpace(name, ($('spaceNewLang')||{}).value||LANG);
   btn.disabled=false; btn.textContent=i18n('spaceCreate');
   if(!id) return;
   el.value=''; pickSpace=id; openModal();
@@ -1605,6 +1619,16 @@ let ws=null, live=false, paused=false;
 let playCtx=null, pcmNode=null, pcmReady=null, pcmPending=[], pcmDrainPending=false;
 let pcmStreaming=false, pcmDrainWaiters=[], pcmPrebuffer=0.08, pcmWorkletFailed=false;
 let pcmBargePaused=false, pcmOutputId='', pcmOutputSampleRate=SAMPLE_RATE;
+// 底噪音量（dBFS）。谁都不出声时线路里垫一层极低的粉噪，否则纯数字静音听起来
+// 像"电话断了"，而不是"它在等你说"。?noise=-42 调大、?noise=off 关掉；
+// 跑起来之后在控制台 VM_NOISE(-42) 可以边听边试。
+let pcmComfortDb=(()=>{
+  const q=new URLSearchParams(location.search).get('noise');
+  if(q===null) return -48;                       // 安静房间里刚好能察觉
+  if(/^(off|no|0|false)$/i.test(q)) return null;
+  const v=Number(q);
+  return isFinite(v)?v:-48;
+})();
 let scheduled=[], nextPlay=0;             // 只给“回放原始录音”这类完整 AudioBuffer 用
 
 function resolvePcmDrain(){
@@ -1612,8 +1636,52 @@ function resolvePcmDrain(){
   for(const done of pcmDrainWaiters.splice(0)) done();
 }
 function configurePcmPlayer(){
-  if(pcmNode) pcmNode.port.postMessage({type:'config',prebuffer:pcmPrebuffer});
+  if(pcmNode){
+    pcmNode.port.postMessage({type:'config',prebuffer:pcmPrebuffer,
+                              comfortDb:pcmComfortDb});
+    pcmNode.port.postMessage({type:'gain',value:replyGain});
+  }
 }
+// 附和音量（0~1，相对回复）。本来设成 0.42（真人附和比正常说话轻），实听太小，
+// 跟正文一个音量才对——毕竟是同一个人在说话。
+let bcGain=1.0;
+function playBackchannel(m){
+  // 走独立的 AudioBufferSource，**不进 pcm worklet**：进了的话服务端的 hearing()
+  // 会以为助手在说话，用户接着说就被判成插话——自己的"嗯"把自己掐了。
+  const ctx=playCtx; if(!ctx||!m.pcm) return;
+  let bytes; try{ bytes=atob(m.pcm); }catch(e){ return; }
+  const n=bytes.length>>1; if(!n) return;
+  const i16=new Int16Array(n);
+  for(let i=0;i<n;i++) i16[i]=(bytes.charCodeAt(2*i)|(bytes.charCodeAt(2*i+1)<<8))<<16>>16;
+  const sr=Number(m.sample_rate)||24000;
+  const buf=ctx.createBuffer(1,n,sr), ch=buf.getChannelData(0);
+  for(let i=0;i<n;i++) ch[i]=i16[i]/32768;
+  const src=ctx.createBufferSource(); src.buffer=buf;
+  // 每次抖一点速度和音量：同一条波形反复播，两三次就听出是罐头。
+  src.playbackRate.value=0.95+Math.random()*0.1;
+  const g=ctx.createGain();
+  // 抖动只往下不往上：bcGain 已经是 1.0，再往上会削波。
+  g.gain.value=bcGain*(0.88+Math.random()*0.12);
+  src.connect(g); g.connect(ctx.destination); src.start();
+}
+// 现场调音量：VM_BC(0.6) 调大、VM_BC(0) 静音（服务端仍在判，只是听不见）。
+window.VM_BC=v=>{ bcGain=Math.max(0,Math.min(1,Number(v)||0)); };
+
+// 回复音量。?vol=1.6 调大；跑起来后控制台 VM_VOL(1.6) 边听边试。
+let replyGain=(()=>{ const q=new URLSearchParams(location.search).get('vol');
+                     const v=Number(q); return q!==null&&isFinite(v)?v:1; })();
+function setReplyGain(v){
+  replyGain=Math.max(0,Math.min(4,Number(v)||1));
+  if(pcmNode) pcmNode.port.postMessage({type:'gain',value:replyGain});
+}
+window.VM_VOL=setReplyGain;
+
+function setComfortNoise(db){
+  pcmComfortDb=db;
+  if(pcmNode) pcmNode.port.postMessage({type:'comfort',db});
+}
+// 现场试音量用：VM_NOISE(-42) 调大、VM_NOISE(null) 关掉。
+window.VM_NOISE=setComfortNoise;
 function reportPlaybackCheckpoint(m){
   if(!m.outputId||!ws||ws.readyState!==WebSocket.OPEN) return;
   const state={buffer:'playing',started:'playing',resumed:'playing',
@@ -1759,11 +1827,13 @@ function toPCM16(f32){
   for(let i=0;i<f32.length;i++){ const s=Math.max(-1,Math.min(1,f32[i])); o[i]=s<0?s*0x8000:s*0x7fff; }
   return o;
 }
+// 朴素抽取（每隔 N 个取一个）**没有抗混叠**，48k→24k 会把 12kHz 以上的能量整个
+// 折回语音频段，ASR 拿到的是掺了镜像噪声的信号。现在麦克风的 AudioContext 直接
+// 按 24k 建（见 startMic），浏览器自己做高质量重采样，这里通常是原样返回。
+// 留着只是兜底：个别浏览器不认 sampleRate 参数时仍会走到这条路。
 function downsample(f32,from,to){
   if(from===to) return f32;
-  const ratio=from/to, out=new Float32Array(Math.floor(f32.length/ratio));
-  for(let i=0;i<out.length;i++) out[i]=f32[Math.floor(i*ratio)];
-  return out;
+  return resampleLinear(f32,from,to);   // 线性插值好歹是个弱低通，比抽取强
 }
 function resampleLinear(f32,from,to){
   if(from===to) return f32;
@@ -1777,7 +1847,13 @@ function resampleLinear(f32,from,to){
 async function startMic(){
   micStream=await navigator.mediaDevices.getUserMedia(
     {audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
-  if(!micCtx) micCtx=new (window.AudioContext||window.webkitAudioContext)();
+  // **按 24k 建**，让浏览器自己做重采样（它有正经的抗混叠）。我们这边再手动从
+  // 48k 抽到 24k 的话会引入混叠，ASR 直接变差——这是"转写一直不准"的真正原因。
+  if(!micCtx){
+    const AC=window.AudioContext||window.webkitAudioContext;
+    try{ micCtx=new AC({sampleRate:SAMPLE_RATE}); }
+    catch(e){ micCtx=new AC(); }        // 个别浏览器不认这个参数
+  }
   if(micCtx.state==='suspended') await micCtx.resume();
   const src=micCtx.createMediaStreamSource(micStream);
   // Smaller capture blocks reduce uplink latency.
@@ -2082,6 +2158,12 @@ function handle(m){
       break;
     }
 
+    case 'backchannel':
+      // 用户说到一半的停顿里"嗯"一声。不改任何回合状态——它不是一轮回复，
+      // 不该动 aiSpeaking / timeline / 字幕。
+      playBackchannel(m);
+      break;
+
     case 'answer_start':
       // 先把上一轮**还没播完**的音频丢掉。服务端在开新一轮前会 cancel 掉旧任务，
       // 但那时旧音频早就发过来、正排在 playCtx 的调度队列里了——不清的话新一轮
@@ -2249,6 +2331,8 @@ function syncButtons(){
 }
 function endLive(note){
   live=false; paused=false;
+  // 挂断就该真的安静下来——底噪的意思是"线还连着"，连都断了还响就成了噪音。
+  if(pcmNode) pcmNode.port.postMessage({type:'comfort',db:null});
   stopMic(); stopPlayback();
   if(ws){ ws.onclose=null; ws.close(); ws=null; }
   aiSpeaking=false; syncButtons(); setVoice('idle');
@@ -2259,6 +2343,7 @@ talkBtn.addEventListener('click',async()=>{
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
     toast(i18n('micUnsupported')); return; }
   ensurePlayback();               // 必须在这个 click 里建，见 ensurePlayback 注释
+  setComfortNoise(pcmComfortDb);  // 接通即起底噪：第一句回复之前的那段等待最需要它
   try{ ws=new WebSocket(WS_URL); }catch(e){ toast(i18n('cantConnect', WS_HOST)); return; }
   ws.binaryType='arraybuffer';
   ws.onopen=async()=>{
@@ -2309,8 +2394,15 @@ if($('langSel')){
     buildGraph(activeSpace);           // 脑图上那十个分区标签只在重建时才会换语言
     loadMemories();
     // 助手也跟着换语言：告诉后端，之后的回复和抽取都用这个语言
-    try{ await fetch('/api/lang',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({lang:LANG})}); }
+    try{
+      const r=await fetch('/api/lang',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({lang:LANG})});
+      const d=await r.json();
+      // 空库会跟着一起切；非空库切不了——那就说出来，别让它默默不一致。
+      if(d && d.reply_lang && d.reply_lang!==LANG)
+        toast(i18n('langKept', activeSpace,
+                   i18n(d.reply_lang==='zh'?'langZh':'langEn')));
+    }
     catch(err){ console.warn('[lang] 后端没接上', err); }
   });
 }

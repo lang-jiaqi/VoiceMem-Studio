@@ -34,10 +34,22 @@ HERE = Path(__file__).resolve().parent
 #: VOICEMEM_REPLY_MODEL（或旧名 OPENAI_CHAT_MODEL）/ models={"reply": ...} 都能覆盖。
 CHAT_MODEL = resolve_model(role="reply", default="gpt-4o")
 RT_MODEL = resolve_model(role="realtime")
-#: realtime 的音色。一直没设过，默认那个（alloy）念起来最平。
+#: Realtime 那条路的音色。**默认跟随 TTS 音色**，不写死。
+#:
 #: gpt-realtime 上可选：alloy / ash / ballad / coral / echo / sage / shimmer /
-#: verse / marin / cedar —— marin 和 cedar 是新加的，起伏和呼吸感明显强。
-RT_VOICE = os.environ.get("OPENAI_REALTIME_VOICE", "marin")
+#: verse / marin / cedar —— marin 和 cedar 起伏和呼吸感明显强，但**只有 Realtime
+#: 有**，TTS API 合不出来。
+#:
+#: 原来这里写死 marin，而 llm_tts 那条走 OPENAI_TTS_VOICE（默认 alloy）——于是
+#: `--mode` 一换，助手就换了个人。同一个产品两条路两个声音，本身就该修。
+#:
+#: 附和（backchannel）让它变成硬约束：那声"嗯"是本地 TTS 预合成的，音色必须跟正文
+#: 一致，否则中间冒出来一声别人的声音，比不附和突兀得多。跟着 TTS 走就自动落在
+#: 两边都有的音色上。要用 marin / cedar 就显式设 OPENAI_REALTIME_VOICE——那时
+#: realtime 那条会自动关掉附和（见 run.py 的 _backchannel_tts）。
+from voicemem.tts import TTS_VOICE as _TTS_VOICE  # noqa: E402
+
+RT_VOICE = os.environ.get("OPENAI_REALTIME_VOICE") or _TTS_VOICE
 client = AsyncOpenAI()
 
 
@@ -49,7 +61,8 @@ from voicemem.utils.audio.stream_io import resample  # noqa: E402,F401
 
 # TTS（在线/离线两个后端 + 分句）已提进核心，见 voicemem/tts.py；这里 re-export
 # 保持 `utils.tts_stream(...)` 的既有调用点不变。
-from voicemem.tts import TTS_BACKEND, TTS_MODEL, cut_point, tts_stream  # noqa: E402,F401
+from voicemem.tts import (  # noqa: E402,F401
+    TTS_BACKEND, TTS_MODEL, TTS_VOICE, cut_point, tts_stream)
 
 
 # ── 回复模型也在一处配：统一 config 的 reply 段（run.py 从 CONFIG["reply"] 传入）──
@@ -216,11 +229,16 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
     def api_memories() -> dict:
         return snapshot() if snapshot else {"left": [], "right": []}
 
-    @app.post("/api/lang")                           # 界面切语言时，助手也跟着切
+    @app.post("/api/lang")                           # 界面切语言
     async def api_lang(req: Request) -> dict:
+        """返回 reply_lang：**回复实际用的语言**。
+
+        它可能跟 lang 不一样——当前空间已经有记忆时语言不能改（混语存会让一半
+        记忆检索不到）。前端据此提示用户，而不是让"界面中文、回答英文"默默发生。
+        """
         lang = (await req.json()).get("lang", "zh")
-        set_lang(lang) if set_lang else None
-        return {"lang": lang}
+        reply_lang = set_lang(lang) if set_lang else lang
+        return {"lang": lang, "reply_lang": reply_lang or lang}
 
     if spaces:
         _list_spaces, _create_space, _use_space, _active_space = spaces
