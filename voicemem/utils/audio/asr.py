@@ -39,16 +39,59 @@ def pick_device() -> str:
     return "cpu"
 
 
+#: 独立的 "I"（以及 I'm / I've / I'll / I'd）要保持大写。
+_I_WORD = re.compile(r"\bi\b(?='|\s|$)", re.IGNORECASE)
+
+
+def _normal_case(text: str) -> str:
+    """sherpa 的 zipformer 出的是**全大写**（BPE 词表就是大写的），直接显示和入库都难看。
+
+    只在"整段没有一个小写字母"时才动手——那说明是模型的全大写输出，不是用户真的
+    在喊。已经有大小写的文本（比如别的 ASR 喂进来的）原样放过。
+
+    专有名词会被一起小写（"john" 而不是 "John"）：没有模型是判不出来的，
+    而全大写比这个更难读。中文不受影响（没有大小写）。
+    """
+    if not text or any(c.islower() for c in text):
+        return text
+    if not any(c.isupper() for c in text):
+        return text
+    out = text.lower()
+    out = _I_WORD.sub("I", out)
+    # 句首字母大写（以及 . ! ? 之后）
+    out = re.sub(r"(^|[.!?]\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), out)
+    return out
+
+
 class StreamingASR:
     """sherpa-onnx 流式 zipformer，出实时 partial 文本。``VOICEMEM_ASR=sherpa`` 时启用。"""
+
+    @staticmethod
+    def _pick(asr_dir: str, part: str) -> str:
+        """在模型目录里找 encoder/decoder/joiner。
+
+        **不能写死文件名**：不同发布版后缀不一样（双语那个是
+        ``encoder-epoch-99-avg-1.onnx``，英文那个是
+        ``encoder-epoch-99-avg-1-chunk-16-left-128.onnx``），写死就只有一个能用，
+        而且报的是 "does not exist"，看不出是版本差异。
+        int8 量化版跳过：默认用全精度那份。
+        """
+        from pathlib import Path as _P
+        cands = sorted(f for f in _P(asr_dir).glob(f"{part}-*.onnx")
+                       if ".int8." not in f.name)
+        if not cands:
+            raise FileNotFoundError(
+                f"{asr_dir} 里找不到 {part}-*.onnx —— 模型没下全？"
+                "跑 scripts/download_models.sh")
+        return str(cands[0])
 
     def __init__(self, asr_dir: str) -> None:
         import sherpa_onnx          # 惰性：默认走 FunASR 时不拉 sherpa
         self.rec = sherpa_onnx.OnlineRecognizer.from_transducer(
             tokens=f"{asr_dir}/tokens.txt",
-            encoder=f"{asr_dir}/encoder-epoch-99-avg-1.onnx",
-            decoder=f"{asr_dir}/decoder-epoch-99-avg-1.onnx",
-            joiner=f"{asr_dir}/joiner-epoch-99-avg-1.onnx",
+            encoder=self._pick(asr_dir, "encoder"),
+            decoder=self._pick(asr_dir, "decoder"),
+            joiner=self._pick(asr_dir, "joiner"),
             num_threads=2, sample_rate=SAMPLE_RATE, feature_dim=80,
             decoding_method="greedy_search",
         )
@@ -58,11 +101,11 @@ class StreamingASR:
         self.stream.accept_waveform(SAMPLE_RATE, samples)
         while self.rec.is_ready(self.stream):
             self.rec.decode_stream(self.stream)
-        return self.rec.get_result(self.stream)
+        return _normal_case(self.rec.get_result(self.stream))
 
     def flush(self) -> str:
         """接口对齐 FunASRStreamingASR；sherpa 逐帧就把结果吐完了，没有尾巴要补。"""
-        return self.rec.get_result(self.stream)
+        return _normal_case(self.rec.get_result(self.stream))
 
     def reset(self) -> None:
         self.stream = self.rec.create_stream()
@@ -190,3 +233,47 @@ class Transcriber:
         emotion = next((SENSEVOICE_EMOTION_MAP[tag] for tag in tags
                         if tag in SENSEVOICE_EMOTION_MAP), "中性")
         return re.sub(r"<\|[^|]*\|>", "", raw).strip(), emotion
+
+
+class OfflineASR:
+    """说完那一刻把整轮音频**重转一遍**的离线 ASR（默认 SenseVoice）。
+
+    为什么要两个 ASR：流式模型为了低延迟牺牲了准确率，而这条链上两个需求是分开的——
+
+        partial  打断判定、EOT、闸门要它，**必须低延迟**，转得烂无所谓
+                 （它只用来判"有没有人在说连贯的话"）
+        final    进记忆、给回复模型的那份，**必须准**，晚 50ms 没人察觉
+
+    实测同一批真实录音（Whisper 转写当标准答案）：
+
+        真实                        流式 zipformer      SenseVoice
+        Everything is good.         Everything is going  一字不差
+        Why we are helping...       I                    Why there no reply
+        Wait, why are you on mute?  Why don't            Wait, why are you
+
+    差距不是调参能补的。SenseVoice 中英日韩粤多语、int8 量化后一轮 33~86ms，
+    比 whisper-base 快 4 倍还更准（后者在短句上爱瞎编："of breaking this"）。
+    """
+
+    def __init__(self, model_dir: str, num_threads: int = 4):
+        import sherpa_onnx
+        from pathlib import Path as _P
+        d = _P(model_dir)
+        model = d / "model.int8.onnx"          # int8 够用，实测和 fp32 没差别
+        if not model.is_file():
+            model = d / "model.onnx"
+        self.rec = sherpa_onnx.OfflineRecognizer.from_sense_voice(
+            model=str(model), tokens=str(d / "tokens.txt"),
+            num_threads=num_threads, use_itn=True)   # use_itn：出标点和数字
+
+    def transcribe(self, pcm16k) -> str:
+        """整轮 float32 @16k → 文本。"""
+        import numpy as np
+        a = np.asarray(pcm16k, np.float32).reshape(-1)
+        if not a.size:
+            return ""
+        st = self.rec.create_stream()
+        st.accept_waveform(SAMPLE_RATE, a)
+        self.rec.decode_stream(st)
+        return (st.result.text or "").strip()
+

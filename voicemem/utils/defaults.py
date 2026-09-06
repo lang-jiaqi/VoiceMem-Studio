@@ -32,7 +32,8 @@ def default_utils(base_url, memory_root):
                 spec = resolve(language=resolve_for_space(memory_root))
                 # 和本地 embedder 共享同一份权重（省一份内存），也保证槽描述和
                 # 查询编码在同一个向量空间里。
-                return LocalQueryClassifier(model=shared_model(resolve_path(spec)))
+                return LocalQueryClassifier(model=shared_model(resolve_path(spec),
+                                                                spec.tokenizer_kwargs))
             except ImportError as e:
                 print(f"[slots] 本地分类器不可用（{e}）→ 回落 LLM 版 QuerySlotClassifier。"
                       "装 sentence-transformers（或 pip install -e '.[demo]'）可用本地版。",
@@ -49,15 +50,60 @@ def default_utils(base_url, memory_root):
         from voicemem.utils.audio.voiceprint.speaker_encoder import SpeakerEncoder
         return SpeakerEncoder(device="cpu")
     def asr():
-        # 默认 FunASR paraformer-zh-streaming（中文更准）；VOICEMEM_ASR=sherpa 回退到
-        # sherpa-onnx 流式 zipformer（中英双语、纯 onnx 不依赖 torch）。
-        if os.environ.get("VOICEMEM_ASR", "funasr").lower() == "sherpa":
-            from voicemem.utils.audio.asr import StreamingASR
-            from voicemem.utils.common.paths import model_path
-            return StreamingASR(str(model_path(
-                "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20", kind="asr")))
+        """**按空间语言选**：zh → FunASR paraformer-zh，en → sherpa 英文专用。
+
+        一个模型只认一种语言，所以不能跟空间语言脱钩——早先一律默认 FunASR，
+        英文库里说英文转出来是一串无意义的中文（"hellolo""今天天气如何何" 这类
+        脏记忆就是这么来的）。双语那个也不行：它会把英文吐成中文（实测
+        "Wait, why are you on mute?" → "喂我也用"）。
+
+        代价：一个库不能中英混说。这跟 voicemem/lang.py 的既有立场一致——语言是
+        库的属性。要混说：VOICEMEM_ASR=bilingual。
+
+        **英文这一档已知不够好**：本地流式小模型对英文短句都很弱（实测 "Wait."
+        → 空，"Why we are helping your plan." → "I"），而同一批音频 Whisper 全对。
+        这是这一档模型的上限，不是选型问题——要准得在说完之后用大模型重转一遍。
+        中文那边没这个问题，FunASR 实测够用。
+        """
+        from voicemem.utils.common.paths import model_path
+        from voicemem.utils.audio.asr import StreamingASR
+        _SHERPA = {
+            "en": "sherpa-onnx-streaming-zipformer-en-2023-06-26",
+            "bilingual": "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
+        }
+        pick = os.environ.get("VOICEMEM_ASR", "").lower()
+        if not pick:
+            from voicemem.lang import resolve_for_space
+            pick = "funasr" if resolve_for_space(memory_root) == "zh" else "en"
+        if pick in _SHERPA:
+            try:
+                return StreamingASR(str(model_path(_SHERPA[pick], kind="asr")))
+            except Exception as e:
+                print(f"[asr] {_SHERPA[pick]} 不可用（{type(e).__name__}: {e}）"
+                      f"→ 回落 FunASR（**只认中文**）。"
+                      f"scripts/download_models.sh 可下载。", flush=True)
         from voicemem.utils.audio.asr import FunASRStreamingASR
         return FunASRStreamingASR()
+
+    def asr_final():
+        """说完那一刻重转一遍的离线 ASR。没下载模型就返回 None（沿用流式那份文本）。
+
+        单独一个能力位而不是换掉 asr：两者的取舍相反（一个要快、一个要准），
+        合成一个就得二选一。见 OfflineASR 的文档。
+        """
+        if os.environ.get("VOICEMEM_FINAL_ASR", "1") == "0":
+            return None
+        from voicemem.utils.common.paths import models_dir
+        d = models_dir() / "asr" / os.environ.get(
+            "VOICEMEM_FINAL_ASR_DIR",
+            "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17")
+        if not (d / "tokens.txt").is_file():
+            print(f"[asr] 没有离线复核模型（{d.name}）→ 只用流式那份转写。"
+                  "scripts/download_models.sh 可下载。", flush=True)
+            return None
+        from voicemem.utils.audio.asr import OfflineASR
+        return OfflineASR(str(d))
+
     def vad():
         # 判「说完了」的 VAD。默认内置 silero；换自己的传一个有 is_speech(frame)->bool
         # 的对象即可（VoiceMem(vad=lambda: MyVad()) 或 config 的 vad 段）。
@@ -78,5 +124,6 @@ def default_utils(base_url, memory_root):
         return Mem0BackendStore(embedding(),
                                 memory_root=Path(memory_root or Path.cwd() / "voicemem_memory"))
     return {"embedding": embedding, "slots": slots, "entity": entity, "emotion": emotion,
+            "asr_final": asr_final,
             "voiceprint": voiceprint, "asr": asr, "vad": vad, "memory_engine": memory_engine,
             "tts": tts}

@@ -16,8 +16,39 @@ from voicemem.utils.common.paths import model_path, require
 
 
 def resample(f32, src=24000, dst=16000):        # 脑图 html 发 24k，流式 ASR 要 16k
-    n = int(len(f32) * dst / src)
-    return np.interp(np.arange(n) * src / dst, np.arange(len(f32)), f32).astype(np.float32)
+    """降采样**必须先低通**，否则高频镜像折回语音频段，ASR 拿到的是掺了噪声的信号。
+
+    原来直接 ``np.interp`` 线性插值：那只是极弱的低通，24k→16k 时 8kHz 以上照样
+    混叠进来。听感上人不太察觉（语音主要能量在低频），但 ASR 是在频谱上做的，
+    这种噪声直接压准确率——一直以为是"模型不行"，其实是喂进去的东西就坏了。
+
+    有 scipy 就用 ``resample_poly``（多相滤波，自带抗混叠）；没有就退回线性插值，
+    并且**只在降采样时**打一次提醒——升采样没有混叠问题，不必吓人。
+    """
+    if src == dst:
+        return np.asarray(f32, np.float32)
+    try:
+        from math import gcd
+        from scipy.signal import resample_poly
+        g = gcd(int(src), int(dst))
+        return resample_poly(np.asarray(f32, np.float32),
+                             int(dst) // g, int(src) // g).astype(np.float32)
+    except ImportError:
+        if dst < src and not _RESAMPLE_WARNED:
+            _warn_resample()
+        n = int(len(f32) * dst / src)
+        return np.interp(np.arange(n) * src / dst,
+                         np.arange(len(f32)), f32).astype(np.float32)
+
+
+_RESAMPLE_WARNED = False
+
+
+def _warn_resample() -> None:
+    global _RESAMPLE_WARNED
+    _RESAMPLE_WARNED = True
+    print("[audio] 没装 scipy → 降采样退回线性插值（有混叠，ASR 会变差）。"
+          "pip install scipy 可修。", flush=True)
 
 
 def read_wav(path) -> tuple[np.ndarray, int]:
@@ -54,20 +85,28 @@ def transcribe_file(asr, path, chunk_s: float = 0.6) -> str:
     return (text or "").strip()
 
 
-def make_vad(model: str | None = None, threshold: float = 0.5):
+def make_vad(model: str | None = None, threshold: float = 0.5,
+             min_silence_s: float | None = None):
     """内置 VAD：silero（sherpa-onnx 包的）。返回一个只有 ``is_speech(frame)`` 的小对象。
 
     ``model`` 不给就走 ``VOICEMEM_SILERO_VAD`` / ``VOICEMEM_MODELS_DIR/silero_vad.onnx``。
     这个 .onnx 没有自动下载兜底，缺了就明确报出来（而不是让 sherpa 抛个看不懂的错）。
+
+    ``min_silence_s``：静音要持续多久才算"停了"。silero 默认 **0.5 秒**——那是为
+    "把一句话完整切出来"设的，词间的小停顿一律被桥接掉。判回合结束用这个默认值
+    正合适；但要判**句子中间的微停顿**（附和就靠它）就得单独建一个短的，比如
+    0.08——两个用途参数相反，共用一个实例是做不到的。
     """
     import sherpa_onnx
     path = require(
         Path(model) if model else model_path("silero_vad.onnx", "vad", kind="vad"),
         "silero VAD 模型 silero_vad.onnx",
     )
+    silero = sherpa_onnx.SileroVadModelConfig(model=str(path), threshold=threshold)
+    if min_silence_s is not None:
+        silero.min_silence_duration = float(min_silence_s)
     v = sherpa_onnx.VoiceActivityDetector(sherpa_onnx.VadModelConfig(
-        silero_vad=sherpa_onnx.SileroVadModelConfig(model=str(path), threshold=threshold),
-        sample_rate=16000), buffer_size_in_seconds=30)
+        silero_vad=silero, sample_rate=16000), buffer_size_in_seconds=30)
 
     class _V:
         def is_speech(self, frame): v.accept_waveform(frame); return v.is_speech_detected()
