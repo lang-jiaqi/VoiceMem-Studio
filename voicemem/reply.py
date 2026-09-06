@@ -32,13 +32,19 @@ from typing import AsyncIterator, Callable
 from voicemem.llm_config import resolve_api_key, resolve_base_url, resolve_model
 
 # memory_context 只是「记得关于用户的哪些事」，本身不含人设/风格要求，所以内置
-# provider 把它接在这句后面，而不是拿它整个当 system prompt。
-DEFAULT_SYSTEM = "你是语音助手，简短自然地回答。"
+# provider 把它接在人设后面，而不是拿它整个当 system prompt。
+#
+# 人设在 voicemem/persona.py，**按这个空间的语言选**（建空间时定一次）。以前这里
+# 写死一句中文，英文库拿到的也是中文人设；而人设是 system 里唯一稳定的前缀，
+# 写死意味着它跟记忆语言可以不一致，模型每轮都要自己调和这个矛盾。
+def default_system() -> str:
+    from voicemem import persona
+    return persona.system_prompt()
 
 
 def compose_system(memory_context: str, system: str | None = None) -> str:
     """人设 + 记忆 → system prompt。两边都可能为空。"""
-    parts = [system or DEFAULT_SYSTEM]
+    parts = [system or default_system()]
     if memory_context:
         parts.append(memory_context)
     return "\n\n".join(parts)
@@ -55,7 +61,19 @@ def openai_reply(model: str | None = None, api_key: str | None = None,
     """
     client = None
 
-    async def fn(text: str, memory_context: str = "") -> AsyncIterator[str]:
+    async def fn(text: str, memory_context: str = "",
+                 history: list | None = None) -> AsyncIterator[str]:
+        """``history``：user/assistant 交替的历史消息，排在 system 和本轮之间。
+
+        为什么历史要单独传、而不是拼进 memory_context：服务端的 prompt 缓存复用的是
+        **最长公共前缀**。记忆每轮都变，把它和历史一起塞进 system，前缀从人设之后
+        就断了，历史再长也复用不了。拆开之后顺序是
+
+            [system 人设]  [历史各轮]  [这轮记忆 + 这轮的话]
+             └── 稳定，可复用 ──┘      └ 变的全在最后
+
+        不传 history 就是老行为（两条消息），既有调用方不受影响。
+        """
         nonlocal client
         if client is None:
             from openai import AsyncOpenAI
@@ -63,11 +81,16 @@ def openai_reply(model: str | None = None, api_key: str | None = None,
                 api_key=resolve_api_key(api_key),
                 base_url=resolve_base_url(base_url),
             )
+        msgs = [{"role": "system", "content": system or default_system()}]
+        msgs += list(history or [])
+        # 记忆跟本轮的话放同一条消息：它是"回答这句话时该知道的事"，本来就属于
+        # 这一轮；单独一条 system 会把它变成前缀的一部分，缓存又断了。
+        msgs.append({"role": "user",
+                     "content": f"{memory_context}\n\n{text}" if memory_context else text})
         stream = await client.chat.completions.create(
             model=resolve_model(model, "reply"),
             stream=True,
-            messages=[{"role": "system", "content": compose_system(memory_context, system)},
-                      {"role": "user", "content": text}],
+            messages=msgs,
         )
         async for chunk in stream:
             delta = chunk.choices[0].delta.content
@@ -84,12 +107,43 @@ def normalize(fn: Callable) -> Callable:
     读麦克风那条线。返回值若本身是异步可迭代对象（例如一个包装别人生成器的
     lambda），照样按流式展开。
     """
+    # 可调用**对象**（``VoiceMem(reply=LocalLLM())`` 这种）要看它的 __call__：
+    # inspect 的那几个判断只认函数，对实例一律返回 False，于是一个流式的
+    # provider 会被当成普通同步函数走到最后那条分支——history 被丢掉、还白跑
+    # 一趟 to_thread。实测后果：本地模型永远收不到对话历史，预热的 KV 前缀
+    # 也就永远对不上，首字从 1.3s 退回 2.7s。
+    if not inspect.isfunction(fn) and not inspect.ismethod(fn):
+        call = getattr(type(fn), "__call__", None)
+        if call is not None and (inspect.isasyncgenfunction(call)
+                                 or inspect.iscoroutinefunction(call)):
+            fn = fn.__call__
+
     if inspect.isasyncgenfunction(fn):
-        return fn
+        try:
+            if "history" in inspect.signature(fn).parameters:
+                return fn
+        except (TypeError, ValueError):
+            pass
+
+        async def wrap(text: str, memory_context: str = "",
+                       history: list | None = None) -> AsyncIterator[str]:
+            async for d in fn(text, memory_context):   # 老签名：把 history 吞掉
+                yield d
+        return wrap
+
+    # history 只传给**接得住它的**函数：用户自己写的 reply 多半只有两个参数
+    # （文档里就是这么写的），硬塞第三个会直接 TypeError。
+    def _accepts_history(f) -> bool:
+        try:
+            return "history" in inspect.signature(f).parameters
+        except (TypeError, ValueError):
+            return False
 
     if inspect.iscoroutinefunction(fn):
-        async def gen(text: str, memory_context: str = "") -> AsyncIterator[str]:
-            out = await fn(text, memory_context)
+        async def gen(text: str, memory_context: str = "",
+                      history: list | None = None) -> AsyncIterator[str]:
+            out = await (fn(text, memory_context, history) if _accepts_history(fn)
+                         else fn(text, memory_context))
             if hasattr(out, "__aiter__"):
                 async for delta in out:
                     yield delta
@@ -97,7 +151,8 @@ def normalize(fn: Callable) -> Callable:
                 yield out
         return gen
 
-    async def gen(text: str, memory_context: str = "") -> AsyncIterator[str]:
+    async def gen(text: str, memory_context: str = "",
+                  history: list | None = None) -> AsyncIterator[str]:
         out = await asyncio.to_thread(fn, text, memory_context)
         if hasattr(out, "__aiter__"):
             async for delta in out:
