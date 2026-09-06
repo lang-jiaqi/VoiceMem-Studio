@@ -59,8 +59,14 @@ _SOFT_END  = "，,、；;：: "          # 句中停顿：只有第一段用，�
 # 每段都是**独立合成**的，语调轮廓不跨段延续，所以段越多、接缝越明显——听感上
 # 是"一句一句拼起来的"而不是连着说下来的。切得碎是拿流畅度换首帧延迟，
 # 哪头更值取决于后端有多快。
-_FIRST_MIN = int(os.environ.get("VOICEMEM_TTS_FIRST_MIN", "6"))
-_FIRST_MAX = int(os.environ.get("VOICEMEM_TTS_FIRST_MAX", "20"))
+_FIRST_MIN = int(os.environ.get("VOICEMEM_TTS_FIRST_MIN", "4"))
+#: 第一段的硬上限。到了这个长度就切，**不管有没有标点**——所以它偏小就会切在
+#: 半个词/半个短语上（实测切出 'You might try a local'，接缝正好在开头最显眼处，
+#: 听感就是"头几个词卡一下"）。
+#: 48 是照"LLM 首字 1.2~1.8 秒、TTS 首帧 1~1.5 秒"标的——那时候首字一到就已经攒够
+#: 20 字，上限根本没在抢时间。现在首字 0.58 秒、TTS 首帧 0.2 秒，账反过来了：多等
+#: 一个字就是实打实的 28ms，所以收到 24。嫌接缝明显就调回大一点。
+_FIRST_MAX = int(os.environ.get("VOICEMEM_TTS_FIRST_MAX", "24"))
 _SENT_MIN  = int(os.environ.get("VOICEMEM_TTS_SENT_MIN", "12"))
 _SENT_MAX  = int(os.environ.get("VOICEMEM_TTS_SENT_MAX", "60"))
 #: 第一段允不允许在逗号处断开。默认允许——抢第一声用的。但这会**把一句话劈成两次
@@ -76,7 +82,16 @@ def cut_point(buf: str, first: bool) -> bool:
         return False
     if first:                                  # 抢第一声：逗号也算，实在没有就按长度切
         ends = _SENT_END + _SOFT_END if _FIRST_SOFT else _SENT_END
-        return (len(s) >= _FIRST_MIN and s[-1] in ends) or len(s) >= _FIRST_MAX
+        if len(s) >= _FIRST_MIN and s[-1] in ends:
+            return True
+        # 到了硬上限也**只在词边界切**：切在半个词上，两段各自合成出来接不上，
+        # 是"头几个词卡"最直接的来源。等下一个空格/标点，最多多等一两个 token。
+        #
+        # 词边界要看**没 strip 过的 buf**：s 已经被 strip 掉结尾空格了，
+        # ``s[-1].isspace()`` 永远为假——这条硬上限因此从来没生效过，英文那种
+        # 一句到底没有逗号的回复只能死等句号。实测第一段切出 70 个字，
+        # 白等了 200 多毫秒。
+        return len(s) >= _FIRST_MAX and (buf[-1:].isspace() or not s[-1].isalnum())
     return (len(s) >= _SENT_MIN and s[-1] in _SENT_END) or len(s) >= _SENT_MAX
 
 
@@ -178,12 +193,105 @@ class PiperTTS(BaseTTS):
         return self._voice
 
     async def _raw(self, text, instruction=None):
-        v = self._load()                      # piper 没有语气入口，instruction 忽略
-        sr = getattr(getattr(v, "config", None), "sample_rate", 22050)
-        for raw in v.synthesize_stream_raw(text):       # 同步生成器，int16 bytes @ sr
+        """piper 没有语气入口，``instruction`` 忽略。
+
+        接口随版本变过：老版是 ``synthesize_stream_raw(text)`` 吐 int16 bytes，
+        新版是 ``synthesize(text)`` 吐 ``AudioChunk``（带 sample_rate 和
+        ``audio_int16_bytes``）。两个都认——只装了一边的人不该因为版本报
+        AttributeError。
+        """
+        v = self._load()
+        old = getattr(v, "synthesize_stream_raw", None)
+        if old is not None:                             # 老接口
+            sr = getattr(getattr(v, "config", None), "sample_rate", 22050)
+            for raw in old(text):
+                f = np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
+                out = resample(f, src=sr, dst=SAMPLE_RATE)
+                yield (np.clip(out, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+            return
+        for chunk in v.synthesize(text):                # 新接口
+            # 采样率**按块读**：它是 chunk 的属性，不同 voice 不一样（22.05k / 16k）。
+            sr = int(getattr(chunk, "sample_rate", 22050))
+            raw = getattr(chunk, "audio_int16_bytes", None)
             f = np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
             out = resample(f, src=sr, dst=SAMPLE_RATE)  # 统一到 24k
             yield (np.clip(out, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+
+
+class QwenTTS(BaseTTS):
+    """Qwen3-TTS 的**本地 MLX** 版（Apple silicon）。装：pip install mlx-audio。
+
+    这是本机唯一一个**比实时快**的后端，所以是本地路线里唯一能直播用的：
+
+        后端            首帧      实时倍率
+        Qwen3-TTS       184ms     0.69x   ← 生成比播放快，不会断
+        Breeze-MLX      626ms     3.4x    ← 比实时慢 3 倍，必然卡顿
+        OpenAI api      800ms     —       联网
+
+    ``voice`` 是预置音色名（Serena / Vivian / Ryan …），``instruction`` 用自然语言
+    指挥情绪语气。1.7B-CustomVoice 的 8bit 量化约 2GB。
+
+    **加载和生成都走那条共享 GPU 流**（voicemem/utils/gpu_loop）——原因有二：MLX
+    的 stream 是线程局部的，主线程加载、别处生成会报 "There is no Stream(gpu, 0)
+    in current thread."；更要命的是本地 LLM 也在 GPU 上，两条线程各自往同一块显存
+    提交命令缓冲会触发 Apple 驱动的内核 panic 把机器重启。所以全进程只有 gpu_loop
+    一个线程碰 GPU，TTS 合成和 LLM 解码在它上面轮流推进，不并发。也不能在事件循环
+    里同步跑：一段要算几百毫秒，那段时间发不出音频也读不了麦克风。坑都踩过。
+    """
+
+    #: 默认 8bit（约 2GB）。bf16 的音质略好但慢一截，量化这档听不出差别。
+    DEFAULT_MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
+
+    def __init__(self, model=None, voice=None, instruction=None,
+                 streaming_interval=None):
+        self.model_name = (model or os.environ.get("VOICEMEM_QWEN_TTS_MODEL")
+                           or self.DEFAULT_MODEL)
+        self.voice = voice or os.environ.get("VOICEMEM_QWEN_TTS_VOICE") or "Serena"
+        self.instruction = instruction or os.environ.get("VOICEMEM_TTS_INSTRUCTION") or None
+        self.interval = float(streaming_interval
+                              or os.environ.get("VOICEMEM_QWEN_TTS_INTERVAL", "0.2"))
+        self._m = None
+
+    def _load(self):
+        if self._m is None:
+            from mlx_audio.tts.utils import load_model
+            self._m = load_model(self.model_name)   # 在 gpu_loop 线程里调,见类文档
+        return self._m
+
+    def _segments(self, kw):
+        """在 GPU 线程上跑的生成器：一块音频 yield 一次，跟 LLM 轮流推进。"""
+        m = self._load()
+        sr = getattr(m, "sample_rate", SAMPLE_RATE)
+        for seg in m.generate(**kw):
+            a = np.asarray(seg.audio, np.float32).reshape(-1)
+            o = a if sr == SAMPLE_RATE else resample(a, src=sr, dst=SAMPLE_RATE)
+            yield (np.clip(o, -1, 1) * 32767).astype(np.int16).tobytes()
+
+    async def _raw(self, text, instruction=None):
+        import asyncio as _a
+        from voicemem.utils.gpu_loop import gpu_loop
+        kw = {"text": text, "voice": self.voice, "stream": True,
+              "streaming_interval": self.interval}
+        ins = instruction or self.instruction
+        if ins:
+            kw["instruct"] = ins
+        loop = _a.get_running_loop()
+        # 权重 4:TTS 每轮多走几步,跟得上播放。跟 LLM 1:1 平摊算力会欠载卡顿——
+        # TTS 单独实时率才 0.69x,再减半就追不上了(见 gpu_loop 的 weight)。
+        job = gpu_loop().iter(lambda: self._segments(kw), weight=4)
+        try:
+            while True:
+                item = await loop.run_in_executor(None, job.out.get)  # 普通队列,不能直接 await
+                if item is None:
+                    return
+                kind, chunk = item
+                if kind == "err":
+                    print(f"[tts] Qwen3-TTS 合成失败：{type(chunk).__name__}: {chunk}",
+                          flush=True)
+                    return
+                yield chunk
+        finally:
+            job.cancel()      # 被打断就别再合成了，那段音频没人听
 
 
 class VoxCPMTTS(BaseTTS):
@@ -351,6 +459,7 @@ TTS_PROVIDERS = {
     "piper":  PiperTTS,
     "voxcpm": VoxCPMTTS,
     "breeze": BreezeTTS,
+    "qwen":   QwenTTS,        # 本机 MLX，比实时快，见那个类的说明
 }
 
 
