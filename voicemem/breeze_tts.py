@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from voicemem.utils.audio.stream_io import resample
+from voicemem.prompt_config import tts_prompts
 
 SAMPLE_RATE = 24000
 
@@ -31,7 +32,8 @@ class BreezeMLXTTS:
                 self.ref_text = ref.with_suffix(".txt").read_text(encoding="utf-8").strip()
             if not self.ref_text:
                 raise ValueError("Breeze reference audio requires its transcript (.txt or ref_text).")
-        self.instruction = instruction or os.environ.get("VOICEMEM_BREEZE_INSTRUCTION") or "温柔女声，语速正常"   # 短：instruct 跟正文一起过 T5 编码器，每段都重算，字数直接进首帧
+        self.instruction = (instruction or os.environ.get("VOICEMEM_BREEZE_INSTRUCTION")
+                            or tts_prompts()["breeze_default_instruction"])
         self.cfg_scale = float(os.environ.get("VOICEMEM_BREEZE_CFG_SCALE", cfg_scale))
         self.seed = int(os.environ.get("VOICEMEM_BREEZE_SEED", seed))
         self.chunk_frames = int(chunk_frames)

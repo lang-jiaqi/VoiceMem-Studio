@@ -18,9 +18,11 @@ to Git. Breeze remains local (`TTS_BACKEND=breeze_mlx`).
 The terminal defaults to latency and the effective TTS emotional instruction,
 plus warnings/errors. `--verbose` restores full diagnostic output. Full logs
 still go to `results/logs/`. Actual LLM messages and each Breeze segment's text,
-instruction and reference transcript are saved under `prompt/`; see
+instruction and reference transcript are saved under `prompt/logs/`; see
 [`prompt/README.md`](../prompt/README.md). Prompt files are private local data,
-not part of the Git repository. Restart the service to enable these changes.
+not part of the Git repository. Editable runtime templates live directly in
+`prompt/`: `llm_system_*.md`, `llm_tone_rule_*.md`, `tts.json`, and
+`llm_context.json`. Edit these files and restart; no Python prompt edits are needed.
 
 Use native Apple Silicon Python 3.12 with `mlx-audio==0.5.1`, `mlx==0.32.2`.
 Both versions are already installed in the Python below. Weights are downloaded

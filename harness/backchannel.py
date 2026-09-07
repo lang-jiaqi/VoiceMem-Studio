@@ -372,18 +372,8 @@ class Backchannel:
 
 #: 每个词换这几种念法各合成一条。语气指示喂给 TTS 的 instruction 参数
 #: （不认这个参数的后端会退回单一念法，见 _synth_one 的 TypeError 分支）。
-_STYLES = {
-    # 语气指示要**平**：之前"短促""气声"这类词把模型往夸张里推，出来的"嗯"
-    # 像在演，僵。日常听人说话时的应声是不用力、不起伏的，指示词也照这么写。
-    # 2026-09-07 跟用户逐条试听定下来的方向：温柔平缓、句尾往下落、不带感叹。
-    # 上扬、"短促""气声"这些都被否了——听着像在演。定稿的 8 条片段直接放在缓存里
-    # （见 tools/install_backchannel_clips.py），这里的指示只在重新合成时用。
-    "zh": ["听别人说话时温柔地应一声，平缓柔和，语调平往下落，放松不用力，不带感叹",
-           "像陈述句一样平平地说，句尾往下落，轻声，没有任何感叹和强调"],
-    "en": ["very soft and short, a casual acknowledgement",
-           "soft, slightly drawn out, listening attentively",
-           "very quiet, breathy, almost just a nod"],
-}
+from voicemem.prompt_config import tts_prompts
+_STYLES = tts_prompts()["backchannel_styles"]
 
 
 def _cache_root():

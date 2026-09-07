@@ -80,6 +80,13 @@ Issues = "https://github.com/lang-jiaqi/Voicemem_open/issues"
 [tool.setuptools.packages.find]
 include = ["voicemem*"]
 
+[tool.setuptools.data-files]
+"prompt" = [
+    "prompt/llm_system_zh.md", "prompt/llm_system_en.md",
+    "prompt/llm_tone_rule_zh.md", "prompt/llm_tone_rule_en.md",
+    "prompt/llm_context.json", "prompt/tts.json",
+]
+
 # data/ 下的 prompt 文本是运行时读的（见 leftbrain/mem0_additive_prompt_build.py），
 # 不显式声明的话 wheel 里不会有，装完一调用就 FileNotFoundError。
 [tool.setuptools.package-data]

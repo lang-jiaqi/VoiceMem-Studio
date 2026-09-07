@@ -62,6 +62,12 @@ cache/
 # Actual prompts contain conversation history and private memories.
 /prompt/*
 !/prompt/README.md
+!/prompt/llm_system_zh.md
+!/prompt/llm_system_en.md
+!/prompt/llm_tone_rule_zh.md
+!/prompt/llm_tone_rule_en.md
+!/prompt/llm_context.json
+!/prompt/tts.json
 
 # Local reference voices and generated voice tests are not distributable code.
 /voice/

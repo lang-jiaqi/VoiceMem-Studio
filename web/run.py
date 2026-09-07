@@ -43,6 +43,7 @@ _ROOT = HERE.parent
 sys.path.insert(0, str(HERE))                       # 让 `import utils` 找到同目录管道层
 sys.path.insert(0, str(_ROOT))
 from echo_guard import UtteranceGuard
+from voicemem.prompt_config import context_prompts, tts_prompts
 os.environ.setdefault("VOICEMEM_MODELS_DIR", str(_ROOT / "models"))
 # 记忆空间锚在**仓库根**，不跟当前目录走。否则 `cd web && python run.py` 会在
 # web/ 底下另建一个空的 voicemem_memoryspace/demo，用户对着空库说半天话，
@@ -120,7 +121,7 @@ if __name__ == "__main__" and not ARGS.no_file_log:
 
 if __name__ == "__main__":
     from voicemem.prompt_trace import configure as _configure_prompt_trace
-    print(f"[log] Prompt：{_configure_prompt_trace(_ROOT / 'prompt')}", flush=True)
+    print(f"[log] Prompt 请求记录：{_configure_prompt_trace(_ROOT / 'prompt' / 'logs')}", flush=True)
 
 # Set the demo default before utils imports the TTS provider registry.
 if ARGS.mode == "llm_tts":
@@ -863,32 +864,12 @@ def _turn_detection() -> dict:
 
 #: 要回放时追加的一句。不加的话模型会去"描述"那段音频（"你说那是一首很轻快的
 #: 钢琴曲…"）——它根本没听过那段音频，描述全是编的；而且用户马上就要亲耳听到。
-_REPLAY_NOTE = {
-    "zh": ("你手上有他当时那段录音，说完这句就会放给他听。"
-           "所以别去描述那段声音是什么样的——你没听过，别编。"
-           "就短短一句把它引出来，像「我把当时那段找出来了，你听听是不是这个」，"
-           "然后停住，等他听。"),
-    "en": ("You have their actual recording from that moment, and it plays as soon "
-           "as you finish this line. So don't describe what the audio sounds like — "
-           "you haven't heard it, don't invent it. One short line to hand it over, "
-           "like \"I found the clip from back then, see if this is the one\", then "
-           "stop and let them listen."),
-}
+_REPLAY_NOTE = context_prompts()["replay"]
 
 #: 他在找一段声音、但那个时间段确实没有存档时追加的一句。
 #: 不加的话模型会顺口答"当然，马上播放"——然后什么都不放。说要播却没播，
 #: 比直接说没找到糟得多。
-_NO_REPLAY_NOTE = {
-    "zh": ("他在找一段录音，但你手上**没有**他说的那个时间的录音，"
-           "这一轮不会播任何东西。所以别说「马上播放」「这就放给你听」。"
-           "直说那个时候没有存到，再问一句是不是别的时候，"
-           "或者说说你记得的相关的事。"),
-    "en": ("They're looking for a recording, but you do **not** have one from the "
-           "time they mean; nothing will play this turn. So don't say \"playing it "
-           "now\" or \"here it is\". Say plainly that nothing was saved from then, "
-           "ask whether they meant another time, or talk about what you do "
-           "remember."),
-}
+_NO_REPLAY_NOTE = context_prompts()["no_replay"]
 
 
 def _wants_sound(text: str) -> bool:
@@ -900,52 +881,10 @@ def _wants_sound(text: str) -> bool:
 #: 光在人设里写"要有起伏"没用——那是形容词，模型没有对象可对。给它一个具体的
 #: 目标（"他现在是焦虑的，你要放慢、压低、先接住"），语气才真的会变。
 #: 情绪本身是声学感知算出来的（Qwen-Omni 归因 + 韵律 VAD），每轮都不一样。
-_TONE = {
- "zh": {
-    "焦虑": "他现在是紧绷的。语速放慢，句子短，先接住再说事，别一上来就给方案。",
-    "沮丧": "他现在情绪很低。声音压低、放软，允许有停顿，别急着安慰也别讲道理。",
-    "难过": "他现在难过。轻一点、慢一点，先陪着，别转移话题。",
-    "悲伤": "他现在难过。轻一点、慢一点，先陪着，别转移话题。",
-    "烦躁": "他现在有点烦。直接说重点，别绕，别追问，也别用哄的语气。",
-    "愤怒": "他在气头上。先认下来，语速稳住，别辩解。",
-    "开心": "他心情好。跟着热起来，语调扬上去，可以笑出来，别端着。",
-    "愉悦": "他心情好。跟着热起来，语调扬上去，可以笑出来，别端着。",
-    "兴奋": "他很兴奋。你也兴奋起来，语速快一点、音量抬一点，别泼冷水。",
-    "自豪": "他为自己骄傲。替他高兴，说得实在一点，别敷衍地夸。",
-    "期待": "他在期待。语气轻快，跟着往前想一步。",
-    "紧张": "他紧张。稳住，声音放平放缓，给他确定感。",
-    "委屈": "他觉得委屈。先站在他这边，语气软下来，别评理。",
-    "平静": "",
- },
- "en": {
-    "焦虑": "They're wound tight. Slow down, keep sentences short, take it in before "
-            "getting to the thing itself; don't open with a plan.",
-    "沮丧": "They're low. Lower and soften the voice, let pauses happen, don't rush "
-            "to comfort and don't reason at them.",
-    "难过": "They're sad. Lighter, slower, stay with it, don't change the subject.",
-    "悲伤": "They're sad. Lighter, slower, stay with it, don't change the subject.",
-    "烦躁": "They're irritated. Get to the point, no detours, no follow-up "
-            "questions, and don't use a soothing tone.",
-    "愤怒": "They're angry. Grant it first, keep your pace steady, don't defend.",
-    "开心": "They're in a good mood. Warm up with them, lift the pitch, you can "
-            "laugh, don't stay composed.",
-    "愉悦": "They're in a good mood. Warm up with them, lift the pitch, you can "
-            "laugh, don't stay composed.",
-    "兴奋": "They're excited. Get excited too, a little faster and louder, don't "
-            "damp it down.",
-    "自豪": "They're proud of themselves. Be glad with them, be concrete, no "
-            "perfunctory praise.",
-    "期待": "They're looking forward to something. Light tone, think one step ahead "
-            "with them.",
-    "紧张": "They're nervous. Steady, flatten and slow the voice, give them "
-            "something certain.",
-    "委屈": "They feel wronged. Take their side first, soften, don't adjudicate.",
-    "平静": "",
- },
-}
+_TONE = tts_prompts()["fallback_by_user_emotion"]
 
 
-_STATE_LABEL = {"zh": "他此刻的状态：", "en": "Where they are right now: "}
+_STATE_LABEL = context_prompts()["state_label"]
 
 
 def _tone_note(emotion: str) -> str:
@@ -953,7 +892,7 @@ def _tone_note(emotion: str) -> str:
 
 
 #: 说话的基调，每一轮都带。跟 _TONE 拼起来就是这一轮给 TTS 的完整指示。
-_SPEAK_BASE = {"zh": "像一个老朋友一样讲话。", "en": "Talk like an old friend. "}
+_SPEAK_BASE = tts_prompts()["base"]
 _speak_base_env = os.environ.get("VOICEMEM_SPEAK_BASE", "")
 #: 上一轮实际用的语气，给 speak_tag.smooth() 当锚点。进程级就够——它只是让相邻
 #: 两轮听着接得上，跨会话不需要连续。
