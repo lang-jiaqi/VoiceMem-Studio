@@ -2472,11 +2472,6 @@ EARLY_MAX_SPEECH_S = float(os.environ.get("VOICEMEM_EARLY_MAX_SPEECH", "2.0"))
 #: 所以不能用长度比（第二种的比值是 285%，照样通过），要看**最终文本有多少是
 #: 下注时就已经说出来的**——用最长公共子串。
 EARLY_MIN_COVER = float(os.environ.get("VOICEMEM_EARLY_MIN_COVER", "0.7"))
-#: 手上已经有生成好的回复时，静音多久就结束回合。
-#:
-#: 比没有时短得多（300ms → 100ms）：等 300ms 的意义是"别白干活"——万一他还没说完，
-#: 现在结束就得把 LLM+TTS 白跑一遍。可活都干完了，等就纯是浪费。
-CONFIRM_READY_S = float(os.environ.get("VOICEMEM_CONFIRM_READY", "0.1"))
 
 
 async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=None,
@@ -2655,9 +2650,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                 and st.eot_score >= EARLY_EOT and not early_at):
             early_text, early_at = cur, time.monotonic()
             await on_early(cur, st)
-            # 回复已经在生成了 → 静音 100ms 就够，不必再等满 300ms。
-            # 等 300ms 的意义是"别白干活"，活干完了就没意义了。
-            stream.confirm_s = CONFIRM_READY_S
+            # 提前生成不代表用户说完了；快接话仍由当前 EOT + 静音确认。
 
         # 附和用**能量**判停顿，不用 VAD 的静音计时。
         #
@@ -2926,7 +2919,6 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
             bc_speech_t0 = 0.0
             prewarm_idle = True                 # 历史变了，空闲时重新热一遍
             prewarm_mem = None
-            stream.confirm_s = CONFIRM_S        # 新一轮，回到正常兜底
             # 谁在说话。第一个开口的人算这场对话的主人；之后换了另一个声纹，
             # 就是陌生人——不能把主人的记忆讲给他听（"我是谁？"→"你是Jiaqi"
             # 这个 bug 就是因为检索从不看说话人）。
