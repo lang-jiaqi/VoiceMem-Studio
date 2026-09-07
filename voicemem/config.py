@@ -213,6 +213,10 @@ def _check_keys(config: dict) -> None:
 
 def _reply_factory(provider, cfg):
     """reply：openai -> 内置流式 provider；custom -> 直接用 config.fn 那个函数。"""
+    if provider == "deepseek":
+        from voicemem.reply import deepseek_reply
+        return deepseek_reply(model=cfg.get("model"), api_key=cfg.get("api_key"),
+                              base_url=cfg.get("base_url"), system=cfg.get("system"))
     if provider in (None, "openai"):
         from voicemem.reply import openai_reply
         return openai_reply(model=cfg.get("model"), api_key=cfg.get("api_key"),
@@ -225,7 +229,7 @@ def _reply_factory(provider, cfg):
                 "直接传函数更省事：VoiceMem(reply=fn)"
             )
         return fn
-    _bad("reply", provider, ["openai", "custom"])
+    _bad("reply", provider, ["openai", "deepseek", "custom"])
 
 
 def build_kwargs(config: dict) -> dict:

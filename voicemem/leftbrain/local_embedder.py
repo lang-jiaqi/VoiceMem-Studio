@@ -142,6 +142,21 @@ def resolve_path(model: LocalEmbedModel) -> str:
     return hf_model(model.kind, model.repo, model.key)
 
 
+class _LockedEncoder:
+    """SentenceTransformer 的壳：``encode`` 持进程级 torch 锁（见 utils/torch_lock）。
+    其他属性原样透传。"""
+    def __init__(self, m):
+        self._m = m
+
+    def encode(self, *a, **k):
+        from voicemem.utils.torch_lock import TORCH_LOCK
+        with TORCH_LOCK:
+            return self._m.encode(*a, **k)
+
+    def __getattr__(self, name):
+        return getattr(self._m, name)
+
+
 @lru_cache(maxsize=4)
 def shared_model(path: str, tokenizer_kwargs: tuple = ()):
     """按路径缓存 SentenceTransformer：记忆向量和 slot 分类共用一份，省一份权重。
@@ -159,15 +174,15 @@ def shared_model(path: str, tokenizer_kwargs: tuple = ()):
             pass
     from sentence_transformers import SentenceTransformer
     if not tokenizer_kwargs:
-        return SentenceTransformer(path)
+        return _LockedEncoder(SentenceTransformer(path))
     # sentence-transformers 6.x 把 tokenizer_kwargs 改名成 processor_kwargs，旧名
     # 还认但会打 DeprecationWarning。两个名字都试：这个参数不是可有可无的装饰，
     # Qwen 的 last-token pooling 少了它会静默取到 padding 上。
     kw = dict(tokenizer_kwargs)
     try:
-        return SentenceTransformer(path, processor_kwargs=kw)
+        return _LockedEncoder(SentenceTransformer(path, processor_kwargs=kw))
     except TypeError:
-        return SentenceTransformer(path, tokenizer_kwargs=kw)
+        return _LockedEncoder(SentenceTransformer(path, tokenizer_kwargs=kw))
 
 
 class LocalEmbedder:
@@ -204,4 +219,6 @@ class LocalEmbedder:
         return self._encode(texts, self.model.passage_prefix).tolist()
 
     def embed_query_text(self, text):
-        return self._encode([text], self.model.query_prefix)[0].tolist()
+        from voicemem.leftbrain.query_embedding import encode_query
+        model = shared_model(self._path, self.model.tokenizer_kwargs)
+        return encode_query(model, f"{self.model.query_prefix}{text}").tolist()

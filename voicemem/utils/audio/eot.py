@@ -32,7 +32,11 @@ import numpy as np
 
 #: 判到多少算「说完了」。偏高一点更保守：宁可多等 100ms，也别把人的话切断——
 #: 切断的代价是残缺记忆 + 一次白跑的回复 + 用户被抢话。
-THRESHOLD = float(os.environ.get("VOICEMEM_EOT_THRESHOLD", "0.6"))
+#:
+#: 0.6 是切不动疑问句的：实测升调问句只有 0.38~0.48，陈述句 0.97，中间基本没人，
+#: 这条线正好从那个空档里穿过去，结果所有问句都退回掐表。降到 0.5 把 0.48 那档
+#: 接住，陈述句那边一点没动（它们离得远）。
+THRESHOLD = float(os.environ.get("VOICEMEM_EOT_THRESHOLD", "0.5"))
 #: 模型固定吃 8 秒窗口（80×800 log-mel）。
 WINDOW_S = 8
 REPO = "pipecat-ai/smart-turn-v3"

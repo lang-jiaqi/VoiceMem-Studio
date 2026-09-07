@@ -232,7 +232,27 @@ class Orchestrator:
         overrides = _canon({**util_overrides, "embedder": embedder,
                             "vector_store": vector_store, "classifier": classifier})
         overrides = {k: v for k, v in overrides.items() if v is not None}
-        self.utils = Utils(mode, base_url, memory_root, overrides)
+        # 空间目录必须在建 Utils **之前**定下来：能力工厂（asr / embedding / slots）
+        # 是照 `<space>.json` 的 space.language 挑模型的，拿到 None 会一路回落到
+        # 默认 en——表现就是"中文空间却用英文流式 ASR 转写"（demo-zh 里说中文，
+        # 流式吐 'Whate cris'，等离线复核才回到中文）。
+        # 默认落在**当前工作目录**下，不是包的安装位置。
+        #
+        # 之前默认是 <包目录>/results/voice_memory —— pip 装的人记忆会写进
+        # site-packages/results/：升级包就没了、系统级 Python 往往只读、而且所有
+        # 项目共用一份。数据该跟着项目走，不该跟着程序装在哪走（git/docker/npm
+        # 都是这个逻辑）。VOICEMEM_MEMORY_ROOT 可覆盖。
+        # 不给 memory_root 时按 space 落到 voicemem_memoryspace/<space>/，
+        # 默认 space 叫 demo。见 utils/common/space.py。
+        from voicemem.utils.common.space import MemorySpace
+        if memory_root or os.environ.get("VOICEMEM_MEMORY_ROOT"):
+            self._memory_root = Path(memory_root or os.environ["VOICEMEM_MEMORY_ROOT"])
+            self._memory_root.mkdir(parents=True, exist_ok=True)
+            self._space = None
+        else:
+            self._space = MemorySpace(space)
+            self._memory_root = self._space.dir
+        self.utils = Utils(mode, base_url, self._memory_root, overrides)
 
         audio = mode == "multi_modal"
         # 只有被用户覆盖的能力才注入组件；否则组件用自己的默认。
@@ -250,22 +270,6 @@ class Orchestrator:
         classifier   = pick("slots")
 
         self._vector_store = vector_store   # 注入的 memory engine（默认 None → mem0）
-        # 默认落在**当前工作目录**下，不是包的安装位置。
-        #
-        # 之前默认是 <包目录>/results/voice_memory —— pip 装的人记忆会写进
-        # site-packages/results/：升级包就没了、系统级 Python 往往只读、而且所有
-        # 项目共用一份。数据该跟着项目走，不该跟着程序装在哪走（git/docker/npm
-        # 都是这个逻辑）。VOICEMEM_MEMORY_ROOT 可覆盖。
-        # 不给 memory_root 时按 space 落到 voicemem_memoryspace/<space>/，
-        # 默认 space 叫 demo。见 utils/common/space.py。
-        from voicemem.utils.common.space import MemorySpace
-        if memory_root or os.environ.get("VOICEMEM_MEMORY_ROOT"):
-            self._memory_root = Path(memory_root or os.environ["VOICEMEM_MEMORY_ROOT"])
-            self._memory_root.mkdir(parents=True, exist_ok=True)
-            self._space = None
-        else:
-            self._space = MemorySpace(space)
-            self._memory_root = self._space.dir
         # 一个 space 一个 sqlite：原来九个库各开各的连接，拆开只会让「拷走一个
         # space」变成「别漏了哪个文件」。表名互不重叠。
         self._db_path = _space.db(self._memory_root)

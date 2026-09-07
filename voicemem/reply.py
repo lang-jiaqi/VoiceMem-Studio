@@ -30,6 +30,7 @@ import inspect
 import os
 from typing import AsyncIterator, Callable
 from voicemem.llm_config import resolve_api_key, resolve_base_url, resolve_model
+from voicemem.prompt_trace import record_request
 
 # memory_context 只是「记得关于用户的哪些事」，本身不含人设/风格要求，所以内置
 # provider 把它接在人设后面，而不是拿它整个当 system prompt。
@@ -87,16 +88,71 @@ def openai_reply(model: str | None = None, api_key: str | None = None,
         # 这一轮；单独一条 system 会把它变成前缀的一部分，缓存又断了。
         msgs.append({"role": "user",
                      "content": f"{memory_context}\n\n{text}" if memory_context else text})
-        stream = await client.chat.completions.create(
-            model=resolve_model(model, "reply"),
-            stream=True,
-            messages=msgs,
-        )
+        request = {"model": resolve_model(model, "reply"), "stream": True, "messages": msgs}
+        record_request("llm", "openai", request)
+        stream = await client.chat.completions.create(**request)
         async for chunk in stream:
             delta = chunk.choices[0].delta.content
             if delta:
                 yield delta
 
+    return fn
+
+
+def deepseek_reply(model: str | None = None, api_key: str | None = None,
+                   base_url: str | None = None, system: str | None = None) -> Callable:
+    """DeepSeek 流式语音回复：独立凭据，不改变后台记忆整理的厂商配置。"""
+    key = api_key or os.environ.get("DEEPSEEK_API_KEY")
+    if not key:
+        raise ValueError("DeepSeek 回复需要 DEEPSEEK_API_KEY；不要把密钥写进仓库")
+    import json
+    import httpx
+    model = model or os.environ.get("VOICEMEM_DEEPSEEK_MODEL", "deepseek-v4-flash")
+    url = (base_url or "https://api.deepseek.com").rstrip("/") + "/chat/completions"
+    client = None
+
+    async def fn(text: str, memory_context: str = "", history: list | None = None):
+        nonlocal client
+        if client is None:
+            # 长连接复用；不自动重试，避免把失败藏成几秒钟的静默等待。
+            client = httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0))
+        messages = [{"role": "system", "content": system or default_system()}]
+        messages += list(history or [])
+        messages.append({"role": "user", "content":
+                         f"{memory_context}\n\n{text}" if memory_context else text})
+        # 直接消费 SSE，避免当前 SDK/httpcore2 在提前关闭生成器时的清理异常。
+        request = {"model": model, "messages": messages, "stream": True,
+                   "thinking": {"type": "disabled"}, "max_tokens": 512}
+        record_request("llm", "deepseek", request)
+        async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"},
+                                 json=request) as response:
+            response.raise_for_status()
+            data = []
+            async for line in response.aiter_lines():
+                if line.startswith("data:"):
+                    data.append(line[5:].lstrip())
+                elif not line and data:
+                    payload = "\n".join(data)
+                    data.clear()
+                    if payload == "[DONE]":
+                        return
+                    chunk = json.loads(payload)
+                    if "error" in chunk:
+                        raise RuntimeError("DeepSeek stream returned an error")
+                    choices = chunk.get("choices") or []
+                    if choices:
+                        content = choices[0].get("delta", {}).get("content")
+                        if content:
+                            yield content
+            raise RuntimeError("DeepSeek stream ended before [DONE]")
+
+    async def close():
+        nonlocal client
+        if client is not None:
+            await client.aclose()
+            client = None
+
+    fn.aclose = close
     return fn
 
 

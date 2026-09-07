@@ -30,6 +30,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -41,6 +42,7 @@ HERE = Path(__file__).resolve().parent
 _ROOT = HERE.parent
 sys.path.insert(0, str(HERE))                       # 让 `import utils` 找到同目录管道层
 sys.path.insert(0, str(_ROOT))
+from echo_guard import UtteranceGuard
 os.environ.setdefault("VOICEMEM_MODELS_DIR", str(_ROOT / "models"))
 # 记忆空间锚在**仓库根**，不跟当前目录走。否则 `cd web && python run.py` 会在
 # web/ 底下另建一个空的 voicemem_memoryspace/demo，用户对着空库说半天话，
@@ -76,11 +78,9 @@ def _parse(argv):
                    help="用哪个 memory space（voicemem_memoryspace/<space>/）")
     p.add_argument("--memory_root", default=os.environ.get("VOICEMEM_MEMORY_ROOT", ""),
                    help="直接指定记忆库目录，给了就盖过 --space")
-    p.add_argument("--llm", choices=["openai", "local"], default="openai",
-                   help="回复模型走哪儿。local = 本机 MLX（Apple silicon）：首字 "
-                        "340ms vs OpenAI 768ms——快是因为人设和历史趁你说话时就算好了"
-                        "（云端做不到：它的缓存要可复用前缀 ≥1024 token，我们人设才 657）。"
-                        "代价是质量降一档、说得太短来不及预热")
+    p.add_argument("--llm", choices=["openai", "deepseek", "local"], default="openai",
+                   help="回复模型：deepseek=API 非思考流式回复（DEEPSEEK_API_KEY）；"
+                        "openai=原 API 配置；local=本机 MLX。TTS 独立配置。")
     p.add_argument("--eot", action=argparse.BooleanOptionalAction, default=True,
                    help="语义判「说完了没」（Smart Turn v3，32MB/15ms）。"
                         "开着时 --confirm_ms 只是兜底上限，可以放宽而不变慢；"
@@ -98,6 +98,9 @@ def _parse(argv):
     p.add_argument("--no-file-log", action="store_true",
                    default=os.environ.get("VOICEMEM_FILE_LOG", "1") == "0",
                    help="只输出到终端，不保存日志文件")
+    p.add_argument("--verbose", action="store_true",
+                   default=os.environ.get("VOICEMEM_VERBOSE", "0") == "1",
+                   help="终端显示完整诊断日志；默认只显示时延、TTS 情绪提示和警告/错误")
     return p.parse_args(argv)
 
 
@@ -113,7 +116,23 @@ _set_lang(ARGS.lang)
 LOG_FILE = None
 if __name__ == "__main__" and not ARGS.no_file_log:
     from logging_utils import setup_file_logging
-    LOG_FILE = setup_file_logging(_ROOT, ARGS.log_file)
+    LOG_FILE = setup_file_logging(_ROOT, ARGS.log_file, concise=not ARGS.verbose)
+
+if __name__ == "__main__":
+    from voicemem.prompt_trace import configure as _configure_prompt_trace
+    print(f"[log] Prompt：{_configure_prompt_trace(_ROOT / 'prompt')}", flush=True)
+
+# Set the demo default before utils imports the TTS provider registry.
+if ARGS.mode == "llm_tts":
+    os.environ.setdefault("TTS_BACKEND", "breeze_mlx")
+    _breeze_model = _ROOT / "models" / "tts" / "Breeze-TTS-2-mlx-4bit"
+    if (_breeze_model / "config.json").is_file():
+        os.environ.setdefault("VOICEMEM_BREEZE_MLX_MODEL", str(_breeze_model))
+    os.environ.setdefault("VOICEMEM_BREEZE_REF_AUDIO", str(_ROOT / "voice" / "noctelle_ref_short.wav"))  # 3.7s 够锁音色；8.2s 的前缀是首帧里最大的一块
+    if os.environ.get("TTS_BACKEND") == "breeze_mlx":
+        # Short initial acknowledgements such as 在呢， can start synthesis.
+        os.environ.setdefault("VOICEMEM_TTS_FIRST_MIN", "2")
+        os.environ.setdefault("VOICEMEM_TTS_FIRST_SOFT", "1")
 
 import utils                                         # noqa: E402  同目录管道层
 from audio_timeline import AudioTimeline, SpeechRateEstimator  # noqa: E402
@@ -936,6 +955,9 @@ def _tone_note(emotion: str) -> str:
 #: 说话的基调，每一轮都带。跟 _TONE 拼起来就是这一轮给 TTS 的完整指示。
 _SPEAK_BASE = {"zh": "像一个老朋友一样讲话。", "en": "Talk like an old friend. "}
 _speak_base_env = os.environ.get("VOICEMEM_SPEAK_BASE", "")
+#: 上一轮实际用的语气，给 speak_tag.smooth() 当锚点。进程级就够——它只是让相邻
+#: 两轮听着接得上，跨会话不需要连续。
+_LAST_TONE = {"tag": ""}
 
 
 def _speak_instruction(emotion: str) -> str:
@@ -969,13 +991,23 @@ def _by_lang(d: dict, lang: str = "") -> str:
 
 
 def _rt_persona(lang: str = "") -> str:
-    """库里的人设 + demo 的语气标注规则。语气标注是这套 TTS 管线特有的
-    （harness/speak_tag.py 负责剥掉），所以拼在这里而不是塞进库。
+    """库里的人设 + 语气标注规则（**只在 llm_tts 那条路上加**）。
+
+    语气标注是这套本地 TTS 管线特有的：模型在第一个 token 标 ``温和|``，
+    harness/speak_tag.py 拿它挑发声指示、再把标签剥掉才送去合成。所以拼在这里
+    而不是塞进库。
+
+    realtime 那条路**不能加**：出声的是 OpenAI 自己，没有"剥掉标签再念"这一步，
+    标签会被原样念出来，也会原样出现在字幕和记忆里（"温和|你喜欢尝新口味……"）。
+    那条路的语气靠 instructions 里的文字描述控制，本来就不需要标签。
 
     这是 system 里**唯一稳定的前缀**，每轮都一样，所以拼接顺序不能变：
     变的东西（记忆、历史）一律排在它后面，见 core.py:248。"""
     lang = lang or SPACE_LANG
-    return f"{persona.system_prompt(lang)}\n\n{speak_tag.prompt_rule(lang)}"
+    base = persona.system_prompt(lang)
+    if MODE == "realtime":
+        return base
+    return f"{base}\n\n{speak_tag.prompt_rule(lang)}"
 
 
 def _history_block(session_id: str, space: str) -> str:
@@ -1067,9 +1099,19 @@ if ARGS.config:
     CONFIG = json.loads(Path(ARGS.config).read_text(encoding="utf-8"))
 
 _LOCAL_LLM = None
+if ARGS.llm == "deepseek":
+    if not os.environ.get("DEEPSEEK_API_KEY"):
+        raise SystemExit("--llm deepseek 需要 DEEPSEEK_API_KEY（只在环境变量中设置）")
+    CONFIG.setdefault("reply", {})["llm"] = {
+        "provider": "deepseek", "config": {
+            "model": os.environ.get("VOICEMEM_DEEPSEEK_MODEL", "deepseek-v4-flash"),
+            "system": ""}}
+    print("[web] 文本回复：DeepSeek API / 非思考模式；不加载本地 LLM", flush=True)
 if ARGS.llm == "local":
     from voicemem.local_llm import LocalLLM
     _LOCAL_LLM = LocalLLM(system=_rt_persona(ARGS.lang))
+    if isinstance(CONFIG.get("reply"), dict) and "tts" in CONFIG["reply"]:
+        CONFIG.setdefault("tts", CONFIG["reply"]["tts"])
     CONFIG["reply"] = _LOCAL_LLM          # VoiceMem(reply=...) 收可调用对象
 
 REPLY = CONFIG.get("reply")                           # 传给 utils 的回复函数
@@ -1538,9 +1580,106 @@ def build_reply_context(memory_context: str, *, stranger: bool = False,
     return ctx
 
 
+def _mem_line() -> str:
+    """进程 RSS / MLX 活跃与峰值 / 系统 swap，一行。峰值在哪一步涨上去的，靠它对日志。"""
+    parts = []
+    try:
+        import psutil
+        p = psutil.Process()
+        parts.append(f"rss {p.memory_info().rss / 2**30:.1f}G")
+        sw = psutil.swap_memory()
+        parts.append(f"swap {sw.used / 2**30:.1f}/{sw.total / 2**30:.0f}G")
+    except Exception:
+        pass
+    try:
+        import mlx.core as mx
+        parts.append(f"mlx {mx.get_active_memory() / 2**30:.1f}G 峰 {mx.get_peak_memory() / 2**30:.1f}G")
+    except Exception:
+        pass
+    return " · ".join(parts)
+
+
+#: 逐轮延迟统计：首轮单列（冷缓存、首次分配），后续轮次算中位数。
+_LAT_HIST = {"n": 0, "first": None, "rest": []}
+
+
+def _lat_note(total_ms: float) -> str:
+    h = _LAT_HIST
+    h["n"] += 1
+    if h["first"] is None:
+        h["first"] = total_ms
+        return "首轮"
+    h["rest"].append(total_ms)
+    r = sorted(h["rest"])
+    return f"第 {h['n']} 轮 · 后续 {len(r)} 轮中位 {r[len(r) // 2]:.0f}ms · 首轮 {h['first']:.0f}ms"
+
+
+_REPLY_DISPLAY_LOCK = threading.Lock()
+
+
+async def _send_reply_display(pending, send, ready, output_id, space, memory_vm):
+    """展示不参与回复 prompt；首音频发送后才在工作线程上计算。
+
+    跟随回复任务取消，过期结果不发给新回合。线程内的模型调用不能强杀，
+    因此串行化展示计算，避免连续打断时堆出多份并发 embedding。
+    """
+    await ready.wait()
+    if ACTIVE_SPACE != space or vm is not memory_vm:
+        return
+    started = time.monotonic()
+    cancelled = threading.Event()
+
+    def build():
+        with _REPLY_DISPLAY_LOCK:
+            if cancelled.is_set() or ACTIVE_SPACE != space or vm is not memory_vm:
+                return None
+            return fill_tags(
+                utils.hits_payload(pending.result, has_audio=audio_of,
+                                   cluster_of=hit_cluster),
+                pending.text, pending.audio_path or "", acoustic=False)
+
+    try:
+        payload = await asyncio.to_thread(build)
+        if payload is None or ACTIVE_SPACE != space or vm is not memory_vm:
+            return
+        if gate.needs_memory(pending.route):
+            note_hits(pending.result)
+        await send({"type": "memory_hits", "route": pending.route,
+                    "output_id": output_id, **payload})
+        print(f"[lat-ui] 展示标签后台耗时 {(time.monotonic()-started)*1000:.0f}ms"
+              f"（已移出首音频关键路径，output={output_id}）", flush=True)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        print(f"[web] 回复展示跳过：{type(e).__name__}: {e}", flush=True)
+    finally:
+        cancelled.set()
+
+
 async def voicemem_llm_tts(pending, send, send_audio, owner, timeline,
                            said=None, context_session="", context_space="",
                            memory_vm=None):
+    memory_vm = memory_vm or vm
+    context_space = context_space or ACTIVE_SPACE
+    ready = asyncio.Event()
+    display = asyncio.create_task(_send_reply_display(
+        pending, send, ready, timeline.output_id, context_space, memory_vm))
+    from voicemem.prompt_trace import prompt_scope
+    try:
+        with prompt_scope(output_id=timeline.output_id, session=context_session,
+                          space=context_space, early=bool(getattr(pending, "early_ok", False))):
+            return await _voicemem_llm_tts(
+                pending, send, send_audio, owner, timeline, said=said,
+                context_session=context_session, context_space=context_space,
+                memory_vm=memory_vm, first_audio_ready=ready)
+    finally:
+        display.cancel()
+        await asyncio.gather(display, return_exceptions=True)
+
+
+async def _voicemem_llm_tts(pending, send, send_audio, owner, timeline,
+                           said=None, context_session="", context_space="",
+                           memory_vm=None, first_audio_ready=None):
     """记忆已在关键路径外预取好：LLM 流式回复 → TTS 流式语音。
 
     TTS 跟生成**并行**：LLM 吐满一句就丢进队列，另一条协程取出来合成、发音频。
@@ -1553,20 +1692,9 @@ async def voicemem_llm_tts(pending, send, send_audio, owner, timeline,
     """
     memory_vm = memory_vm or vm
     context_space = context_space or ACTIVE_SPACE
+    _entry = time.monotonic()
     await send({"type": "user_transcript", "text": pending.text})
-    # 声学情绪**不在这儿算**。它要 2.3 秒（emotion2vec 跑整段音频），而这几行是
-    # 用户说完到助手开口之间最要紧的一段——实测这一步就吃掉了 4.5 秒里的一半，
-    # 算完还常常因为"把握不够"被丢掉，纯浪费。
-    # 先用文本语义那份（毫秒级）把标签发出去，声学放后台跑，可信了再补一条
-    # tag_update 覆盖 UI 上的情绪。
-    if gate.needs_memory(pending.route):
-        note_hits(pending.result)  # 让脑图快照保证这几条在图上。浅轮不记：这几条
-                                   # 没进 prompt，算成"命中"会把记忆热度统计弄脏
-    await send({"type": "memory_hits", "route": pending.route,
-                **fill_tags(utils.hits_payload(pending.result, has_audio=audio_of,
-                                              cluster_of=hit_cluster),
-                            pending.text, pending.audio_path or "", acoustic=False)})
-    _kick_acoustic(send, pending.audio_path or "")
+    # memory_hits / 语义情绪只用于展示，由外层在首音频之后补发。
     if pending.replay:
         _note_replay(pending.replay)
         await send({"type": "play_memory", "memory_id": pending.replay})
@@ -1587,10 +1715,18 @@ async def voicemem_llm_tts(pending, send, send_audio, owner, timeline,
     # 标签是第一个 token，而 TTS 要等攒够第一段才开始，所以永远先到，不拖慢。
     speak_as = _speak_instruction(pending.emotion)
     tone = {"tag": "", "head": True, "buf": ""}   # head：还没剥过标签
+    logged_instruction = object()
 
     def _synth_one(seg):
         """注入的 TTS 可能是用户自己写的、只认 stream(text)——那就退回去，
         少一层语气控制而已，不该因此整条链路报错。"""
+        nonlocal logged_instruction
+        import json
+        effective = speak_as or getattr(tts, "instruction", "") or getattr(tts, "instructions", "")
+        if effective != logged_instruction:
+            logged_instruction = effective
+            print(f"[tts-prompt] {timeline.output_id[:8]} "
+                  f"{json.dumps(effective, ensure_ascii=False)}", flush=True)
         try:
             return tts.stream(seg, speak_as)
         except TypeError:
@@ -1606,6 +1742,12 @@ async def voicemem_llm_tts(pending, send, send_audio, owner, timeline,
     # 只是让它排上队，省掉每段一个来回的网络延迟。
     synths: list[asyncio.Task] = []
     streams: asyncio.Queue = asyncio.Queue()      # 每项是一段的 chunk 队列
+    # 上面那段"不限制并发"只对远端成立。本地 Qwen-TTS 走的 gpu_loop 是**轮转**：
+    # 两段同时合成 + LLM 还在解码后文，正在播的那段只分到 4/(4+4+1) 的 GPU，
+    # 0.69x 实时变 1.57x——比播放慢，前端 80~320ms 的缓冲一秒内见底，就是长回复
+    # 中间那一下卡。本地后端一段合成完再开下一段（见 tts.py 的 SERIAL），
+    # 段与段之间不空拍：合成比播放快，下一段总在上一段播完前就算好了。
+    _serial = asyncio.Semaphore(1) if getattr(tts, "SERIAL", False) else None
 
     async def synth():
         while (spec := await queue.get()) is not None:
@@ -1618,8 +1760,14 @@ async def voicemem_llm_tts(pending, send, send_audio, owner, timeline,
                 # 不再需要在这里给谁让路——那套 hold/release 是为了错开两条并发
                 # 流,而并发流正是驱动崩机的根因,现在从源头就没有了。
                 try:
-                    async for chunk in _synth_one(seg):
-                        await chunks.put(chunk)
+                    if _serial is not None:
+                        await _serial.acquire()
+                    try:
+                        async for chunk in _synth_one(seg):
+                            await chunks.put(chunk)
+                    finally:
+                        if _serial is not None:
+                            _serial.release()
                     state["complete"] = True
                 except asyncio.CancelledError:
                     raise
@@ -1641,12 +1789,20 @@ async def voicemem_llm_tts(pending, send, send_audio, owner, timeline,
             _vad = ((time.monotonic() - pending.speech_end) * 1000
                     if pending.speech_end else 0.0)
             _head = _vad - _lat["audio"] if _vad else 0.0
-            print(f"[lat] 闭嘴→出声 {_vad:.0f}ms ＝ 判说完+复核 {_head:.0f}"
+            total_label = (f"{_vad:.0f}ms" if pending.speech_end else
+                           f"N/A（{'文字轮' if not pending.spoken else '提前生成那份' if pending.early_ok else '无VAD起点'}）")
+            print(f"[lat] 闭嘴→首帧 {total_label}；生成前总等待 {_head:.0f}"
                   f" + LLM首字 {_lat['llm']:.0f}"
                   f" + 攒第一段 {_lat['seg'] - _lat['llm']:.0f}"
                   f" + TTS首帧 {_lat['audio'] - _lat['seg']:.0f}"
-                  f"（回合交出→出声 {_lat['audio']:.0f}）",
+                  f"（回合交出→出声 {_lat['audio']:.0f}）｜{_lat_note(_lat['audio'])}",
                   flush=True)
+            print(f"[mem] {_mem_line()}", flush=True)
+            print(f"[lat-pre] 回复入口前 {max(0, (_entry-pending.speech_end)*1000) if pending.speech_end else 0:.0f}ms"
+                  f" · 控制消息 {(_t0-_entry)*1000:.0f}ms"
+                  f" · prompt准备 {_lat['pre']:.0f}ms"
+                  f" · 等首个文字 {max(0, _lat['llm']-_lat['pre']):.0f}ms"
+                  f" · VAD起点={'有' if pending.speech_end else '无'}", flush=True)
 
     async def speak():
         while (item := await streams.get()) is not None:
@@ -1671,6 +1827,8 @@ async def voicemem_llm_tts(pending, send, send_audio, owner, timeline,
                     timeline.append_audio(pcm)
                     await _mark_first_audio()
                     await send_audio(pcm)
+                    if first_audio_ready is not None:
+                        first_audio_ready.set()
             except asyncio.CancelledError:
                 timeline.finish_segment(segment_id, complete=False)
                 raise
@@ -1720,12 +1878,22 @@ async def voicemem_llm_tts(pending, send, send_audio, owner, timeline,
                 tone["buf"] += d
                 tag, rest = speak_tag.split(tone["buf"])
                 if tag:
+                    # 跟上一轮拉平一下再用：模型每轮独立挑，日志里出现过
+                    # 轻快→平静→抱歉 三连跳，单看每句都对、连起来像换了个人。
+                    tag = speak_tag.smooth(_LAST_TONE["tag"], tag)
                     tone["tag"], tone["head"] = tag, False
-                    speak_as = speak_tag.instruction(tag, _SPEAK_BASE)
+                    _LAST_TONE["tag"] = tag
+                    # **第二个参数要的是字符串，不是那个双语 dict。** 传 dict 进去
+                    # 会把 "{'zh': …, 'en': …}" 整个塞进 TTS 的 instruction，
+                    # 而这只发生在"认出标签"的那些轮——没认出标签的轮走
+                    # _speak_instruction()，拼的是正常基调。同一段对话里两种指示
+                    # 混着来，听感就是上一句下一句像两个人。
+                    speak_as = speak_tag.instruction(
+                        tag, _speak_base_env or _by_lang(_SPEAK_BASE))
                     d = rest
                     if BARGE_DEBUG:
                         print(f"[tone] 模型标的语气：{tag}", flush=True)
-                elif len(tone["buf"]) < 18 and not any(
+                elif len(tone["buf"]) < 26 and not any(
                         c in tone["buf"] for c in "]】"):
                     continue                  # 还可能是标签（含 "标签：轻快|" 这种
                     # 带前缀的），竖线/右括号还没出现就先攒着。18 给前缀留够空间。
@@ -1769,6 +1937,8 @@ async def voicemem_llm_tts(pending, send, send_audio, owner, timeline,
             segment = buf.strip()
             leading = len(buf) - len(buf.lstrip())
             start = len(reply) - len(buf) + leading
+            if not _lat["seg"]:
+                _lat["seg"] = (time.monotonic() - _t0) * 1000
             await queue.put((segment, start, start + len(segment)))
     except asyncio.CancelledError:
         interrupted = True                      # 用户插话了，这一轮到此为止
@@ -1803,6 +1973,7 @@ async def voicemem_llm_tts(pending, send, send_audio, owner, timeline,
             # 剩下的几秒纯粹是音频在前端播；再堵着，声纹/情绪/入库白等好几秒，
             # 最后撞进下一轮的热路径里，等于没让。
             hot_path_exit(_hot)
+            _kick_acoustic(send, pending.audio_path or "")
             timeline.mark_generation_complete()
             try:
                 await send({"type": "answer_done", "output_id": timeline.output_id})
@@ -2127,15 +2298,9 @@ def _is_echo(new_chars: str, said: str) -> bool:
     ``said`` 要传**已经说出口的**文本（不是已生成的），两者能差好几秒。
     大小写要抹平——最早那个漏网的例子就是助手说 "Annie"、ASR 转出小写 "an"。
     """
-    s = "".join(ch for ch in (new_chars or "") if ch.strip()).casefold()
-    hay = "".join(ch for ch in (said or "")[-ECHO_WINDOW:] if ch.strip()).casefold()
-    if not s or not hay:
-        return False
-    if s in hay:
-        return True
-    if len(s) < ECHO_FUZZY_MIN:
-        return False                       # 太短，只信精确匹配
-    return _lcs_len(s, hay) / len(s) >= ECHO_RATIO
+    from echo_guard import is_echo
+    return is_echo(new_chars, said, max(ECHO_WINDOW, min(len(said), 4096)),
+                   ECHO_RATIO, ECHO_FUZZY_MIN)
 
 
 _INTERRUPT_PREFIXES = tuple(_bc_norm(x) for x in (
@@ -2206,7 +2371,7 @@ _TTS_SHARED_VOICES = {"alloy", "ash", "ballad", "coral", "echo",
 #: 生成比实时慢的后端。它们不做附和预合成，理由见 _backchannel_tts。
 _SLOW_TTS = {"VoxCPMTTS"}
 #: 本地 TTS：启动时要预热，否则第一句要等模型加载。
-_LOCAL_TTS = {"QwenTTS", "VoxCPMTTS", "PiperTTS"}
+_LOCAL_TTS = {"QwenTTS", "KokoroTTS", "VoxCPMTTS", "PiperTTS", "BreezeMLXTTS"}
 
 
 def _backchannel_tts():
@@ -2255,7 +2420,7 @@ def _backchannel_voice():
     v = _BC_VOICE["obj"]
     if v is False:
         return None
-    if _BC_VOICE["task"] is None:
+    if _BC_VOICE["task"] is None and not v.primed:
         # 没人 await 这个 task，所以异常会被静默吞掉——ready 永远是 False，
         # 表现就是"一直说还没好"，而真正的原因（TTS 报错/没网/没 key）看不见。
         def _done(t):
@@ -2266,7 +2431,8 @@ def _backchannel_voice():
                 pass
             except Exception as e:
                 print(f"[backchannel] 预合成失败：{type(e).__name__}: {e}", flush=True)
-        _BC_VOICE["task"] = asyncio.create_task(v.prime())
+        _BC_VOICE["task"] = asyncio.create_task(v.prime(
+            cache_only=type(v.tts).__name__ == "BreezeMLXTTS"))
         _BC_VOICE["task"].add_done_callback(_done)
     return v if v.ready else None
 
@@ -2278,7 +2444,7 @@ def _print_backchannel_status() -> None:
     概率没中），每一种的表现都是"没反应"。不在启动时讲明白，就只能靠猜。
     """
     from harness import backchannel as _bc
-    if not _bc.ON:
+    if not _bc.emitting():
         print("[backchannel] 关闭。打开：VOICEMEM_BACKCHANNEL_EMIT=1", flush=True)
         return
     lang = space_language(ACTIVE_SPACE)
@@ -2339,9 +2505,14 @@ EARLY_GRACE_S = float(os.environ.get("VOICEMEM_EARLY_GRACE", "0.2"))
 BC_ECHO_WINDOW_S = float(os.environ.get("VOICEMEM_BC_ECHO_WINDOW", "3.0"))
 #: 助手说话时，要连续听到这么久的人声才暂停播放（挡自己的回声）。
 #: 调大更不容易被回声误触，代价是真插话时暂停得晚一点。
-CANDIDATE_MIN_SPEECH_S = float(os.environ.get("VOICEMEM_CANDIDATE_MIN_SPEECH", "0"))
+CANDIDATE_MIN_SPEECH_S = float(os.environ.get("VOICEMEM_CANDIDATE_MIN_SPEECH", "0.12"))
 #: 低于"当前响度的这个比例"就算词间空档。调大 → 更容易判成停顿，附和更密。
 BC_QUIET_RATIO = float(os.environ.get("VOICEMEM_BC_QUIET_RATIO", "0.25"))
+#: 下注（提前生成）之后过了这么久、你还在说、转写还在长，就重新允许附和。
+#: 原来是下注即禁——而 EOT 开口不到两秒就常冲到 0.98 下注（'就'、'反正的一个是'
+#: 这种半句），注一直挂到说完，整段话里附和窗口等于零。实测一场 20 条预合成
+#: 一次没响。
+BC_AFTER_EARLY_S = float(os.environ.get("VOICEMEM_BC_AFTER_EARLY", "1.0"))
 #: 给回复模型看多少轮对话历史（滑窗，跟入没入库无关）。
 HISTORY_TURNS = int(os.environ.get("VOICEMEM_HISTORY_TURNS", "6"))
 #: 过了宽限期还说这么久，就判定「他还没说完」，那份提前生成作废。
@@ -2372,18 +2543,19 @@ CONFIRM_READY_S = float(os.environ.get("VOICEMEM_CONFIRM_READY", "0.1"))
 async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=None,
                      said=None, on_candidate=None, on_candidate_reject=None,
                      on_playback_checkpoint=None, on_early=None,
-                     on_speech_start=None):
+                     on_speech_start=None, textless_confirm_s=None):
     """驱动核心流式会话，逐个 yield 确认回合的 Pending。
     on_frame(raw24k)：realtime 用它把原始音频平行喂给 OpenAI（方案 A）。
     on_speech()：本地 VAD 一听到人声就叫一次——realtime 拿它做打断（barge-in）。
     is_busy()：助手此刻是不是在说话。助手的声音会经麦克风回到 ASR，转出来的字
     照样会走 partial_transcript——用户就看见自己的输入框里冒出助手刚说的话。
-    所以助手说话期间先不发 partial，等转写真的多出几个字（确认是人在插话，
-    见 BARGE_MIN_CHARS）之后再放行。
+    每轮保留开口时的播放状态和回声文本；非回声插话稳定后显示，纯附和只显示不回复。
     on_candidate()/on_candidate_reject()：疑似插话时可恢复地暂停/恢复播放；只有
     on_speech() 才是确认打断。"""
     stream = vm.stream(spec_min_chars=SPEC_MIN_CHARS, gamble_s=GAMBLE_S,
-                       confirm_s=CONFIRM_S, eot=_eot())
+                       confirm_s=CONFIRM_S, eot=_eot(), textless_confirm_s=textless_confirm_s)
+    utterance = UtteranceGuard()
+    turn_finished = False
     last_partial = ""
     if owner is None:
         owner = {"id": "", "last": "", "miss": 0}   # 主人的声纹 / 上一轮是谁 / 连续认错几轮
@@ -2412,7 +2584,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
     eot_peak = 0.0                        # 本轮 EOT 最高分（debug 用）
     early_at = 0.0                        # 什么时候下的注
     early_speech = 0.0                    # （保留字段，现在不参与判定）
-    if _bc_mod.ON:
+    if _bc_mod.emitting():
         # 接通就起预合成。等第一次触发才合成的话，那几十秒里每次触发都拿不到音频、
         # 安静跳过——表现就是"开了但完全不响"，而且没有任何提示。
         _backchannel_voice()
@@ -2435,7 +2607,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         prewarm_idle = True
         prewarm_mem = None
 
-    def heard_from_agent():
+    def live_agent_text():
         """助手这一路已经出过声的文本：正文 + 附和词。
 
         ``said`` 是**函数**不是 dict（见调用方 said=lambda: ...），而附和词并不在
@@ -2450,6 +2622,9 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         now = time.monotonic()
         recent = "".join(w for t, w in bc_recent if now - t < BC_ECHO_WINDOW_S)
         return (said() if said else "") + recent
+
+    def heard_from_agent():
+        return utterance.reference or live_agent_text()
     barge_base = 0                        # 上次触发打断时的转写长度
     barged = False                        # 这一轮是否已确认「人在插话」
     candidate = False                     # 已暂停播放、正在等更多证据
@@ -2479,13 +2654,31 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         if msg.get("bytes") is None:
             continue
         raw = msg["bytes"]
+        if turn_finished:
+            utterance = UtteranceGuard()
+            turn_finished = False
+            barge_base = 0
+            barged = candidate = discard_candidate_turn = False
+            candidate_updates = 0
+            candidate_text = ""
+            candidate_silence = candidate_age = 0.0
+        # Snapshot before feed: final ASR awaits may outlive assistant playback.
+        busy_at_capture = bool(is_busy and is_busy())
+        reference_at_capture = live_agent_text()
         if on_frame:
             await on_frame(raw)                               # 方案 A：音频也进 OpenAI 缓冲
         stream.emotion = owner.get("emotion") or None         # 上一轮算出来的情绪
         st = await stream.feed(raw)                           # 核心：ASR + VAD + 投机预取
+        turn_finished = bool(st.turn)
+        utterance.observe(active=st.spoke or bool(st.turn) or st.state == "<speak>",
+                          busy=busy_at_capture, reference=reference_at_capture)
+        utterance.observe(active=False, busy=False, reference=live_agent_text())
+        if getattr(st, "speech_end", 0):
+            last_speak_t = st.speech_end
         cur = st.text.strip()
         busy = bool(is_busy and is_busy())
-        if st.state == "<speak>":
+        input_echo = bool(heard_from_agent() and _is_echo(cur, heard_from_agent()))
+        if st.state == "<speak>" and not getattr(st, "speech_end", 0):
             last_speak_t = time.monotonic()
 
         # 空闲时先把模型热上。**时机是这里，不是等他开口**：人设和历史在上一轮
@@ -2518,7 +2711,8 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         # 代价明说：那份回复是针对**下注那一刻为止**的话生成的。你后面补的内容
         # 它没听见——"我喜欢安静的地方"下注了，你接着说"但学校图书馆很吵"，
         # 回答就只针对前半句。换来的是延迟最低、逻辑最简单，赌错也不重来。
-        if (on_early and not busy and st.spoke and cur
+        if (on_early and not busy and not input_echo and st.spoke and cur
+                and not (utterance.started_busy and _is_backchannel(cur))
                 and st.eot_score >= EARLY_EOT and not early_at):
             early_text, early_at = cur, time.monotonic()
             await on_early(cur, st)
@@ -2549,12 +2743,19 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         # 已经下过注（EOT 判这句齐了、回复正在生成）时也不附和——那声"嗯"会正好
         # 落在回复出声前一秒，听着像自言自语。附和是"我在听你说"，人都说完了就没
         # 意义了。
-        if not busy and bc_speech_t0 and not early_at:
+        # 刚下注不附和（那声"嗯"会正好落在回复出声前一秒，像自言自语）；但下注后
+        # 又说了一秒还没停、字也多了，就是还在说——该应一声。
+        bc_ok = (not early_at
+                 or (time.monotonic() - early_at >= BC_AFTER_EARLY_S
+                     and cur != early_text and st.state == "<speak>"))
+        if not busy and not input_echo and not utterance.started_busy and bc_speech_t0 and bc_ok:
+            voice = _backchannel_voice() if _bc_mod.emitting() else None
             token = bc.offer(text=cur, silence=bc_gap, spoke=st.spoke,
                              speech_s=time.monotonic() - bc_speech_t0,
                              emotion=owner.get("emotion", ""),
                              tail_rms=bc_rms_fast, prev_rms=bc_rms_slow,
-                             lang=space_language(ACTIVE_SPACE))
+                             lang=space_language(ACTIVE_SPACE),
+                             available=voice.available if voice else set())
             if token:
                 voice = _backchannel_voice()
                 pcm = voice.get(token, bc.rng) if voice else None
@@ -2585,7 +2786,9 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         # "有人声" 是必要条件，别只看 speak_run——它在静音帧上是 0，而阈值也可能
         # 是 0，`0 >= 0` 成立，等于每一帧都触发暂停。
         if (busy and st.state == "<speak>" and speak_run >= CANDIDATE_MIN_SPEECH_S
-                and not candidate and not barged):
+                and not candidate and not barged
+                and cur and not _is_echo(cur, heard_from_agent())
+                and _has_barge_content(cur)):
             candidate = True
             discard_candidate_turn = False
             candidate_updates = 0
@@ -2602,6 +2805,9 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
             candidate_silence = (candidate_silence + frame_s
                                  if st.state == "<silence>" else 0.0)
             looks_echo = bool(said is not None and cur and _is_echo(cur, heard_from_agent()))
+            if looks_echo:
+                candidate_updates = 0
+                candidate_text = ""
             if cur and not looks_echo and not _is_backchannel(cur) and _has_barge_content(cur):
                 normalized = _barge_text(cur)
                 if normalized != candidate_text:
@@ -2609,7 +2815,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                     candidate_updates += 1
 
             confirmed = (_is_explicit_interrupt(cur) and not looks_echo)
-            confirmed = confirmed or candidate_updates >= BARGE_STABLE_UPDATES
+            confirmed = confirmed or (not looks_echo and candidate_updates >= BARGE_STABLE_UPDATES)
             if confirmed:
                 candidate = False
                 barged = True
@@ -2619,28 +2825,54 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                     print(f"[barge] {why} → 确认打断：{cur[-16:]!r}", flush=True)
                 if on_speech:
                     await on_speech()
-            elif ((candidate_silence * 1000 >= BARGE_REJECT_SILENCE_MS and not cur)
+            elif (looks_echo or (candidate_silence * 1000 >= BARGE_REJECT_SILENCE_MS and not cur)
                   or (candidate_age * 1000 >= BARGE_CANDIDATE_TIMEOUT_MS
                       and candidate_updates == 0)):
                 candidate = False
                 discard_candidate_turn = True
                 if BARGE_DEBUG:
-                    print("[barge] 疑似声音没有形成文字 → 恢复播放", flush=True)
+                    print("[barge] 回声/无有效插话 → 恢复播放", flush=True)
                 if on_candidate_reject:
                     await on_candidate_reject()
-        # 助手正在说话时，ASR 里多半混着它自己的回声，那些字不能显示——用户会看见
-        # 自己的输入框冒出助手刚说的话。
-        #
-        # 但原来的条件是「忙 且 还没确认插话」，等于**助手一忙就全屏蔽**，一直等到
-        # 攒够字数、过完回声判定、`barged` 翻真才放行。用户早说完了屏幕还是空的。
-        # 现在 _is_echo 够准了（连续子串比对），直接拿它判这句话本身像不像回声：
-        # 像就藏，不像就立刻显示，不必再等那个确认。
-        echo = (bool(is_busy and is_busy()) and not barged
-                and (said is None or _is_echo(cur, heard_from_agent())))
-        if st.text.strip() and st.text != last_partial and not echo:
+        # Keep filtering after playback ends AND after a confirmed interrupt:
+        # both can happen before delayed ASR publishes the assistant's audio.
+        echo = input_echo
+        show_partial = utterance.allow_partial(
+            cur, echo=echo, final=bool(st.turn), backchannel=_is_backchannel(cur),
+            explicit=_is_explicit_interrupt(cur), confirmed=barged)
+        if echo and last_partial:
+            last_partial = ""
+            await sock.send_json({"type": "partial_transcript", "text": "", "replace": True})
+        if st.text.strip() and st.text != last_partial and show_partial:
             last_partial = st.text
-            await sock.send_json({"type": "partial_transcript", "text": st.text, "replace": True})
+            await sock.send_json({"type": "partial_transcript", "text": st.text, "replace": True,
+                                  "non_interrupting": utterance.started_busy and _is_backchannel(cur)})
         if st.turn:                                           # VAD 确认说完 → 记忆早已预取好
+            # A late ASR result may arrive after playback drains or a candidate
+            # is rejected. Still discard the actual emitted phrase.
+            if (heard_from_agent() and _is_echo(st.turn.text, heard_from_agent())):
+                if BARGE_DEBUG:
+                    print(f"[echo] 丢弃助手回声：{st.turn.text!r}", flush=True)
+                if candidate and on_candidate_reject:
+                    await on_candidate_reject()
+                candidate = False
+                candidate_updates = 0
+                candidate_text = last_partial = ""
+                _reset_early()
+                continue
+            if utterance.started_busy and _is_backchannel(st.turn.text):
+                # Display acknowledgement, but do not create a reply, ingest it,
+                # change speaker identity, or wait for hearing() to still be true.
+                if candidate and on_candidate_reject:
+                    await on_candidate_reject()
+                await sock.send_json({"type": "user_backchannel", "text": st.turn.text})
+                if BARGE_DEBUG:
+                    print(f"[barge] 开口时助手在说话，附和只显示不回复：{st.turn.text!r}", flush=True)
+                candidate = barged = discard_candidate_turn = False
+                candidate_updates = 0
+                candidate_text = last_partial = ""
+                _reset_early()
+                continue
             # 候选被否决过（那时 ASR 还没转出字），但**说完之后**离线复核出了一整句
             # ——那就是真人说的话，不能扔。
             #
@@ -2809,7 +3041,8 @@ async def llm_tts_session(sock):
     现在回复丢进后台任务，读 socket 的循环一刻不停；听到人声就取消那个任务。
     """
     # until：前端预计几点才把已发出去的音频播完（见 hearing()）。
-    turn = {"task": None, "t0": 0.0, "until": 0.0,
+    turn = {"task": None, "t0": 0.0, "until": 0.0, "echo_until": 0.0,
+            "speech_end": 0.0, "play_started": False,
             "reply": {"text": ""}, "timeline": None}
     owner = {"id": "", "last": "", "miss": 0}
     speech_rate = SpeechRateEstimator()
@@ -2857,6 +3090,18 @@ async def llm_tts_session(sock):
         timeline.update_checkpoint(
             data.get("rendered_samples", 0), data.get("sample_rate", MIC_RATE),
             data.get("state", "playing"))
+        if data.get("event") == "started" and not turn["play_started"]:
+            turn["play_started"] = True
+            if turn["speech_end"]:
+                elapsed = (time.monotonic() - turn["speech_end"]) * 1000
+                print(f"[lat] 闭嘴→浏览器开始播放（含回报传输） {elapsed:.0f}ms", flush=True)
+        # 前端缓冲见底会报 stalled（pcm-player-worklet 的 underflow），以前只记进
+        # playback_state、从不打印，所以"偶尔卡一下"在日志里一条痕迹都没有。
+        # 打出已播到第几毫秒和 GPU 线程上排着几个活儿——卡的时候谁在抢，一眼看出。
+        if data.get("state") == "stalled" and BARGE_DEBUG:
+            from voicemem.utils.gpu_loop import gpu_loop as _gl
+            print(f"[play] 缓冲见底：已播 {timeline.rendered_ms():.0f}ms"
+                  f"，GPU 线程活跃任务 {getattr(_gl(), 'active_count', '?')}", flush=True)
         if timeline.playback_done:
             turn["until"] = 0.0
 
@@ -2864,6 +3109,7 @@ async def llm_tts_session(sock):
         """发音频，顺带记账。前端是排队播的（pcm-player-worklet），这里跟着算
         同一条时间线：上一块播完之后再接这一块。"""
         turn["until"] = max(turn["until"], time.monotonic()) + len(pcm) / 2 / MIC_RATE
+        turn["echo_until"] = turn["until"] + 2.0
         if not turn["t0"]:
             # 宽限期从**助手真的出声**那一刻起算，不是从任务创建。TTS 首帧要
             # ~1.2s，按任务创建算的话宽限期在它开口前就过完了，等于没有。
@@ -2926,7 +3172,9 @@ async def llm_tts_session(sock):
 
     async def start_early(text, st):
         """EOT 说这句齐了（人可能还在说）→ 先把回复生成出来存进 sink。"""
+        stop_prewarm()
         await drop_early("换了新的赌注")
+        stop_prewarm()
         # 记忆可能没有——闸门判成浅内容时压根没检索（st.memory 是 None）。
         # 那不该妨碍提前生成：浅内容本来就不注入记忆，用空结果照样能生成。
         # 原来这里 return 掉了，等于浅问题永远享受不到提前生成。
@@ -2958,7 +3206,15 @@ async def llm_tts_session(sock):
                 print(f"[early] 提前生成失败：{type(e).__name__}: {e}", flush=True)
         early["task"] = asyncio.create_task(run())
 
-    prewarm = {"task": None}
+    prewarm = {"task": None, "cancelled": None, "closed": False}
+
+    def stop_prewarm():
+        cancelled = prewarm["cancelled"]
+        if cancelled is not None:
+            cancelled.set()
+        task = prewarm["task"]
+        if task is not None and not task.done():
+            task.cancel()
 
     def prewarm_local(result=None, text=""):
         """把「人设 + 历史 + （到货了的话）这一轮记忆」算进 KV 母本。
@@ -2968,13 +3224,15 @@ async def llm_tts_session(sock):
         开服时就已经进母本了，这里通常只是把新增的那一轮历史续上，几十毫秒。
         没开 --llm local 时什么都不做。
         """
-        if _LOCAL_LLM is None:
+        if _LOCAL_LLM is None or prewarm["closed"]:
             return False
         if prewarm["task"] and not prewarm["task"].done():
             return False
         # 回复还在生成/播放时绝对不能热：两边抢同一把锁和同一块 GPU，预热一旦
         # 先拿到锁，正在等第一个字的那次生成就要干等。
-        if turn["task"] is not None and not turn["task"].done():
+        # 提前生成还没接管到 turn；甚至 task 已完成、音频仍在 sink 等确认。
+        # 这两种都不能继续热。hearing 也覆盖任务结束但前端还没播完的情况。
+        if early["task"] is not None or hearing():
             return False
         hist = _SESSION_CONTEXT.messages(context_session, ACTIVE_SPACE,
                                          window=HISTORY_TURNS)
@@ -2987,11 +3245,26 @@ async def llm_tts_session(sock):
                build_reply_context(build_memory_context(result),
                                    route=gate.DEEP,
                                    replay=_replay_id(text, result), text=text))
-        prewarm["task"] = asyncio.create_task(
-            asyncio.to_thread(_LOCAL_LLM.prewarm, hist, ctx))
+        cancelled = threading.Event()
+        prewarm["cancelled"] = cancelled
+        model = _LOCAL_LLM
+
+        async def run_prewarm():
+            try:
+                await asyncio.to_thread(model.prewarm, hist, ctx, cancelled=cancelled)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            except Exception as e:
+                print(f"[llm] 后台预热失败：{type(e).__name__}: {e}", flush=True)
+
+        prewarm["task"] = asyncio.create_task(run_prewarm())
         return True
 
     async def close_session():
+        prewarm["closed"] = True
+        stop_prewarm()
+        await drop_early()
         task = turn["task"]
         if task is None or task.done():
             return
@@ -3005,10 +3278,11 @@ async def llm_tts_session(sock):
 
     async for pending in _session_anticipate(
             context_session, sock, on_speech=stop_reply, owner=owner,
-            is_busy=hearing, said=lambda: turn["reply"]["text"],
+            is_busy=hearing, said=lambda: (turn["reply"]["text"]
+                if hearing() or time.monotonic() < turn["echo_until"] else ""),
             on_candidate=pause_candidate, on_candidate_reject=resume_candidate,
             on_playback_checkpoint=playback_checkpoint, on_close=close_session,
-            on_early=start_early, on_speech_start=prewarm_local):
+            on_early=start_early, on_speech_start=prewarm_local, textless_confirm_s=0.2):
         # 整轮都是附和、而助手还在说：当没听见。
         #
         # _is_backchannel 原来只挡在"说到一半"那条路上（anticipate 里），可 VAD
@@ -3020,11 +3294,12 @@ async def llm_tts_session(sock):
             if BARGE_DEBUG:
                 print(f"[barge] 整轮都是附和 {pending.text!r}，不算一轮，继续说", flush=True)
             continue
-        # 提前生成赌对了吗：这一轮的文本跟当初赌的一致，就直接把攒好的音频放出去。
-        # 那份音频**已经合成完了**，所以是立刻出声——省掉的正是 LLM + TTS 那 1.4 秒。
+        stop_prewarm()
+        # 文本命中就接管提前生成；可能还没合成出音频，不能把命中等同于立即出声。
         if early["task"] is not None and pending.early_ok:
             await stop_reply(force=True)
             turn["t0"] = turn["until"] = 0.0
+            turn["speech_end"], turn["play_started"] = pending.speech_end, False
             # 接管提前生成那份的 said——它记着助手已经说出口的话，防回声全靠它。
             # 原来这里给了个新的空 dict，等于把回声比对的依据清空了：助手说
             # "Are you looking for a place to"，麦克风听回去转成 "looking for a
@@ -3037,7 +3312,8 @@ async def llm_tts_session(sock):
                      said=None)
             await sink.commit()
             if BARGE_DEBUG:
-                print(f"[early] ★ 赌对了，{ms:.0f}ms 音频现成，直接播", flush=True)
+                state = "释放现成音频" if ms > 0 else "尚无音频，继续等待生成"
+                print(f"[early] ★ 文本命中，已缓冲 {ms:.0f}ms 音频，{state}", flush=True)
             continue
         await drop_early("这一轮没赌成" if early["task"] else "")
 
@@ -3045,6 +3321,7 @@ async def llm_tts_session(sock):
         # 旧任务会继续往同一条 socket 里灌音频，两轮交织着播。
         await stop_reply(force=True)
         turn["t0"] = turn["until"] = 0.0
+        turn["speech_end"], turn["play_started"] = pending.speech_end, False
         turn["reply"] = {"text": ""}            # 新一轮，回声比对从空的开始
         reply_state = turn["reply"]
         context_space = ACTIVE_SPACE
@@ -3959,6 +4236,26 @@ app = utils.build_app(MODE, realtime_session if MODE == "realtime" else llm_tts_
                       set_lang=set_lang)
 
 
+def _warm_final_asr(memory_vm):
+    """Load and actually decode before accepting connections, respecting opt-out."""
+    if os.environ.get("VOICEMEM_FINAL_ASR", "1") == "0":
+        print("[web] 离线复核预热跳过（已关闭）", flush=True)
+        return
+    started = time.monotonic()
+    try:
+        model = memory_vm.utils.get("asr_final")
+        loaded = time.monotonic()
+        if model is None:
+            print("[web] 离线复核预热跳过（模型不可用）", flush=True)
+            return
+        import numpy as np
+        model.transcribe(np.zeros(16000, dtype=np.float32))
+        print(f"[web] 离线复核已预热：加载 {(loaded-started)*1000:.0f}ms"
+              f" · 首次推理 {(time.monotonic()-loaded)*1000:.0f}ms", flush=True)
+    except Exception as e:
+        print(f"[web] 离线复核预热失败：{type(e).__name__}: {e}", flush=True)
+
+
 if __name__ == "__main__":
     print(f"[web] mode={MODE} spec≥{SPEC_MIN_CHARS}字 gamble={ARGS.gamble_ms}ms "
           f"confirm={ARGS.confirm_ms}ms -> http://localhost:{ARGS.port}/", flush=True)
@@ -3969,6 +4266,17 @@ if __name__ == "__main__":
     # TTS 后端在启动时就建一次：provider 名写错（或者用了已经删掉的后端）时，
     # 错误发生在**回复任务**里——表现是"文字和声音都没有"，看不出跟 TTS 有关。
     # 这里提前炸，把名字和可选项一起说清楚。
+    # MLX 的缓冲池默认不设上限：每轮 fork 出来的 KV、TTS 的激活用完不还系统，攒着
+    # 等复用。16GB 机器上这就是峰值 13G 对稳态 9.8G 那 3G 的来源之一。给它个上限，
+    # 超过就真释放。VOICEMEM_MLX_CACHE_MB=0 关掉。
+    try:
+        import mlx.core as _mx
+        _cap = int(os.environ.get("VOICEMEM_MLX_CACHE_MB", "512"))
+        if _cap > 0:
+            _mx.set_cache_limit(_cap * 2**20)
+    except Exception:
+        pass
+    print(f"[mem] 启动 · {_mem_line()}", flush=True)
     try:
         _tts = vm.utils.get("tts")
         # 本地后端顺手合一句丢掉：模型加载要几十秒，不预热的话第一句话要等
@@ -3977,9 +4285,30 @@ if __name__ == "__main__":
             import asyncio as _a
 
             async def _warm():
-                async for _ in _tts.stream("你好"):
-                    break
+                # Kokoro 中英是两套 G2P 管线，各自首次建立要 1~3s（英文要加载
+                # spaCy）；只热中文的话第一句英文回复照样冷。
+                texts = ["你好", "hi"] if type(_tts).__name__ == "KokoroTTS" else ["你好"]
+                for s in texts:
+                    from contextlib import aclosing
+                    _t = time.monotonic()
+                    async with aclosing(_tts.stream(s)) as chunks:
+                        async for _ in chunks:
+                            break
+                    print(f"[web] TTS 预热 {type(_tts).__name__} {s!r}：首块 "
+                          f"{(time.monotonic() - _t) * 1000:.0f}ms（含加载）", flush=True)
             _a.run(_warm())
+            print(f"[mem] TTS 就位 · {_mem_line()}", flush=True)
+        if ARGS.backchannel and MODE == "llm_tts" and type(_tts).__name__ == "BreezeMLXTTS":
+            # Prepare a small useful bank before accepting microphone sessions;
+            # live turns only read it, never wait behind background synthesis.
+            from harness.backchannel import BackchannelVoice
+            _bc_voice = BackchannelVoice(_tts, lang=space_language(ACTIVE_SPACE))
+            # 中文这 8 个词是逐条试听定下来的（片段已装进缓存，启动只读不合）。
+            _bc_tokens = (["嗯", "嗯嗯", "对", "对啊", "是啊", "哦", "哦哦", "这样啊",
+                           "不错", "我知道了", "挺好的"]
+                          if _bc_voice.lang == "zh" else ["mm-hmm", "yeah", "right", "oh", "okay"])
+            asyncio.run(_bc_voice.prime(tokens=_bc_tokens, variants=1))
+            _BC_VOICE["obj"] = _bc_voice
     except Exception as e:
         from voicemem.tts import TTS_PROVIDERS
         print(f"[web] TTS 后端建不起来：{type(e).__name__}: {e}\n"
@@ -3989,6 +4318,7 @@ if __name__ == "__main__":
 
     print("[web] 预热本地模型（embedding / ASR / VAD / 感知）…", flush=True)
     vm.warmup(verbose=True)
+    _warm_final_asr(vm)
     if _LOCAL_LLM is not None:
         # **在开门之前**把人设那一截算进 KV 母本。人设一个字都不会变，算一次就
         # 够用一整场；等第一个用户连上来再算，那一秒半就直接摊在他第一句话上
@@ -3997,6 +4327,35 @@ if __name__ == "__main__":
         _n = _LOCAL_LLM.prewarm()
         print(f"[web] 本地回复模型：人设 {_n} token 已进 KV 缓存"
               f"（{(time.monotonic() - _t) * 1000:.0f}ms）", flush=True)
+        # 真生成几个 token。只填 KV 不算预热：第一次 stream_generate 还要编译
+        # 采样图、首次分配 fork 的 cache、把权重真正拉进显存——这些原来全摊在第一个
+        # 用户的第一句上（实测首轮 13s、后续 2s 的差就是它加换页）。这里跑掉，
+        # 顺带把首字时间打出来：开服时就慢，说明机器已经在换页，别等到对话里发现。
+        async def _gen_warm():
+            from contextlib import aclosing
+            t0 = time.monotonic(); first = 0.0; n = 0
+            async with aclosing(_LOCAL_LLM("你好", "", [])) as gen:
+                async for _tok in gen:
+                    if not first:
+                        first = (time.monotonic() - t0) * 1000
+                    n += 1
+                    if n >= 4:
+                        break
+            return first, (time.monotonic() - t0) * 1000, n
+        try:
+            _first, _tot, _n = asyncio.run(_gen_warm())
+            print(f"[web] 本地回复模型：真生成预热 首字 {_first:.0f}ms · {_n} token {_tot:.0f}ms"
+                  + ("  ⚠ 首字 >2s：多半在换页，看下面 [mem] 的 swap" if _first > 2000 else ""),
+                  flush=True)
+        except Exception as e:
+            print(f"[web] 真生成预热失败（不影响运行）：{type(e).__name__}: {e}", flush=True)
+    print(f"[mem] 全部就位 · {_mem_line()}", flush=True)
+    print("[web] 可选模型："
+          f"复核ASR(SenseVoice 0.9G)={'开' if os.environ.get('VOICEMEM_FINAL_ASR', '1') != '0' else '关'} "
+          f"[VOICEMEM_FINAL_ASR=0] · "
+          f"声学情绪(emotion2vec 1.0G)={'开' if os.environ.get('VOICEMEM_ACOUSTIC_TAG', '1') != '0' else '关'} "
+          f"[VOICEMEM_ACOUSTIC_TAG=0] · "
+          f"MLX缓存上限 {os.environ.get('VOICEMEM_MLX_CACHE_MB', '512')}MB", flush=True)
     _print_backchannel_status()
     print("[web] 就绪", flush=True)
     uvicorn.run(app, host=ARGS.host, port=ARGS.port)

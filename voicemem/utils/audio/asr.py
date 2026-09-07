@@ -165,14 +165,20 @@ class FunASRStreamingASR:
             from voicemem.utils.common.paths import models_dir
             local = models_dir() / "asr" / self.LOCAL_DIR
             model = str(local) if (local / "config.yaml").exists() else "paraformer-zh-streaming"
-        self.model = AutoModel(model=model, device=device or pick_device(),
+        # 跑 MPS。试过挪到 CPU：一块 600ms 音频要 683ms，比实时还慢，说完要排空
+        # 几秒积压。MPS 上 55~167ms 一块。多线程撞 MPS 的问题靠 TORCH_LOCK 解决
+        # （见 _run）。VOICEMEM_ASR_DEVICE 可强制。
+        self.model = AutoModel(model=model,
+                               device=device or _os.environ.get("VOICEMEM_ASR_DEVICE") or pick_device(),
                                disable_update=True,
                                log_level="ERROR" if _quiet else "INFO")
         self.reset()
 
     def _run(self, samples, is_final: bool) -> str:
-        res = self.model.generate(input=samples, cache=self._cache, is_final=is_final,
-                                  chunk_size=self.CHUNK_SIZE, **self.LOOK_BACK)
+        from voicemem.utils.torch_lock import TORCH_LOCK
+        with TORCH_LOCK:                       # 跟 embedding 等 torch 调用串行
+            res = self.model.generate(input=samples, cache=self._cache, is_final=is_final,
+                                      chunk_size=self.CHUNK_SIZE, **self.LOOK_BACK)
         if res and res[0].get("text"):
             self._text += res[0]["text"]
         return self._text
@@ -217,6 +223,11 @@ class Transcriber:
                                trust_remote_code=False)
 
     def _generate(self, audio) -> str:
+        from voicemem.utils.torch_lock import TORCH_LOCK
+        with TORCH_LOCK:
+            return self._generate_locked(audio)
+
+    def _generate_locked(self, audio) -> str:
         res = self.model.generate(input=audio, cache={}, language="zh",
                                   use_itn=True, ban_emo_unk=True)
         if not res:

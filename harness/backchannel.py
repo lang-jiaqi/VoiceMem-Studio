@@ -37,7 +37,14 @@ from dataclasses import dataclass, field
 #:
 #: 注意跟 ``VOICEMEM_BACKCHANNEL`` 区分，那个管的是**听**（用户说"嗯嗯"时不算一轮、
 #: 不打断助手）。一个是听见附和怎么办，一个是要不要自己发出附和，方向相反。
-ON = os.environ.get("VOICEMEM_BACKCHANNEL_EMIT", "0") != "0"
+#:
+#: **每次调用都重读环境变量，不要缓存成模块级常量。** 缓存过一次，代价是几十场
+#: 全程没出声：``harness/__init__.py`` 第一行就 import 这个模块，而 run.py 是先
+#: `from harness import speak_tag`（第 129 行）、后设这个 env（第 165 行）——
+#: 常量在 env 写进去之前就已经定成 False 了，`--backchannel` 默认开却永远不生效，
+#: 启动日志里那句「附和 关闭」就是这么来的。
+def emitting() -> bool:
+    return os.environ.get("VOICEMEM_BACKCHANNEL_EMIT", "0") != "0"
 #: 打印每次机会的概率和因子分解。调这套东西全靠它。
 DEBUG = os.environ.get("VOICEMEM_BC_DEBUG", "0") != "0"
 
@@ -191,12 +198,12 @@ def f_refractory(since_s: float, policy: BackchannelPolicy) -> float:
 #: 信号明确时才用，拿不准就退回 support/neutral。
 _TOKENS = {
     "zh": {
-        "support":    ["嗯", "嗯嗯", "嗯…", "哦", "嗯呢", "唔"],       # 共情/接住
-        "agree":      ["对", "对对", "是啊", "嗯嗯", "对的", "没错"],   # 赞同
-        "surprise":   ["是吗", "真的", "真的吗", "哇", "这样啊", "哦？"],
-        "assess_good":["太好了", "厉害", "那不错啊", "挺好的"],
+        "support":    ["嗯", "嗯嗯", "嗯…", "哦", "哦哦", "我知道了", "唔"],   # 共情/接住
+        "agree":      ["对", "对啊", "对对", "是啊", "嗯嗯", "对的", "没错"],   # 赞同
+        "surprise":   ["这样啊", "哦哦", "是吗", "真的", "真的吗"],
+        "assess_good":["不错", "挺好的", "太好了", "厉害"],
         "assess_bad": ["那不容易", "辛苦了", "唉", "那挺难的"],
-        "neutral":    ["嗯", "嗯嗯", "哦", "嗯哼", "唔", "嗯对"],
+        "neutral":    ["嗯", "嗯嗯", "哦", "对", "我知道了", "唔", "嗯对"],
     },
     "en": {
         "support":    ["mm-hmm", "mmm", "oh", "i see", "okay"],
@@ -251,7 +258,7 @@ def pick_group(text: str, emotion: str) -> str:
 
 
 def pick_token(text: str, emotion: str, lang: str, rng: random.Random,
-               recent=()) -> str:
+               recent=(), available=None) -> str:
     """挑一个词。避开最近说过的几个，否则很快听出在轮播。
 
     有一成概率从 neutral 里抽（当前组不是 neutral 时）——真人也不是每次都精准
@@ -261,7 +268,14 @@ def pick_token(text: str, emotion: str, lang: str, rng: random.Random,
     group = pick_group(text, emotion)
     if group != "neutral" and rng.random() < 0.1:
         group = "neutral"
-    choices = [t for t in bank[group] if t not in recent] or bank[group]
+    pool = bank[group]
+    if available is not None:
+        pool = [t for t in pool if t in available]
+        if not pool:
+            pool = [t for t in bank["neutral"] if t in available]
+        if not pool:
+            return ""
+    choices = [t for t in pool if t not in recent] or pool
     return rng.choice(choices)
 
 
@@ -305,7 +319,7 @@ class Backchannel:
 
     def offer(self, *, text: str, silence: float, spoke: bool, speech_s: float,
               emotion: str = "", tail_rms: float = 0.0, prev_rms: float = 0.0,
-              lang: str = "zh", now: float | None = None) -> str | None:
+              lang: str = "zh", now: float | None = None, available=None) -> str | None:
         """这一帧要不要附和。返回要说的词，或 None。
 
         一次停顿只掷一次骰子（``_armed``）：不然 100ms 到 200ms 之间每帧都判一次，
@@ -317,7 +331,7 @@ class Backchannel:
             if spoke and not self._speech_started:
                 self._speech_started = now
             return None
-        if not (ON and spoke and self._armed):
+        if not (emitting() and spoke and self._armed):
             return None
         if not (self.policy.gap_s <= silence < self.policy.max_gap_s):
             return None                        # 不在窗口里：太短，或已经是"说完了"
@@ -337,7 +351,9 @@ class Backchannel:
                   f"{text[-12:]!r}", flush=True)
         if roll >= p:
             return None
-        token = pick_token(text, emotion, lang, self.rng, self._recent)
+        token = pick_token(text, emotion, lang, self.rng, self._recent, available)
+        if not token:
+            return None
         self._last_at, self._last_token = now, token
         self._recent = (self._recent + [token])[-3:]
         return token
@@ -357,9 +373,13 @@ class Backchannel:
 #: 每个词换这几种念法各合成一条。语气指示喂给 TTS 的 instruction 参数
 #: （不认这个参数的后端会退回单一念法，见 _synth_one 的 TypeError 分支）。
 _STYLES = {
-    "zh": ["很轻，短促，像随口应一声",
-           "轻声，稍微拖长一点，像在认真听",
-           "很轻，气声，几乎是点头的声音"],
+    # 语气指示要**平**：之前"短促""气声"这类词把模型往夸张里推，出来的"嗯"
+    # 像在演，僵。日常听人说话时的应声是不用力、不起伏的，指示词也照这么写。
+    # 2026-09-07 跟用户逐条试听定下来的方向：温柔平缓、句尾往下落、不带感叹。
+    # 上扬、"短促""气声"这些都被否了——听着像在演。定稿的 8 条片段直接放在缓存里
+    # （见 tools/install_backchannel_clips.py），这里的指示只在重新合成时用。
+    "zh": ["听别人说话时温柔地应一声，平缓柔和，语调平往下落，放松不用力，不带感叹",
+           "像陈述句一样平平地说，句尾往下落，轻声，没有任何感叹和强调"],
     "en": ["very soft and short, a casual acknowledgement",
            "soft, slightly drawn out, listening attentively",
            "very quiet, breathy, almost just a nod"],
@@ -386,9 +406,14 @@ class BackchannelVoice:
         self.tts = tts
         self.lang = lang if lang in _TOKENS else "en"
         # 音色标识进 key。取不到就用类名——总比不带强，至少换后端时会失效。
-        self.voice_id = voice_id or getattr(tts, "voice", "") or type(tts).__name__
+        self.voice_id = getattr(tts, "cache_voice_id", "") or voice_id or getattr(tts, "voice", "") or type(tts).__name__
         self._clips: dict[str, list[bytes]] = {}
         self._ready = False
+        self.primed = False
+
+    @property
+    def available(self):
+        return set(self._clips)
 
     @property
     def ready(self) -> bool:
@@ -396,7 +421,7 @@ class BackchannelVoice:
 
     def _path(self, token: str, style_idx: int):
         import hashlib
-        key = f"{self.voice_id}|{self.lang}|{token}|{style_idx}"
+        key = f"{self.voice_id}|{self.lang}|{token}|{style_idx}|{_STYLES[self.lang][style_idx]}"
         h = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
         return _cache_root() / f"{h}.pcm"
 
@@ -418,6 +443,9 @@ class BackchannelVoice:
     PER_CHAR_MS = 220
     #: 低于满量程这个比例就算静音，用来切头尾。
     SILENCE = 0.02
+    #: 归一化目标响度（RMS，dBFS）。"很轻""随口"这类指示会让模型把音量也压下去，
+    #: 实测合出来只有 -35 dBFS，扬声器里根本听不见。响度归一，轻重靠指示词管语气。
+    TARGET_DB = float(os.environ.get("VOICEMEM_BC_TARGET_DB", "-22"))
 
     @classmethod
     def _max_ms(cls, token: str) -> int:
@@ -452,7 +480,22 @@ class BackchannelVoice:
         if fade > 0:
             a[:fade] *= np.linspace(0, 1, fade)
             a[-fade:] *= np.linspace(1, 0, fade)
-        return (a * 32767).astype(np.int16).tobytes()
+        return BackchannelVoice._normalize((a * 32767).astype(np.int16).tobytes())
+
+    @staticmethod
+    def _normalize(pcm: bytes) -> bytes:
+        """RMS 拉到 TARGET_DB，峰值封在 0.95 以内。幂等，缓存读出来再过一遍不变。"""
+        import numpy as np
+        a = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
+        if a.size == 0:
+            return pcm
+        rms, peak = float(np.sqrt(np.mean(a * a))), float(np.abs(a).max())
+        if rms < 1e-5 or peak < 1e-5:
+            return pcm
+        g = min(10 ** (BackchannelVoice.TARGET_DB / 20) / rms, 0.95 / peak)
+        if abs(g - 1.0) < 0.02:
+            return pcm
+        return (np.clip(a * g, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
 
     async def _synth_one(self, text: str, instruction: str) -> bytes:
         buf = bytearray()
@@ -464,7 +507,7 @@ class BackchannelVoice:
             buf.extend(chunk)
         return self._trim(bytes(buf), self._max_ms(text))
 
-    async def prime(self) -> int:
+    async def prime(self, tokens=None, variants=None, cache_only=False) -> int:
         """合成（或从缓存读）全部词×语气。返回可用的条数。放后台调。
 
         **每一步都要出声报告。** 这一步失败的所有表现都是"附和不响"，而它可能卡在
@@ -477,23 +520,25 @@ class BackchannelVoice:
         t0 = _t.time()
         root = _cache_root()
         root.mkdir(parents=True, exist_ok=True)
-        tokens = self._tokens()
-        cached = sum(1 for tk in tokens for i in range(len(_STYLES[self.lang]))
+        tokens = self._tokens() if tokens is None else list(tokens)
+        styles = _STYLES[self.lang][:variants]
+        cached = sum(1 for tk in tokens for i in range(len(styles))
                      if self._path(tk, i).is_file())
-        total = len(tokens) * len(_STYLES[self.lang])
+        total = len(tokens) * len(styles)
         print(f"[backchannel] 开始预合成：{self.lang} / {self.voice_id} · "
               f"{total} 条，其中 {cached} 条已有缓存"
-              + ("" if cached == total else f"，要现合成 {total - cached} 条（几十秒）"),
+              + ("，仅加载缓存" if cache_only else
+                 "" if cached == total else f"，要现合成 {total - cached} 条（首次启动）"),
               flush=True)
         n = 0
         for token in tokens:
             clips = []
-            for i, style in enumerate(_STYLES[self.lang]):
+            for i, style in enumerate(styles):
                 path = self._path(token, i)
                 try:
                     if path.is_file() and path.stat().st_size > 0:
-                        clips.append(path.read_bytes())
-                    else:
+                        clips.append(self._normalize(path.read_bytes()))   # 旧缓存没归一过
+                    elif not cache_only:
                         pcm = await self._synth_one(token, style)
                         if pcm:
                             path.write_bytes(pcm)
@@ -507,6 +552,7 @@ class BackchannelVoice:
                 # 攒一个就能用一个：不必等全部合完才开始附和。
                 self._ready = True
         self._ready = bool(self._clips)
+        self.primed = True
         print(f"[backchannel] 预合成完成：{len(self._clips)} 个词 / {n} 条音频 "
               f"（{_t.time() - t0:.1f}s）", flush=True)
         return n

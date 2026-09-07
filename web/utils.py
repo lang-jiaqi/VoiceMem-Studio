@@ -50,7 +50,15 @@ RT_MODEL = resolve_model(role="realtime")
 from voicemem.tts import TTS_VOICE as _TTS_VOICE  # noqa: E402
 
 RT_VOICE = os.environ.get("OPENAI_REALTIME_VOICE") or _TTS_VOICE
-client = AsyncOpenAI()
+client = None
+
+
+def _openai_client():
+    # DeepSeek + Breeze 的回复不需要 OpenAI 凭据；只有旧 API 功能实际用到时才建。
+    global client
+    if client is None:
+        client = AsyncOpenAI()
+    return client
 
 
 # ── 音频小工具 ────────────────────────────────────────────────────────────────
@@ -85,7 +93,7 @@ def realtime_connect(reply=None):
     """方案 A：整段麦克风音频平行喂给它出原生语音。事件名随 SDK 版本可能微调
     （对照 openai_voice_demo/backend/providers/realtime.py）。"""
     _, cfg = _reply_seg(reply, "realtime")
-    return client.realtime.connect(model=resolve_model(cfg.get("model"), "realtime"))
+    return _openai_client().realtime.connect(model=resolve_model(cfg.get("model"), "realtime"))
 
 
 # ── SearchResult → 脑图 html 认识的 memory_hits 负载 ──────────────────────────
@@ -207,7 +215,7 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
         拖慢对话，也不该花明显的钱。失败就返回空串，前端回落到用户说的第一句。
         """
         try:
-            r = await client.chat.completions.create(
+            r = await _openai_client().chat.completions.create(
                 model=CHAT_MODEL, max_tokens=16, temperature=0,
                 messages=[
                     {"role": "system", "content":
@@ -281,6 +289,11 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
     @app.get("/pcm-player-worklet.js")
     def pcm_player_worklet():
         return FileResponse(HERE / "pcm-player-worklet.js", headers=_NOCACHE,
+                            media_type="application/javascript")
+
+    @app.get("/mic-capture-worklet.js")
+    def mic_capture_worklet():
+        return FileResponse(HERE / "mic-capture-worklet.js", headers=_NOCACHE,
                             media_type="application/javascript")
 
     @app.get("/")

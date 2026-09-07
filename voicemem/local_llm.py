@@ -87,11 +87,19 @@ class LocalLLM:
         不在 GPU 线程时就把加载派给它;已经在上面(生成器内部)就直接加载。"""
         if self._m is None:
             from mlx_lm import load
+            from voicemem.detokenizer_cache import cache_bpe_vocabulary
+
+            def load_cached():
+                model, tokenizer = load(self.model_name)
+                if cache_bpe_vocabulary(tokenizer) and DEBUG:
+                    print("[llm] BPE 只读词表已缓存，每轮解码状态独立", flush=True)
+                return model, tokenizer
+
             loop = gpu_loop()
             if loop.on_thread():
-                self._m, self._tok = load(self.model_name)
+                self._m, self._tok = load_cached()
             else:
-                self._m, self._tok = loop.call(lambda: load(self.model_name))
+                self._m, self._tok = loop.call(load_cached)
         return self._m, self._tok
 
     def _render(self, msgs) -> str:
@@ -145,14 +153,23 @@ class LocalLLM:
         # 第一个字合并成别的 token，那就不是真前缀了。
         return ids[:-1]
 
-    def prewarm(self, history=None, memory_context: str = "") -> int:
+    def prewarm(self, history=None, memory_context: str = "", *, cancelled=None) -> int:
         """把「人设 + 历史 + 记忆」过一遍模型，KV 存进**母本**。返回缓存了多少 token。
 
         母本只存前缀、永不参与生成（生成用 _fork 复制的容器）。开服时调一次把人设
         算进去，之后每轮说完再调一次把新增的那轮历史续上——续算只花多出来那一截
         的钱，几十毫秒。整件事派到 GPU 线程上做(见 gpu_loop),不然会跟 TTS 抢流。
         """
-        return gpu_loop().call(lambda: self._prewarm(history, memory_context))
+        # asyncio 取消 to_thread 不会停掉已经入队的 GPU 工作。必须在 GPU
+        # 线程真正执行前再检查一次，避免过期预热挡住新回复；已开始的运算不强停。
+        def run():
+            if cancelled is not None and cancelled.is_set():
+                return 0
+            return self._prewarm(history, memory_context)
+
+        if cancelled is not None and cancelled.is_set():
+            return 0
+        return gpu_loop().call(run)
 
     def _prewarm(self, history, memory_context) -> int:
         import mlx.core as mx
@@ -200,20 +217,20 @@ class LocalLLM:
         """
         import time as _t
         from mlx_lm import stream_generate
-        _t1 = _t.time()
+        _t1 = _t.perf_counter()
         _queued = (_t1 - submitted) * 1000 if submitted else 0.0
         model, tok = self.load()
         ids = tok.encode(self._render(self._msgs(text, memory_context, history)))
         # 缓存只有在**确实是这次 prompt 的前缀**时才能用（逐 token 比对），
         # 对不上就退一级：历史那份岔了，人设那份还在，起码省下 600 多个 token。
         cache = prefix = None
-        _tf = _t.time()
+        _tf = _t.perf_counter()
         for c, pre in ((self._cache, self._cached_prefix),
                        (self._base, self._base_ids)):
             if c is not None and len(pre) < len(ids) and ids[:len(pre)] == pre:
                 cache, prefix = self._fork(c), pre
                 break
-        _fork_ms = (_t.time() - _tf) * 1000
+        _fork_ms = (_t.perf_counter() - _tf) * 1000
         hit = cache is not None
         if not hit:
             prefix = []
@@ -230,16 +247,48 @@ class LocalLLM:
                 print(f"[llm]   前缀在第 {i}/{len(prefix)} 个 token 分叉｜"
                       f"生成 {tok.decode(ids[i:i+24])!r}｜"
                       f"预热 {tok.decode(prefix[i:i+24])!r}", flush=True)
-        _g0 = _t.time()
+        # mlx-lm 的进度回调在 prompt 计算开始、每批 cache eval 后、首 token
+        # eval 后触发。不要另加 mx.eval：那会改变我们正在测的执行方式。
+        progress = {}
+
+        def prompt_progress(done, total):
+            now = _t.perf_counter()
+            if done == 0:
+                progress["start"] = progress["prefill"] = now
+            elif done < total:
+                progress["prefill"] = now
+            else:
+                progress["ready"] = now
+
+        _g0 = _t.perf_counter()
+        first_token = True
+        first_text = True
+        empty_tokens = 0
         try:
             for r in stream_generate(model, tok, tail, max_tokens=512,
-                                     prompt_cache=cache if hit else None):
-                if DEBUG and _g0:
-                    print(f"[llm] 首字 {(_t.time() - _g0) * 1000:.0f}ms"
+                                     prompt_cache=cache if hit else None,
+                                     **({"prompt_progress_callback": prompt_progress} if DEBUG else {})):
+                now = _t.perf_counter()
+                if DEBUG and first_token:
+                    print(f"[llm] 首token {(now - _g0) * 1000:.0f}ms"
                           f"（排队等 GPU 线程 {_queued:.0f} / 渲染+分词 "
                           f"{(_g0 - _t1) * 1000 - _fork_ms:.0f} / fork {_fork_ms:.0f}）",
                           flush=True)
-                    _g0 = 0
+                    if "ready" in progress and "start" in progress:
+                        print(f"[llm-detail] 生成器准备 {(progress['start']-_g0)*1000:.0f}ms"
+                              f" · 尾部prefill {(progress['prefill']-progress['start'])*1000:.0f}ms"
+                              f" · 首token求值/流水准备 {(progress['ready']-progress['prefill'])*1000:.0f}ms"
+                              f" · 解码返回 {(now-progress['ready'])*1000:.0f}ms"
+                              f" · 未缓存 {len(tail)} token", flush=True)
+                first_token = False
+                if first_text:
+                    if r.text:
+                        if DEBUG:
+                            print(f"[llm-text] 首个可显示文字 {(now-_g0)*1000:.0f}ms"
+                                  f" · 前置空文本token {empty_tokens}", flush=True)
+                        first_text = False
+                    else:
+                        empty_tokens += 1
                 yield r.text
         finally:
             # 这一轮的副本用完就还:不显式清,MLX 的缓冲池会一直攒着,几轮就 OOM。
@@ -256,9 +305,18 @@ class LocalLLM:
         回来;这里在事件循环侧把阻塞的队列 get 丢进 executor,不卡读麦克风那条线。"""
         loop = asyncio.get_running_loop()
         import time as _t
-        _sub = _t.time()
-        job = gpu_loop().iter(
-            lambda: self._gen_iter(text, memory_context, history, _sub))
+        _sub = _t.perf_counter()
+
+        def stamped():
+            gen = self._gen_iter(text, memory_context, history, _sub)
+            try:
+                for value in gen:
+                    yield value, _t.perf_counter()
+            finally:
+                gen.close()  # 仍在 GPU 线程上释放被取消的生成器和 cache
+
+        job = gpu_loop().iter(stamped)
+        first_received = True
         try:
             while True:
                 item = await loop.run_in_executor(None, job.out.get)
@@ -268,7 +326,13 @@ class LocalLLM:
                 if kind == "err":
                     print(f"[llm] 本地生成失败：{type(val).__name__}: {val}", flush=True)
                     return
+                val, produced_at = val
                 if val:
+                    if first_received and DEBUG:
+                        now = _t.perf_counter()
+                        print(f"[llm-delivery] 首文字回主循环 {(now-produced_at)*1000:.0f}ms"
+                              f" · 提交到收到 {(now-_sub)*1000:.0f}ms", flush=True)
+                    first_received = False
                     yield val
         finally:
             # 上层不要了（提前生成赌错被丢弃、或用户打断）就**立刻叫停 GPU 那边**。

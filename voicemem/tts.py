@@ -1,7 +1,7 @@
 """文本 → 语音。回复层只产出文本（见 ``voicemem/reply.py``），出声是这里、可选的一层。
 
 四个内置后端，都吐 **24kHz 单声道 PCM16**：默认 OpenAI api；``local`` / ``piper``
-走离线 piper；``voxcpm`` 走 VoxCPM2；``breeze`` 连 Breeze TTS 2 的流式服务
+走离线 piper；``voxcpm`` 走 VoxCPM2；``qwen`` / ``kokoro`` 走本机 MLX；``breeze`` 连 Breeze TTS 2 的流式服务
 （自然语言指挥语气，见 ``BreezeTTS``；非商用许可，所以不是默认）。
 
 **这是第九个可替换位**（前八个见 ``voicemem/utils/defaults.py``）。契约只有一条方法::
@@ -59,7 +59,7 @@ _SOFT_END  = "，,、；;：: "          # 句中停顿：只有第一段用，�
 # 每段都是**独立合成**的，语调轮廓不跨段延续，所以段越多、接缝越明显——听感上
 # 是"一句一句拼起来的"而不是连着说下来的。切得碎是拿流畅度换首帧延迟，
 # 哪头更值取决于后端有多快。
-_FIRST_MIN = int(os.environ.get("VOICEMEM_TTS_FIRST_MIN", "4"))
+_FIRST_MIN = int(os.environ.get("VOICEMEM_TTS_FIRST_MIN", "2"))
 #: 第一段的硬上限。到了这个长度就切，**不管有没有标点**——所以它偏小就会切在
 #: 半个词/半个短语上（实测切出 'You might try a local'，接缝正好在开头最显眼处，
 #: 听感就是"头几个词卡一下"）。
@@ -67,32 +67,37 @@ _FIRST_MIN = int(os.environ.get("VOICEMEM_TTS_FIRST_MIN", "4"))
 #: 20 字，上限根本没在抢时间。现在首字 0.58 秒、TTS 首帧 0.2 秒，账反过来了：多等
 #: 一个字就是实打实的 28ms，所以收到 24。嫌接缝明显就调回大一点。
 _FIRST_MAX = int(os.environ.get("VOICEMEM_TTS_FIRST_MAX", "24"))
-_SENT_MIN  = int(os.environ.get("VOICEMEM_TTS_SENT_MIN", "12"))
-_SENT_MAX  = int(os.environ.get("VOICEMEM_TTS_SENT_MAX", "60"))
+_SENT_MIN  = int(os.environ.get("VOICEMEM_TTS_SENT_MIN", "2"))
+#: 后段上限。本地 Qwen-TTS 默认放到 200：它串行合成、比实时快，后段多长都不拖
+#: 首帧；而每段都是一次独立采样，CustomVoice 的音色是按名字查表的固定向量、
+#: 说法却是采出来的——切 4 段就是同一个人的 4 个版本，听着像换人。段少接缝就少。
+_SENT_MAX  = int(os.environ.get("VOICEMEM_TTS_SENT_MAX",
+                                "200" if TTS_BACKEND == "qwen" else "60"))
 #: 第一段允不允许在逗号处断开。默认允许——抢第一声用的。但这会**把一句话劈成两次
 #: 独立合成**，接缝正好落在句子中间，是最难听的一种。后端首帧够快时设 0，
 #: 让所有段都落在句末，句内不断。
 _FIRST_SOFT = os.environ.get("VOICEMEM_TTS_FIRST_SOFT", "1") != "0"
 
 
+#: 后面的段也在逗号/顿号处切（默认开）。段短，接缝多一点，但每段都是完整的
+#: 一个短语，合成出来的停顿落在标点上，听着像人在句读；关掉就只在句末切。
+_CUT_AT_COMMA = os.environ.get("VOICEMEM_TTS_CUT_AT_COMMA", "1") != "0"
+_COMMA = "，,、；;：:"                  # 不含空格：英文按空格切会碎成单词
+
+
 def cut_point(buf: str, first: bool) -> bool:
-    """这段够不够发去合成了。"""
+    """这段够不够发去合成了。**只在标点处切**，长度上限只是兜底。"""
     s = buf.strip()
     if not s:
         return False
-    if first:                                  # 抢第一声：逗号也算，实在没有就按长度切
+    if first:                                  # 抢第一声：逗号也算
         ends = _SENT_END + _SOFT_END if _FIRST_SOFT else _SENT_END
         if len(s) >= _FIRST_MIN and s[-1] in ends:
             return True
-        # 到了硬上限也**只在词边界切**：切在半个词上，两段各自合成出来接不上，
-        # 是"头几个词卡"最直接的来源。等下一个空格/标点，最多多等一两个 token。
-        #
-        # 词边界要看**没 strip 过的 buf**：s 已经被 strip 掉结尾空格了，
-        # ``s[-1].isspace()`` 永远为假——这条硬上限因此从来没生效过，英文那种
-        # 一句到底没有逗号的回复只能死等句号。实测第一段切出 70 个字，
-        # 白等了 200 多毫秒。
+        # 兜底上限也只在词边界切：切在半个词上两段接不上，是"头几个词卡"的来源。
         return len(s) >= _FIRST_MAX and (buf[-1:].isspace() or not s[-1].isalnum())
-    return (len(s) >= _SENT_MIN and s[-1] in _SENT_END) or len(s) >= _SENT_MAX
+    ends = _SENT_END + (_COMMA if _CUT_AT_COMMA else "")
+    return (len(s) >= _SENT_MIN and s[-1] in ends) or len(s) >= _SENT_MAX
 
 
 # ── 内置后端 ──────────────────────────────────────────────────────────────────
@@ -105,6 +110,11 @@ class BaseTTS:
     直接报错，那一整块音频就没了。这里把跨块的半个样本留到下一块，保证吐出去的
     每块都是完整样本。自己写后端不继承它也行，只要 ``stream()`` 吐的是整样本。
     """
+
+    #: 同一条回复里的分段能不能**同时**合成。远端服务是 FIFO，多发几段只是排队，
+    #: 先发的先做——并发只赚不赔。本地走 gpu_loop 的后端要设 True：那条流是
+    #: **轮转**不是排队，N 段同时在算就把正在播的那段稀释到 1/N，直接比实时慢。
+    SERIAL = False
 
     async def stream(self, text: str, instruction: str | None = None):
         """``instruction``：**这一轮**怎么念。感知层每轮判出的情绪要能进到声音里，
@@ -241,15 +251,51 @@ class QwenTTS(BaseTTS):
 
     #: 默认 8bit（约 2GB）。bf16 的音质略好但慢一截，量化这档听不出差别。
     DEFAULT_MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
+    #: 一段合成完再开下一段。gpu_loop 是轮转的：两段同时算 + LLM 在解码后文，
+    #: 正在播的那段只分到 4/9 的 GPU，0.69x 变 1.57x——比播放慢，缓冲必见底，
+    #: 听感就是长回复中间卡一下。串行之后 TTS 本来就比实时快，照样跟得上。
+    SERIAL = True
+
+    #: 克隆用的 Base 版（同尺寸、同量化）。
+    BASE_MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
 
     def __init__(self, model=None, voice=None, instruction=None,
-                 streaming_interval=None):
+                 streaming_interval=None, ref_audio=None, ref_text=None):
         self.model_name = (model or os.environ.get("VOICEMEM_QWEN_TTS_MODEL")
                            or self.DEFAULT_MODEL)
         self.voice = voice or os.environ.get("VOICEMEM_QWEN_TTS_VOICE") or "Serena"
         self.instruction = instruction or os.environ.get("VOICEMEM_TTS_INSTRUCTION") or None
         self.interval = float(streaming_interval
                               or os.environ.get("VOICEMEM_QWEN_TTS_INTERVAL", "0.2"))
+        #: 采样温度。库默认 0.9——CustomVoice 的音色不是固定的，每次 generate()
+        #: 都是按预置说话人**重新采一次样**，0.9 下相邻两句听着像两个人。0.6 明显
+        #: 收敛，仍有起伏；想更稳继续往下压，0 是贪心（会飘平、偶尔复读）。
+        self.temperature = float(os.environ.get("VOICEMEM_QWEN_TTS_TEMP", "0.6"))
+        #: 每次合成前把随机种子固定。**它管不住不同句子之间的音色**（文本不同，
+        #: 采样路径就不同），只是去掉同一句话每次念都不一样这一层——调语气、听
+        #: A/B 时至少有个稳定的对照。设成负数关掉。
+        self.seed = int(os.environ.get("VOICEMEM_QWEN_TTS_SEED", "0"))
+        #: 参考音频：给了就走 **Base 模型的克隆路线**，每次合成都锚在这段音频上，
+        #: 这是唯一能让句与句之间音色不变的办法（CustomVoice 的音色是查表向量，
+        #: 说法每段重采一次，听着像换人；它的权重里也没有 speaker_encoder，认不了
+        #: 参考音频）。代价：Base 没有 instruct，语气标签对 TTS 失效。
+        #: 参考文本必须是那段音频的精确转写，默认读同名 .txt。
+        self.ref_audio = ref_audio or os.environ.get("VOICEMEM_QWEN_TTS_REF_AUDIO") or None
+        self.ref_text = ref_text or os.environ.get("VOICEMEM_QWEN_TTS_REF_TEXT") or None
+        if self.ref_audio and not self.ref_text:
+            txt = os.path.splitext(self.ref_audio)[0] + ".txt"
+            if os.path.isfile(txt):
+                self.ref_text = open(txt, encoding="utf-8").read().strip()
+        if self.ref_audio and not self.ref_text:
+            raise ValueError(f"参考音频 {self.ref_audio} 缺转写：设 VOICEMEM_QWEN_TTS_REF_TEXT "
+                             "或放一个同名 .txt")
+        if self.ref_audio and not (model or os.environ.get("VOICEMEM_QWEN_TTS_MODEL")):
+            self.model_name = self.BASE_MODEL          # 克隆只有 Base 走得到
+        if self.ref_audio:
+            # 附和的预合成缓存按 voice 名做键（harness/backchannel.py 的 _path）。
+            # 换了参考音频还叫 Serena 的话，"嗯"会命中旧 CustomVoice 的缓存——
+            # 正文一个音色、附和另一个，比不附和还突兀。
+            self.voice = "ref:" + os.path.splitext(os.path.basename(self.ref_audio))[0]
         self._m = None
 
     def _load(self):
@@ -262,6 +308,9 @@ class QwenTTS(BaseTTS):
         """在 GPU 线程上跑的生成器：一块音频 yield 一次，跟 LLM 轮流推进。"""
         m = self._load()
         sr = getattr(m, "sample_rate", SAMPLE_RATE)
+        if self.seed >= 0:
+            import mlx.core as mx
+            mx.random.seed(self.seed)          # 在 GPU 线程上设，见类文档
         for seg in m.generate(**kw):
             a = np.asarray(seg.audio, np.float32).reshape(-1)
             o = a if sr == SAMPLE_RATE else resample(a, src=sr, dst=SAMPLE_RATE)
@@ -270,11 +319,16 @@ class QwenTTS(BaseTTS):
     async def _raw(self, text, instruction=None):
         import asyncio as _a
         from voicemem.utils.gpu_loop import gpu_loop
-        kw = {"text": text, "voice": self.voice, "stream": True,
-              "streaming_interval": self.interval}
-        ins = instruction or self.instruction
-        if ins:
-            kw["instruct"] = ins
+        kw = {"text": text, "stream": True,
+              "streaming_interval": self.interval, "temperature": self.temperature}
+        if self.ref_audio:
+            # Base 的 ICL 路线只认 ref_audio/ref_text；voice 和 instruct 都不能带
+            kw["ref_audio"], kw["ref_text"] = self.ref_audio, self.ref_text
+        else:
+            kw["voice"] = self.voice
+            ins = instruction or self.instruction
+            if ins:
+                kw["instruct"] = ins
         loop = _a.get_running_loop()
         # 权重 4:TTS 每轮多走几步,跟得上播放。跟 LLM 1:1 平摊算力会欠载卡顿——
         # TTS 单独实时率才 0.69x,再减半就追不上了(见 gpu_loop 的 weight)。
@@ -294,25 +348,181 @@ class QwenTTS(BaseTTS):
             job.cancel()      # 被打断就别再合成了，那段音频没人听
 
 
-class VoxCPMTTS(BaseTTS):
-    """离线大模型：VoxCPM2（2B，中英+多语）。装：pip install voxcpm。
-    ``model`` 可指向本地目录，缺省用 HF 上的 openbmb/VoxCPM2（走本地缓存）。"""
+class KokoroTTS(BaseTTS):
+    """Kokoro-82M 的**本地 MLX** 版（Apple silicon）。装：pip install mlx-audio "misaki[en,zh]"。
 
-    def __init__(self, model=None):
+    82M 的小模型，Apache 2.0，本机实测（M 系列，bf16）：
+
+        文本            首块      实时倍率
+        英文 34 字      406ms     0.17x
+        英文 115 字     1027ms    0.14x
+        中文 12 字      708ms     0.19x
+        中文 33 字      877ms     0.11x
+
+    比 Qwen3-TTS 快 4~5 倍，但**一段是整段出的**：它不是自回归模型，一个 segment
+    从 G2P 到声码器一次算完才吐音频，所以首块延迟 = 整段合成时间，随文本长度线性涨。
+    要抢首声就靠上游把第一段切短（``_FIRST_MAX``），后段不用管——生成远快于播放。
+
+    没有 instruct、没有克隆：音色只能在预置里挑（``voice``），语气标签对它无效，
+    ``instruction`` 忽略。中英是**两套 G2P**（misaki.en / misaki.zh），得按段选
+    ``lang_code``；没显式给就按段里有没有汉字自动判，中英各配一个音色。
+    英文音色 ``af_*/am_*``（美）``bf_*/bm_*``（英），中文 ``zf_*/zm_*``，
+    全表见 HF 仓库的 VOICES.md。
+
+    走 gpu_loop 的理由同 QwenTTS：全进程只准一个线程碰 GPU，不然驱动 panic。
+    """
+
+    DEFAULT_MODEL = "mlx-community/Kokoro-82M-bf16"
+    #: 同 QwenTTS：gpu_loop 是轮转的，段并发只会稀释正在播的那段。
+    SERIAL = True
+
+    def __init__(self, model=None, voice=None, voice_zh=None, lang=None,
+                 speed=None, split_pattern=None):
+        self.model_name = (model or os.environ.get("VOICEMEM_KOKORO_MODEL")
+                           or self.DEFAULT_MODEL)
+        self.voice_en = voice or os.environ.get("VOICEMEM_KOKORO_VOICE") or "af_heart"
+        self.voice_zh = voice_zh or os.environ.get("VOICEMEM_KOKORO_VOICE_ZH") or "zf_xiaoyi"
+        #: 固定语言（"a" 美英 / "b" 英英 / "z" 中文 …）。留空按段自动判中英。
+        self.lang = lang or os.environ.get("VOICEMEM_KOKORO_LANG") or None
+        self.speed = float(speed or os.environ.get("VOICEMEM_KOKORO_SPEED", "1.0"))
+        #: 段内再切的正则。库默认只按换行切，上游已经按句送过来了，一般不用动。
+        self.split_pattern = split_pattern or r"\n+"
+        #: 附和的预合成缓存按 voice 名做键（harness/backchannel.py）。
+        self.voice = self.voice_en
+        self._m = None
+
+    def _load(self):
+        if self._m is None:
+            from mlx_audio.tts.utils import load_model
+            self._m = load_model(self.model_name)   # 在 gpu_loop 线程里调
+        return self._m
+
+    def _pick(self, text):
+        if self.lang:
+            v = self.voice_zh if self.lang == "z" else self.voice_en
+            return self.lang, v
+        if any("\u4e00" <= ch <= "\u9fff" for ch in text):
+            return "z", self.voice_zh
+        return "a", self.voice_en
+
+    def _segments(self, text):
+        m = self._load()
+        sr = getattr(m, "sample_rate", SAMPLE_RATE)
+        lang, voice = self._pick(text)
+        for seg in m.generate(text, voice=voice, lang_code=lang, speed=self.speed,
+                              split_pattern=self.split_pattern):
+            a = np.asarray(seg.audio, np.float32).reshape(-1)
+            o = a if sr == SAMPLE_RATE else resample(a, src=sr, dst=SAMPLE_RATE)
+            yield (np.clip(o, -1, 1) * 32767).astype(np.int16).tobytes()
+
+    async def _raw(self, text, instruction=None):
+        """``instruction`` 忽略：Kokoro 没有语气入口。"""
+        from voicemem.utils.gpu_loop import gpu_loop
+        loop = asyncio.get_running_loop()
+        job = gpu_loop().iter(lambda: self._segments(text), weight=4)
+        try:
+            while True:
+                item = await loop.run_in_executor(None, job.out.get)
+                if item is None:
+                    return
+                kind, chunk = item
+                if kind == "err":
+                    print(f"[tts] Kokoro 合成失败：{type(chunk).__name__}: {chunk}",
+                          flush=True)
+                    return
+                yield chunk
+        finally:
+            job.cancel()
+
+
+class VoxCPMTTS(BaseTTS):
+    """离线大模型：VoxCPM2（2B，30 语种，pip 包 ``voxcpm>=2``）。装：pip install voxcpm。
+    ``model`` 可指向本地目录，缺省用 HF 上的 openbmb/VoxCPM2（走本地缓存）。
+
+    它没有 instruct 参数——**语气写在文本开头的括号里**：``(cheerful, faster)你好``。
+    所以感知层每轮传来的 ``instruction`` 直接拼到段首，锁音色和调情绪是两个独立入口：
+
+        ref_audio                       锁音色（reference_wav_path，只取音色）
+        ref_audio + ref_text + hifi     更像（再把参考片段当上文喂进去，prompt_wav/prompt_text）
+        voice                           没有参考音频时用文字设计一个人（"温柔的年轻女声"）
+        instruction                     这一轮的情绪 / 语速，逐段可变
+
+    ``hifi`` 模式相似度最高，但参考片段的语气会当成"上文"压过括号里的指令；要情绪
+    跟着轮次走就用默认的 ``ref`` 模式。没给 ref_audio 也没给 voice 的话每段都是
+    随机说话人，对话里听着像换人——别这么用。
+
+    合成在线程里跑（torch，不走 gpu_loop；mps 上一段几百毫秒到几秒，同步跑会
+    把事件循环卡住，麦克风和播放一起断）。SERIAL：本地算力一份，段并发只会互相拖慢。
+    """
+
+    SERIAL = True
+
+    def __init__(self, model=None, ref_audio=None, ref_text=None, voice=None,
+                 instruction=None, hifi=None, device=None, cfg_value=None,
+                 inference_timesteps=None):
         self.model = resolve_model(model, "tts", default=None) or "openbmb/VoxCPM2"
+        self.ref_audio = ref_audio or os.environ.get("VOICEMEM_VOXCPM_REF_AUDIO") or None
+        self.ref_text = ref_text or os.environ.get("VOICEMEM_VOXCPM_REF_TEXT") or None
+        if self.ref_audio and not self.ref_text:
+            txt = os.path.splitext(self.ref_audio)[0] + ".txt"
+            if os.path.isfile(txt):
+                self.ref_text = open(txt, encoding="utf-8").read().strip()
+        self.hifi = (os.environ.get("VOICEMEM_VOXCPM_HIFI", "0") != "0") if hifi is None else bool(hifi)
+        if self.hifi and not (self.ref_audio and self.ref_text):
+            raise ValueError("hifi 克隆要 ref_audio + ref_text（同名 .txt 或 VOICEMEM_VOXCPM_REF_TEXT）")
+        self.voice = voice or os.environ.get("VOICEMEM_VOXCPM_VOICE") or None
+        self.instruction = instruction or os.environ.get("VOICEMEM_TTS_INSTRUCTION") or None
+        self.device = device or os.environ.get("VOICEMEM_VOXCPM_DEVICE") or None
+        self.cfg_value = float(cfg_value or os.environ.get("VOICEMEM_VOXCPM_CFG", "2.0"))
+        self.steps = int(inference_timesteps or os.environ.get("VOICEMEM_VOXCPM_STEPS", "10"))
         self._m = None
 
     def _load(self):
         if self._m is None:
             from voxcpm import VoxCPM
-            self._m = VoxCPM.from_pretrained(self.model, load_denoiser=False)
+            self._m = VoxCPM.from_pretrained(self.model, load_denoiser=False, device=self.device)
         return self._m
 
+    def _prefix(self, instruction):
+        """括号里的内容：有参考音频时只放语气；没有时先放音色描述再放语气。"""
+        parts = [] if self.ref_audio else ([self.voice] if self.voice else [])
+        ins = instruction or self.instruction
+        if ins:
+            parts.append(ins)
+        return f"({', '.join(parts)})" if parts else ""
+
+    def _kw(self):
+        kw = dict(cfg_value=self.cfg_value, inference_timesteps=self.steps)
+        if self.ref_audio:
+            kw["reference_wav_path"] = self.ref_audio
+            if self.hifi:
+                kw["prompt_wav_path"] = self.ref_audio
+                kw["prompt_text"] = self.ref_text
+        return kw
+
     async def _raw(self, text, instruction=None):
-        m = self._load()                      # voxcpm 同上
+        m = self._load()
         sr = m.tts_model.sample_rate
-        for f in m.generate_streaming(text=text):
-            out = resample(np.asarray(f, np.float32).reshape(-1), src=sr, dst=SAMPLE_RATE)
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+        text = self._prefix(instruction) + text
+
+        def work():
+            try:
+                for f in m.generate_streaming(text=text, **self._kw()):
+                    loop.call_soon_threadsafe(q.put_nowait, np.asarray(f, np.float32).reshape(-1))
+                loop.call_soon_threadsafe(q.put_nowait, None)
+            except BaseException as e:            # 让异常回到事件循环，别在线程里吞掉
+                loop.call_soon_threadsafe(q.put_nowait, e)
+
+        loop.run_in_executor(None, work)
+        while True:
+            f = await q.get()
+            if f is None:
+                return
+            if isinstance(f, BaseException):
+                raise f
+            out = resample(f, src=sr, dst=SAMPLE_RATE)
             yield (np.clip(out, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
 
 
@@ -453,13 +663,17 @@ class BreezeTTS(BaseTTS):
 
 #: provider 名 → 内置实现。``local`` 是 ``piper`` 的历史别名（TTS_BACKEND=local 一直
 #: 是这个意思），两个都留着。
+from voicemem.breeze_tts import BreezeMLXTTS
+
 TTS_PROVIDERS = {
     "openai": OpenAITTS,
     "local":  PiperTTS,
     "piper":  PiperTTS,
     "voxcpm": VoxCPMTTS,
     "breeze": BreezeTTS,
+    "breeze_mlx": BreezeMLXTTS,
     "qwen":   QwenTTS,        # 本机 MLX，比实时快，见那个类的说明
+    "kokoro": KokoroTTS,      # 本机 MLX，82M，比 qwen 快 4 倍但整段出，无语气/克隆
 }
 
 
@@ -473,7 +687,7 @@ def make_tts(provider: str | None = None, **cfg):
     """按 provider 名建一个内置后端；``provider`` 省略就跟 ``TTS_BACKEND`` 环境变量。
 
     ``cfg`` 逐个 provider 不同（openai 认 model/voice/instructions/api_key/base_url，
-    piper 和 voxcpm 只认 model），传错了直接 TypeError——比静默忽略好找。
+    piper 只认 model，voxcpm 认 model/ref_audio/ref_text/voice/instruction/hifi/device），传错了直接 TypeError——比静默忽略好找。
 
     同样的 (provider, cfg) 返回同一个实例。要各自独立的就直接构造类。
     """

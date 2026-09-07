@@ -1642,9 +1642,8 @@ function configurePcmPlayer(){
     pcmNode.port.postMessage({type:'gain',value:replyGain});
   }
 }
-// 附和音量（0~1，相对回复）。本来设成 0.42（真人附和比正常说话轻），实听太小，
-// 跟正文一个音量才对——毕竟是同一个人在说话。
-let bcGain=1.0;
+// 附和略低于正文音量，避免盖过用户接下来的话。
+let bcGain=0.8;
 function playBackchannel(m){
   // 走独立的 AudioBufferSource，**不进 pcm worklet**：进了的话服务端的 hearing()
   // 会以为助手在说话，用户接着说就被判成插话——自己的"嗯"把自己掐了。
@@ -1660,9 +1659,9 @@ function playBackchannel(m){
   // 每次抖一点速度和音量：同一条波形反复播，两三次就听出是罐头。
   src.playbackRate.value=0.95+Math.random()*0.1;
   const g=ctx.createGain();
-  // 抖动只往下不往上：bcGain 已经是 1.0，再往上会削波。
+  // 抖动只往下不往上。
   g.gain.value=bcGain*(0.88+Math.random()*0.12);
-  src.connect(g); g.connect(ctx.destination); src.start();
+  src.connect(g); g.connect(playBus); src.start();
 }
 // 现场调音量：VM_BC(0.6) 调大、VM_BC(0) 静音（服务端仍在判，只是听不见）。
 window.VM_BC=v=>{ bcGain=Math.max(0,Math.min(1,Number(v)||0)); };
@@ -1691,7 +1690,7 @@ function reportPlaybackCheckpoint(m){
     ws.send(JSON.stringify({type:'playback_checkpoint',output_id:m.outputId,
       rendered_samples:Number(m.renderedSamples||0),sample_rate:Number(m.sampleRate||SAMPLE_RATE),
       buffered_samples:Math.round(Number(m.bufferedMs||0)*Number(m.sampleRate||SAMPLE_RATE)/1000),
-      state}));
+      state,event:m.type}));
   }catch(e){}
 }
 function beginPcmOutput(outputId,sampleRate=SAMPLE_RATE){
@@ -1705,7 +1704,7 @@ function initPcmPlayer(){
   if(!playCtx.audioWorklet){ pcmWorkletFailed=true; return Promise.resolve(); }
   pcmReady=playCtx.audioWorklet.addModule('/pcm-player-worklet.js').then(()=>{
     pcmNode=new AudioWorkletNode(playCtx,'voicemem-pcm-player',{outputChannelCount:[1]});
-    pcmNode.connect(playCtx.destination);
+    pcmNode.connect(playBus);
     pcmNode.port.onmessage=e=>{
       const m=e.data||{};
       reportPlaybackCheckpoint(m);
@@ -1732,9 +1731,14 @@ function initPcmPlayer(){
   });
   return pcmReady;
 }
+let playBus=null;
 function ensurePlayback(){
   if(!playCtx){
-    playCtx=new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'});
+    const AC=window.AudioContext||window.webkitAudioContext;
+    try{playCtx=new AC({latencyHint:'interactive',sampleRate:SAMPLE_RATE});}
+    catch(e){playCtx=new AC({latencyHint:'interactive'});}
+    playBus=playCtx.createGain();
+    playBus.connect(playCtx.destination);
     initPcmPlayer();
   }
   if(playCtx.state==='suspended') playCtx.resume();
@@ -1743,7 +1747,7 @@ function ensurePlayback(){
 function legacyPlayPcm(f32){
   if(!playCtx||!f32.length) return;
   const b=playCtx.createBuffer(1,f32.length,playCtx.sampleRate); b.copyToChannel(f32,0);
-  const s=playCtx.createBufferSource(); s.buffer=b; s.connect(playCtx.destination);
+  const s=playCtx.createBufferSource(); s.buffer=b; s.connect(playBus);
   scheduled.push(s); s.onended=()=>{ const i=scheduled.indexOf(s); if(i>=0) scheduled.splice(i,1); };
   const now=playCtx.currentTime, at=nextPlay>now?nextPlay:now+pcmPrebuffer;
   s.start(at); nextPlay=at+b.duration;
@@ -1779,6 +1783,7 @@ function waitForPcmDrain(maxMs=20000){
 function stopPlayback(reason='reset'){
   setSpokenCaptionPlaying(false);
   pcmBargePaused=false;
+  if(playBus) playBus.gain.value=1;
   pcmPending.length=0; pcmDrainPending=false;
   if(pcmNode) pcmNode.port.postMessage({type:'clear',reason});
   pcmOutputId='';
@@ -1791,13 +1796,13 @@ function pausePlaybackForBarge(){
   if(pcmBargePaused) return;
   pcmBargePaused=true; setSpokenCaptionPlaying(false);
   if(pcmNode) pcmNode.port.postMessage({type:'pause'});
-  else if(playCtx) playCtx.suspend();
+  else if(playBus) playBus.gain.value=0; // Never suspend the shared mic clock.
 }
 function resumePlaybackAfterBarge(){
   if(!pcmBargePaused) return;
   pcmBargePaused=false;
   if(pcmNode) pcmNode.port.postMessage({type:'resume'});
-  else if(playCtx) playCtx.resume();
+  else if(playBus) playBus.gain.value=1;
   setSpokenCaptionPlaying(true);
 }
 
@@ -1821,7 +1826,7 @@ const AEC_TAIL_S = 0.25;
 function assistantAudible(){
   return !!playCtx && playCtx.currentTime < nextPlay + AEC_TAIL_S;
 }
-let micStream=null, micCtx=null, micProc=null;
+let micStream=null, micCtx=null, micProc=null, micSource=null, micWorkletLoaded=false;
 function toPCM16(f32){
   const o=new Int16Array(f32.length);
   for(let i=0;i<f32.length;i++){ const s=Math.max(-1,Math.min(1,f32[i])); o[i]=s<0?s*0x8000:s*0x7fff; }
@@ -1849,26 +1854,41 @@ async function startMic(){
     {audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
   // **按 24k 建**，让浏览器自己做重采样（它有正经的抗混叠）。我们这边再手动从
   // 48k 抽到 24k 的话会引入混叠，ASR 直接变差——这是"转写一直不准"的真正原因。
-  if(!micCtx){
-    const AC=window.AudioContext||window.webkitAudioContext;
-    try{ micCtx=new AC({sampleRate:SAMPLE_RATE}); }
-    catch(e){ micCtx=new AC(); }        // 个别浏览器不认这个参数
-  }
+  micCtx=ensurePlayback(); // Same sample clock for mic and actual render reference.
   if(micCtx.state==='suspended') await micCtx.resume();
-  const src=micCtx.createMediaStreamSource(micStream);
-  // Smaller capture blocks reduce uplink latency.
-  micProc=micCtx.createScriptProcessor(2048,1,1);
-  micProc.onaudioprocess=e=>{
+  const src=micSource=micCtx.createMediaStreamSource(micStream);
+  const sendMic=f32=>{
     if(!ws||ws.readyState!==1||paused||replaying) return;
     if(HALF_DUPLEX && assistantAudible()) return;   // 闭麦，见上面
-    const f32=e.inputBuffer.getChannelData(0);
     let peak=0; for(let i=0;i<f32.length;i++){ const v=Math.abs(f32[i]); if(v>peak) peak=v; }
     lvOn=peak>0.02;
     ws.send(toPCM16(downsample(f32,micCtx.sampleRate,SAMPLE_RATE)).buffer);
   };
-  src.connect(micProc); micProc.connect(micCtx.destination);
+  const settings=micStream.getAudioTracks()[0].getSettings();
+  console.info('[mic] browser AEC:',settings.echoCancellation,'noise suppression:',settings.noiseSuppression);
+  try{
+    if(!micWorkletLoaded){
+      await micCtx.audioWorklet.addModule('/mic-capture-worklet.js');
+      micWorkletLoaded=true;
+    }
+    micProc=new AudioWorkletNode(micCtx,'voicemem-mic-capture',
+      {numberOfInputs:2,numberOfOutputs:1,outputChannelCount:[1]});
+    src.connect(micProc,0,0); playBus.connect(micProc,0,1);
+    micProc.port.onmessage=e=>{
+      if(e.data.type==='mic') sendMic(e.data.samples);
+      else if(e.data.suppressed&&window.VM_DEBUG) console.debug('[aec]',e.data);
+    };
+  }catch(e){
+    console.warn('[mic] worklet unavailable; browser AEC only',e);
+    micProc=micCtx.createScriptProcessor(512,1,1);
+    micProc.onaudioprocess=e=>sendMic(e.inputBuffer.getChannelData(0));
+    src.connect(micProc);
+  }
+  micProc.connect(micCtx.destination);
 }
 function stopMic(){
+  if(micSource){micSource.disconnect();micSource=null;}
+  if(playBus&&micProc){try{playBus.disconnect(micProc);}catch(e){}}
   if(micProc){ micProc.disconnect(); micProc.onaudioprocess=null; micProc=null; }
   if(micStream){ for(const t of micStream.getTracks()) t.stop(); micStream=null; }
   lvOn=false;
@@ -2128,7 +2148,13 @@ function handle(m){
       toast(i18n('connected', m.mode||'')); break;
 
     case 'partial_transcript':
-      setVoice('user'); s.ui.input=m.text; paint(s); break;
+      if(m.text && !m.non_interrupting) setVoice('user');
+      s.ui.input=m.text; paint(s); break;
+
+    case 'user_backchannel':
+      // Acknowledgement while listening: display without resetting reply state.
+      s.ui.input=m.text; paint(s);
+      addTurn(s,'user',m.text,s.ui.speaker||'你'); break;
 
     case 'user_transcript':
       // 新的一轮：先把上一轮的标签清掉。这一轮抽出什么，等 ingest 完了再填。
@@ -2138,6 +2164,8 @@ function handle(m){
       addTurn(s,'user',m.text,s.ui.speaker||'你'); break;
 
     case 'memory_hits': {
+      // 展示可能晚于首音频；旧回合的后台结果不能覆盖新回合。
+      if(m.output_id && m.output_id!==pcmOutputId) break;
       const L=m.left_brain||[], R=m.right_brain_hits||[];
       s.ui.tags={emo:m.emotion||'',
                  ent:(m.entities||[]).join('、'),
@@ -2292,7 +2320,7 @@ async function playMemoryClip(id){
     if(!r.ok){ console.warn('[replay] 取录音失败', id, r.status); return; }
     const ctx=ensurePlayback();
     const buf=await ctx.decodeAudioData(await r.arrayBuffer());
-    const src=ctx.createBufferSource(); src.buffer=buf; src.connect(ctx.destination);
+    const src=ctx.createBufferSource(); src.buffer=buf; src.connect(playBus);
     scheduled.push(src);
     // 排在助手那句引出语后面，但**别无限等下去**：realtime 的音频块是流式排队的，
     // nextPlay 会一直往后推，等它排完可能是十几秒后——用户早就以为"没播"了。

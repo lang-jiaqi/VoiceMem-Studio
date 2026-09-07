@@ -41,16 +41,81 @@ DEFAULT = "平静"
 #:      就是"这一段是语气标注"的强信号:正常口语回复几乎不会以"短词+竖线"开头。
 #:      认不出是哪个语气就退默认(见 split),但**一定要剥**——宁可语气不准,也不能
 #:      让 "Light|" 被念出来、还写进记忆。
+#:
+#:      竖线前给到 24 个字符,不是 16。16 是照着 "Light|" 这种单词估的,但 4B 说英文
+#:      时会把整个标签意译过去——实测吐的是 ``Light and breezy |``,竖线前 17 个字符,
+#:      正好越界。越界的后果不是"语气不准",是整条正则不匹配、标签原样进 TTS：日志里
+#:      `[seg] 第一段 25 字 → "Light and breezy | You're"` 就是它被念出来的样子。
+#:      24 能装下这类意译（最长的 "Serious and steady " 是 19）。
 #:   2. ``[轻快] 正文``：方括号,小模型爱自作主张。
 #:   3. ``轻快 正文``：裸语气词 + 分隔符（漏了竖线）。这条**必须**限定成那 8 个词,
 #:      否则会把正常句子的第一个词吃掉。
 _T = "温和|共情|轻快|认真|鼓励|俏皮|抱歉|平静"
 _TAG = re.compile(
     rf"^\s*(?:"
-    rf"([^\n|｜]{{1,16}})[|｜]\s*"        # 任意短前缀 + 竖线（Light| / 标签：轻快|）
+    rf"([^\n|｜]{{1,24}})[|｜]\s*"        # 任意短前缀 + 竖线（Light| / 标签：轻快|）
     rf"|[\[【]\s*({_T})\s*[\]】]\s*"      # [轻快]
     rf"|({_T})[\s:：]+"                   # 轻快<分隔符>
     rf")")
+
+
+#: 模型意译出来的英文标签 → 那 8 个内部枚举。**只在剥掉之后用来认语气**，
+#: 不参与匹配（匹配靠竖线）。没有它的话，所有英文回复的语气都塌回 DEFAULT——
+#: 标签是剥干净了，但等于全程没语气，这也是"上下句情绪对不上"的一半原因。
+_ALIAS: dict[str, str] = {
+    "gentle": "温和", "warm": "温和", "soft": "温和", "caring": "温和",
+    "empath": "共情", "compassion": "共情", "understanding": "共情",
+    "light": "轻快", "breezy": "轻快", "cheerful": "轻快", "upbeat": "轻快",
+    "serious": "认真", "steady": "认真", "matter-of-fact": "认真",
+    "encourag": "鼓励", "supportive": "鼓励",
+    "playful": "俏皮", "teasing": "俏皮",
+    "sorry": "抱歉", "apologetic": "抱歉", "regret": "抱歉",
+    "calm": "平静", "neutral": "平静", "plain": "平静",
+}
+
+
+def _from_head(head: str) -> str:
+    """竖线前那段里认语气：先找中文枚举，再找英文意译，都认不出退默认。"""
+    tag = next((t for t in TONES if t in head), "")
+    if tag:
+        return tag
+    low = (head or "").lower()
+    return next((t for k, t in _ALIAS.items() if k in low), DEFAULT)
+
+
+#: 相邻两轮之间语气最多挪这么远（下面那个坐标系里的欧氏距离）。
+#: 0.35 让 轻快→抱歉 这种对角跳变成两步（先落到 认真/平静），一步到位的只有近邻。
+MAX_STEP = 0.35
+
+#: 八个语气在(唤起, 暖度)上的位置。**跳变刺耳的是距离，不是标签本身**——
+#: 轻快→温和 换了标签但听着自然，轻快→抱歉 就突兀，差别全在这两个轴上隔多远。
+_XY: dict[str, tuple[float, float]] = {
+    "平静": (0.35, 0.50), "认真": (0.40, 0.45), "温和": (0.35, 0.65),
+    "共情": (0.25, 0.55), "抱歉": (0.25, 0.30), "鼓励": (0.70, 0.75),
+    "轻快": (0.70, 0.80), "俏皮": (0.80, 0.85),
+}
+
+
+def smooth(prev: str, tag: str, max_step: float = MAX_STEP) -> str:
+    """把这一轮的语气往上一轮那边拉一把，隔太远就只走一步。
+
+    模型每轮是**独立**挑语气的，它不知道上一句用的什么，所以日志里会出现
+    ``轻快 → 平静 → 抱歉`` 这种三连跳——单看每一句都挑得对，连起来听就像换了个人。
+
+    这里不封顶情绪范围，只封顶**每轮的变化量**：想从轻快走到抱歉可以，得走两轮。
+    代价说清楚：用户突然说了件难过的事时，这一轮只能到 认真，下一轮才到 抱歉，
+    共情来晚一轮。觉得反应太钝就把 ``max_step`` 调大（1.0 = 不平滑）。
+    """
+    if not prev or prev == tag or prev not in _XY or tag not in _XY:
+        return tag or DEFAULT
+    (x0, y0), (x1, y1) = _XY[prev], _XY[tag]
+    dx, dy = x1 - x0, y1 - y0
+    dist = (dx * dx + dy * dy) ** 0.5
+    if dist <= max_step:
+        return tag
+    k = max_step / dist                       # 只走到路上的这一点
+    tx, ty = x0 + dx * k, y0 + dy * k
+    return min(_XY, key=lambda t: (_XY[t][0] - tx) ** 2 + (_XY[t][1] - ty) ** 2)
 
 
 def split(text: str) -> tuple[str, str]:
@@ -63,9 +128,7 @@ def split(text: str) -> tuple[str, str]:
     if not m:
         return "", text
     if m.group(1) is not None:                     # 竖线那条：前缀里找语气词
-        head = m.group(1)
-        tag = next((t for t in TONES if t in head), DEFAULT)
-        return tag, text[m.end():]
+        return _from_head(m.group(1)), text[m.end():]
     tag = (m.group(2) or m.group(3) or "").strip()
     return (tag, text[m.end():]) if tag in TONES else ("", text)
 

@@ -15,7 +15,7 @@ _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 class _Tee:
-    def __init__(self, console, logfile, label: str, lock: threading.RLock):
+    def __init__(self, console, logfile, label: str, lock: threading.RLock, concise=False):
         self.console = console
         self.logfile = logfile
         self.label = label
@@ -23,11 +23,32 @@ class _Tee:
         self._line_start = True
         self.encoding = getattr(console, "encoding", "utf-8")
         self.errors = getattr(console, "errors", "replace")
+        self.concise = concise
+        self._console_pending = ""
+        self._traceback = False
+
+    def _console_line(self, line):
+        clean = _ANSI.sub("", line).strip()
+        warning = bool(re.search(r"失败|异常|⚠|\b(?:warning|error|exception|critical|traceback)\b", clean, re.I))
+        if clean.startswith("Traceback"):
+            self._traceback = True
+        if clean.startswith(("[lat]", "[tts-prompt]", "[log]")) or warning or self._traceback:
+            # Leave the full timing breakdown in the file; hide rolling medians
+            # in the terminal. Browser playback latency remains its own line.
+            self.console.write(line.split("｜", 1)[0].rstrip() + "\n")
+        if self._traceback and clean and not line[:1].isspace() and not clean.startswith("Traceback"):
+            self._traceback = False
 
     def write(self, value) -> int:
         text = str(value)
         with self.lock:
-            self.console.write(text)
+            if not self.concise:
+                self.console.write(text)
+            else:
+                self._console_pending += text.replace("\r", "\n")
+                while "\n" in self._console_pending:
+                    line, self._console_pending = self._console_pending.split("\n", 1)
+                    self._console_line(line)
             clean = _ANSI.sub("", text).replace("\r", "\n")
             for part in clean.splitlines(keepends=True):
                 if self._line_start:
@@ -53,7 +74,7 @@ class _Tee:
         return True
 
 
-def setup_file_logging(root: Path, requested: str = "") -> Path:
+def setup_file_logging(root: Path, requested: str = "", *, concise=False) -> Path:
     """Mirror stdout/stderr to one timestamped UTF-8 file and return its path."""
     if requested:
         path = Path(requested).expanduser()
@@ -67,8 +88,8 @@ def setup_file_logging(root: Path, requested: str = "") -> Path:
     logfile = path.open("a", encoding="utf-8", buffering=1)
     lock = threading.RLock()
     original_stdout, original_stderr = sys.stdout, sys.stderr
-    sys.stdout = _Tee(original_stdout, logfile, "stdout", lock)
-    sys.stderr = _Tee(original_stderr, logfile, "stderr", lock)
+    sys.stdout = _Tee(original_stdout, logfile, "stdout", lock, concise=concise)
+    sys.stderr = _Tee(original_stderr, logfile, "stderr", lock, concise=concise)
 
     def close() -> None:
         with lock:

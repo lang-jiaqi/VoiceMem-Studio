@@ -1,0 +1,15 @@
+{
+  "description": "虚构的 demo-zh 测试事实，不代表真实用户资料。固定10条，用于召回与时延测试。",
+  "memories": [
+    {"id": "clean01", "text": "用户居住在新加坡东海岸。", "slot": "daily_life", "entity": "新加坡东海岸", "entity_type": "place", "question": "我住在什么地方？"},
+    {"id": "clean02", "text": "用户最喜欢的咖啡是无糖拿铁。", "slot": "daily_life", "entity": "无糖拿铁", "entity_type": "preference", "question": "我最喜欢喝什么咖啡？"},
+    {"id": "clean03", "text": "用户每周六上午打羽毛球。", "slot": "health", "entity": "打羽毛球", "entity_type": "routine", "question": "我一般什么时候打羽毛球？"},
+    {"id": "clean04", "text": "用户的朋友林悦是一名平面设计师。", "slot": "relationships", "entity": "林悦", "entity_type": "person", "question": "我的朋友林悦是做什么工作的？"},
+    {"id": "clean05", "text": "用户正在开发的项目叫星河语音助手。", "slot": "work", "entity": "星河语音助手", "entity_type": "project", "question": "我正在开发的项目叫什么名字？"},
+    {"id": "clean06", "text": "用户计划在2026年9月18日演示星河语音助手。", "slot": "goals", "entity": "星河语音助手", "entity_type": "project", "question": "我计划哪天演示星河语音助手？"},
+    {"id": "clean07", "text": "用户最近正在学习Rust编程语言。", "slot": "knowledge", "entity": "Rust", "entity_type": "knowledge", "question": "我最近在学哪门编程语言？"},
+    {"id": "clean08", "text": "用户每月购买书籍的预算是200元人民币。", "slot": "finance", "entity": "买书预算", "entity_type": "asset", "question": "我每个月买书的预算是多少？"},
+    {"id": "clean09", "text": "用户下一次旅行想去日本京都。", "slot": "goals", "entity": "日本京都", "entity_type": "place", "question": "我下次想去哪里旅行？"},
+    {"id": "clean10", "text": "用户最喜欢的音乐类型是爵士乐。", "slot": "daily_life", "entity": "爵士乐", "entity_type": "preference", "question": "我最喜欢什么类型的音乐？"}
+  ]
+}

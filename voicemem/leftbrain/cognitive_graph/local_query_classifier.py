@@ -82,8 +82,8 @@ class LocalQueryClassifier:
     def classify(self, query: str, extra_slots=None) -> QueryClassification:
         """base-7 里挑 top-k 个 slot（E5 余弦）+ 可选本地实体。extra_slots（动态子
         slot 候选）本地版忽略——子 slot 下钻交给 LLM 版/写入侧维护。"""
-        q = np.asarray(self._m().encode([f"{self._spec.query_prefix}{query}"],
-                                        normalize_embeddings=True)[0])
+        from voicemem.leftbrain.query_embedding import encode_query
+        q = encode_query(self._m(), f"{self._spec.query_prefix}{query}")
         order = np.argsort(-(self._slots_matrix() @ q))[: self._top_k]
         slots = [self._slot_names[i] for i in order]
         entities = list(self._ner(query)) if self._ner else []

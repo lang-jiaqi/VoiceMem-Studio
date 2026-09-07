@@ -15,6 +15,8 @@ out/
 
 # 环境与本地配置
 .env
+.env.*
+!.env.example
 .venv/
 .claude/
 .DS_Store
@@ -56,3 +58,10 @@ voicemem_memoryspace/myvoicemem/*
 !voicemem_memoryspace/demo-en/.gitkeep
 !voicemem_memoryspace/myvoicemem/.gitkeep
 cache/
+
+# Actual prompts contain conversation history and private memories.
+/prompt/*
+!/prompt/README.md
+
+# Local reference voices and generated voice tests are not distributable code.
+/voice/

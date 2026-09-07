@@ -40,11 +40,13 @@ class Job:
     排在它后面干等。实测赌错的那轮，真回合"排队等 GPU 线程"要 400~1300ms。
     """
 
-    __slots__ = ("out", "_cancelled")
+    __slots__ = ("out", "_cancelled", "solo")
 
-    def __init__(self):
+    def __init__(self, solo: bool = False):
         self.out: queue.Queue = queue.Queue()
         self._cancelled = False
+        #: 还没吐出第一项之前独占线程（TTS 首块用）。第一项一出就清掉，回到轮转。
+        self.solo = solo
 
     def cancel(self) -> None:
         self._cancelled = True
@@ -61,6 +63,8 @@ class GpuLoop:
         self._jobs: queue.Queue = queue.Queue()   # 新任务:(make_gen, out_queue)
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        #: 此刻在轮转的生成器数（只读，给日志用）。>1 就说明有活儿在互相稀释。
+        self.active_count = 0
 
     def _ensure(self):
         with self._lock:
@@ -74,7 +78,7 @@ class GpuLoop:
         代码(比如生成器内部要加载模型)直接干就行,再 ``call`` 一次会死等自己。"""
         return threading.current_thread() is self._thread
 
-    def iter(self, make_gen, weight: int = 1) -> "Job":
+    def iter(self, make_gen, weight: int = 1, solo_first: bool = False) -> "Job":
         """把 ``make_gen``(一个**在 GPU 线程上**被调用、返回生成器的函数)排进来。
 
         返回一个队列:每步吐 ``("ok", 项)`` 或 ``("err", 异常)``,结束吐 ``None``。
@@ -83,8 +87,12 @@ class GpuLoop:
 
         ``weight``:每轮连着走几步。轮询是公平的 1:1,但 TTS 要跟上播放、LLM 只要
         喂饱分句——给 TTS 高一点(比如 4),它就不会因为跟 LLM 平摊算力而欠载卡顿。
+
+        ``solo_first``:第一项吐出来之前,别的生成器都停一停。TTS 首块就是"多久能
+        出声",那一百多毫秒里 LLM 每插一步(28ms)都直接加在首帧上;而首段文字早就
+        在手,LLM 晚这一点续着生成,后面的段照样赶得上。
         """
-        job = Job()
+        job = Job(solo=solo_first)
         self._jobs.put((make_gen, job, max(1, weight)))
         self._ensure()
         return job
@@ -119,12 +127,17 @@ class GpuLoop:
             # 每个活跃生成器走 weight 步再轮到下一个:TTS 权重高,跟得上播放;
             # LLM 权重 1,喂饱分句就行。全在这一条线程,从不并发提交。
             still: list[list] = []
+            # 有等首块的独占任务时，这一轮只推它；其他的原地等着，不丢。
+            solo = [e for e in active if e[1].solo and not e[1].cancelled]
             for entry in active:
                 gen, job, weight = entry
                 out = job.out
                 if job.cancelled:              # 上层不要了 → 立刻收手，别再占 GPU
                     gen.close()
                     out.put(_DONE)
+                    continue
+                if solo and entry not in solo:
+                    still.append(entry)
                     continue
                 alive = True
                 for _ in range(weight):
@@ -140,9 +153,13 @@ class GpuLoop:
                         alive = False
                         break
                     out.put(("ok", item))
+                    if job.solo:                   # 首块到手，回到公平轮转
+                        job.solo = False
+                        break
                 if alive:
                     still.append(entry)
             active = still
+            self.active_count = len(active)
 
     @staticmethod
     def _begin(pending, active):

@@ -79,7 +79,8 @@ class ASTEnvironmentDetector:
 
             inputs = self._processor(audio, sampling_rate=16000, return_tensors="pt")
             inputs = {name: value.to(self._device) for name, value in inputs.items()}
-            with torch.inference_mode():
+            from voicemem.utils.torch_lock import TORCH_LOCK
+            with TORCH_LOCK, torch.inference_mode():
                 output = self._model(**inputs, output_hidden_states=True)
                 scores = torch.sigmoid(output.logits[0]).cpu().numpy()
                 embedding = output.hidden_states[-1][0].mean(dim=0).cpu().numpy()
