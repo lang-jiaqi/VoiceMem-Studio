@@ -415,6 +415,33 @@ class BackchannelVoice:
         h = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
         return _cache_root() / f"{h}.pcm"
 
+    def _bundled_pcm(self, token: str, style_idx: int) -> bytes:
+        """Load a reviewed clip when this TTS uses the bundled Noctelle voice.
+
+        The WAV bank is deliberately voice-specific.  Comparing the reference
+        bytes prevents a custom voice with the same filename from silently
+        playing Noctelle's acknowledgements.
+        """
+        if self.lang != "zh" or style_idx != 0 or "/" in token or "\\" in token:
+            return b""
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        bundled_ref = root / "voice" / "noctelle_ref_short.wav"
+        ref = getattr(self.tts, "ref_audio", None)
+        try:
+            if not ref or Path(ref).read_bytes() != bundled_ref.read_bytes():
+                return b""
+            clip = root / "voice" / "backchannel" / f"OK_{token}.wav"
+            if not clip.is_file():
+                return b""
+            import wave
+            with wave.open(str(clip), "rb") as wav:
+                if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) != (1, 2, 24000):
+                    raise ValueError(f"bundled backchannel has wrong format: {clip}")
+                return wav.readframes(wav.getnframes())
+        except OSError:
+            return b""
+
     def _tokens(self) -> list[str]:
         seen, out = set(), []
         for group in _TOKENS[self.lang].values():
@@ -512,11 +539,21 @@ class BackchannelVoice:
         root.mkdir(parents=True, exist_ok=True)
         tokens = self._tokens() if tokens is None else list(tokens)
         styles = _STYLES[self.lang][:variants]
+        bundled = 0
+        for token in tokens:
+            for i in range(len(styles)):
+                path = self._path(token, i)
+                if not path.is_file():
+                    pcm = self._bundled_pcm(token, i)
+                    if pcm:
+                        path.write_bytes(self._normalize(pcm))
+                        bundled += 1
         cached = sum(1 for tk in tokens for i in range(len(styles))
                      if self._path(tk, i).is_file())
         total = len(tokens) * len(styles)
         print(f"[backchannel] 开始预合成：{self.lang} / {self.voice_id} · "
               f"{total} 条，其中 {cached} 条已有缓存"
+              + (f"（从仓库定稿装入 {bundled} 条）" if bundled else "")
               + ("，仅加载缓存" if cache_only else
                  "" if cached == total else f"，要现合成 {total - cached} 条（首次启动）"),
               flush=True)

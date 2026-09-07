@@ -69,5 +69,10 @@ cache/
 !/prompt/llm_context.json
 !/prompt/tts.json
 
-# Local reference voices and generated voice tests are not distributable code.
-/voice/
+# Only the selected demo voice and its hand-picked backchannel clips are shipped.
+# Other local reference voices and generated voice tests stay private.
+/voice/*
+!/voice/noctelle_ref_short.wav
+!/voice/noctelle_ref_short.txt
+!/voice/backchannel/
+!/voice/backchannel/OK_*.wav

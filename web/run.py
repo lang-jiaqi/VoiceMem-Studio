@@ -4242,7 +4242,8 @@ if __name__ == "__main__":
             # live turns only read it, never wait behind background synthesis.
             from harness.backchannel import BackchannelVoice
             _bc_voice = BackchannelVoice(_tts, lang=space_language(ACTIVE_SPACE))
-            # 中文这 8 个词是逐条试听定下来的（片段已装进缓存，启动只读不合）。
+            # 中文这 11 个词是逐条试听定下来的；Noctelle 音色直接从仓库 WAV 装入
+            # 缓存，换成别的参考音色才会首次启动现合成。
             _bc_tokens = (["嗯", "嗯嗯", "对", "对啊", "是啊", "哦", "哦哦", "这样啊",
                            "不错", "我知道了", "挺好的"]
                           if _bc_voice.lang == "zh" else ["mm-hmm", "yeah", "right", "oh", "okay"])
