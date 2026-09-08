@@ -114,20 +114,22 @@ class StreamingASR:
 # ── 默认流式 ASR：FunASR paraformer-zh-streaming ────────────────────────────────
 
 class FunASRStreamingASR:
-    """FunASR ``paraformer-zh-streaming``，出实时 partial 文本（核心默认流式 ASR）。
+    """Streaming FunASR ``paraformer-zh-streaming`` with cumulative text.
 
-    paraformer 是**按块**推理的（``chunk_size=[0,10,5]`` → 600ms/块），而
-    ``VoiceStream.feed()`` 喂进来的帧长由调用方决定（web 前端发 20ms 一帧），所以这里
-    内部攒够 600ms 才推一次；``feed()`` 与 sherpa 版语义一致，返回**累积**文本
-    （``VoiceStream`` 是 ``self._text = asr.feed(frame)`` 赋值语义，不能返回增量）。
+    Paraformer decodes 600 ms chunks while callers may provide much shorter
+    frames. ``feed()`` buffers those frames and returns all text decoded so far,
+    matching the sherpa streaming adapter's contract.
 
-    ``flush()``：VAD 判说完时由 ``VoiceStream`` 调一次——把不足一块的尾巴补零、跑一次
-    ``is_final=True``，取出解码器 look-ahead 里还没吐的最后几个字。flush 之后若又来
-    音频（说到一半停顿又续上），自动起一条新的子流继续累积，不会把这一轮的文本丢掉。
+    ``flush()`` appends 50 ms of zero-valued audio to the real tail and sends
+    the final piece with ``is_final=True``. The right context lets the decoder
+    release trailing tokens without inventing a full 600 ms pause. Audio that
+    arrives after a flush starts a fresh decoder cache while retaining the
+    cumulative text for the current utterance.
     """
 
     CHUNK_SIZE = [0, 10, 5]                    # paraformer-streaming 标配
     STRIDE     = CHUNK_SIZE[1] * 960           # 9600 samples @16k = 600ms
+    FINAL_PAD_SAMPLES = round(SAMPLE_RATE * 0.050)
     LOOK_BACK  = dict(encoder_chunk_look_back=4, decoder_chunk_look_back=1)
 
     #: 离线包里的位置。跟回退那套并列放在 asr/ 下——两个都是流式 ASR，区别只是
@@ -194,13 +196,17 @@ class FunASRStreamingASR:
         return self._text
 
     def flush(self) -> str:
-        """VAD 判说完时调：尾巴补零跑 is_final=True，别丢最后几个字。幂等。"""
+        """Append 50 ms of zero audio and finalize the buffered decoder tail."""
         if self._final:
             return self._text
-        tail = self._buf
+        tail = np.concatenate([
+            self._buf,
+            np.zeros(self.FINAL_PAD_SAMPLES, dtype=np.float32),
+        ])
         self._buf = np.zeros(0, dtype=np.float32)
-        tail = (np.pad(tail, (0, self.STRIDE - len(tail))) if len(tail)
-                else np.zeros(self.STRIDE, dtype=np.float32))
+        while len(tail) > self.STRIDE:
+            self._run(tail[:self.STRIDE], False)
+            tail = tail[self.STRIDE:]
         self._final = True
         return self._run(tail, True)
 
@@ -287,4 +293,3 @@ class OfflineASR:
         st.accept_waveform(SAMPLE_RATE, a)
         self.rec.decode_stream(st)
         return (st.result.text or "").strip()
-

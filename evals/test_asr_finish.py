@@ -12,6 +12,58 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from voicemem.stream import VoiceStream, _AsrWorker
+from voicemem.utils.audio.asr import FunASRStreamingASR
+
+
+class FunASRFlushPaddingTests(unittest.TestCase):
+    @staticmethod
+    def make_asr(tail):
+        asr = object.__new__(FunASRStreamingASR)
+        asr._buf = np.asarray(tail, dtype=np.float32)
+        asr._text = "partial"
+        asr._final = False
+        calls = []
+
+        def run(samples, is_final):
+            calls.append((np.array(samples, copy=True), is_final))
+            if is_final:
+                asr._text = "complete"
+            return asr._text
+
+        asr._run = run
+        return asr, calls
+
+    def test_flush_appends_exactly_fifty_ms_of_zero_audio(self):
+        real_tail = np.linspace(-0.5, 0.5, 137, dtype=np.float32)
+        asr, calls = self.make_asr(real_tail)
+
+        self.assertEqual(asr.flush(), "complete")
+        self.assertEqual(len(calls), 1)
+        sent, is_final = calls[0]
+        self.assertTrue(is_final)
+        np.testing.assert_array_equal(sent[:len(real_tail)], real_tail)
+        np.testing.assert_array_equal(
+            sent[len(real_tail):],
+            np.zeros(FunASRStreamingASR.FINAL_PAD_SAMPLES, dtype=np.float32),
+        )
+        self.assertEqual(FunASRStreamingASR.FINAL_PAD_SAMPLES, 800)
+
+        self.assertEqual(asr.flush(), "complete")
+        self.assertEqual(len(calls), 1)
+
+    def test_padding_crossing_stride_preserves_chunk_order(self):
+        real_tail = np.ones(FunASRStreamingASR.STRIDE - 300, dtype=np.float32)
+        asr, calls = self.make_asr(real_tail)
+
+        asr.flush()
+
+        self.assertEqual([final for _, final in calls], [False, True])
+        combined = np.concatenate([samples for samples, _ in calls])
+        expected = np.concatenate([
+            real_tail,
+            np.zeros(FunASRStreamingASR.FINAL_PAD_SAMPLES, dtype=np.float32),
+        ])
+        np.testing.assert_array_equal(combined, expected)
 
 
 class FinishTests(unittest.IsolatedAsyncioTestCase):
