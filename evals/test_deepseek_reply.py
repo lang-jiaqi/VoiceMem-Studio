@@ -12,7 +12,7 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from voicemem.reply import deepseek_reply
+from voicemem.reply import deepseek_reply, reply_request_options
 
 
 class Body(httpx.AsyncByteStream):
@@ -72,6 +72,33 @@ class DeepSeekTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await provider.aclose()
         self.assertTrue(clients[0].is_closed)
+
+    async def test_thinking_effort_is_dynamic_and_reasoning_is_not_spoken(self):
+        body = Body(
+            event({"choices": [{"delta": {"reasoning_content": "private"}}]})
+            + event({"choices": [{"delta": {"content": "答案"}}]})
+            + b"data: [DONE]\n\n")
+        requests = []
+        original = httpx.AsyncClient
+
+        def handle(request):
+            requests.append(request)
+            return httpx.Response(200, stream=body)
+
+        with patch("httpx.AsyncClient", side_effect=lambda **kw: original(
+                transport=httpx.MockTransport(handle), **kw)):
+            provider = deepseek_reply(api_key="test-only")
+            try:
+                with reply_request_options(reasoning_effort="low"):
+                    result = [item async for item in provider("需要解释的问题")]
+            finally:
+                await provider.aclose()
+
+        self.assertEqual(result, ["答案"])
+        payload = json.loads(requests[0].content)
+        self.assertEqual(payload["thinking"], {"type": "enabled"})
+        self.assertEqual(payload["reasoning_effort"], "low")
+        self.assertEqual(payload["max_tokens"], 1024)
 
     async def test_early_close_and_cancel_release_http_response(self):
         original = httpx.AsyncClient

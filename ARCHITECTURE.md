@@ -64,15 +64,18 @@ storage semantics.
 
 The repository-only `harness/` layer separates four dialogue policy areas:
 
-- `reply_modes/` reserves `memory_cot`, `memory`, and `direct` contracts;
+- `reply_modes/` owns the local post-ASR three-way reply router and reserves
+  `memory_cot`, `memory`, and `direct` contracts;
 - `persona/` reserves stable agent identity prompts;
 - `speaking_style/` owns the active context-dependent depth and textual emotion
   arc instructions;
 - `turn_taking/` owns the session state machine, backchannel curve, backchannel
   voice cache, and short-acknowledgement and long-work filler timing.
 
-The reply-mode router and persona folder are currently scaffolds. Stable
-reply-mode identifiers are already consumed by the turn-taking state machine.
+The persona folder and reply-path prompts are currently scaffolds. A local
+Qwen3-0.6B router assigns internal `fast`, `medium`, or `slow` labels after
+confirmed ASR and maps them to the three reply modes; stable mode identifiers
+are consumed by the turn-taking state machine.
 The Web composition root injects speaking-style prompts and executes the
 state-machine decisions. Low-level pause detection and browser audio transport
 remain in `web/run.py`.
@@ -250,8 +253,10 @@ These stages answer different questions and keep separate state:
 | `deep` | Yes | Yes |
 
 The gate combines a closed backchannel vocabulary, high-precision lexical
-rules, and an embedding fallback. Final route decisions use the complete
-utterance. Earlier partial decisions are provisional.
+rules, and an embedding fallback. Its complete-utterance result is authoritative
+for reusable core consumers. In the Studio `llm_tts` composition, it is also a
+speculative retrieval hint; the post-ASR reply router owns the final decision to
+inject memory into the reply.
 
 For deep turns, speculative classify/search starts while speech is still in
 progress. Query embedding work is shared within a search scope, and device
@@ -311,14 +316,19 @@ partial ASR remains transient UI state rather than a chat bubble. It may seed
 buffered speculative work, but that work is cancelled if speech resumes and
 cannot become an accepted reply before confirmation.
 
-After confirmation, one session-scoped `TurnTakingStateMachine` chooses the
-handoff. Ready audio is released directly. An ordinary predicted wait may use a
-cached acknowledgement, while only the explicit `memory_cot` mode may request
-an LLM-generated work filler. The current reply-mode router does not yet emit
-`memory_cot`, so normal runtime turns use only direct or cached handoffs. First
-audio observations update the session estimate used by later decisions. Main
-reply work runs into a `ReplySink` while either filler plays; releasing that
-sink shortly before the filler ends overlaps work without interleaving output.
+After confirmation, the local Qwen router selects exactly one reply mode:
+`direct` (instant), `memory` (mem), or `memory_cot` (mem+cot). `direct` discards
+any speculative memory result. The memory modes reuse an eligible speculative
+result or complete retrieval before generation. A route change between an early
+snapshot and final ASR invalidates buffered early output.
+
+One session-scoped `TurnTakingStateMachine` then chooses the handoff. Ready
+audio is released directly. An ordinary predicted wait may use a cached
+acknowledgement, while only `memory_cot` may request an LLM-generated work
+filler. First audio observations update the session estimate used by later
+decisions. Main reply work runs into a `ReplySink` while either filler plays;
+releasing that sink shortly before the filler ends overlaps work without
+interleaving output.
 
 ## 9. Reply, prompt, and speech flow
 
@@ -333,6 +343,13 @@ Studio system prompt
 + route-eligible persistent memory
 + contextual directives
 ```
+
+Reply mode is one per-turn signal rather than an independent memory and thinking
+pair. The local router runs outside the WebSocket loop under the process Torch
+lock. Chinese input uses a Chinese routing policy. Provider-neutral request
+options carry the required reasoning across async reply iteration: `direct` and
+`memory` use non-thinking generation, while `memory_cot` uses high effort.
+Reasoning content remains private and is never spoken.
 
 `build_reply_context` is the shared context builder used by actual generation
 and local-model prewarming. Keeping one builder preserves local prefix-cache
@@ -468,6 +485,8 @@ scheduled. A later UI space change cannot redirect an existing write.
 | Factual and affective memory | Memory Space stores | Persistent |
 | Streaming ASR/VAD/EOT/gate state | `VoiceStream` | Input turn/session |
 | Turn-taking phase, latency estimate, and backchannel policy | `TurnTakingStateMachine` | WebSocket session |
+| Reply router model | `harness/reply_modes` | Process |
+| Reply mode | Confirmed `Pending` turn | Turn |
 | Early output buffer | `ReplySink` | Speculative assistant output |
 | Short-term dialogue | `SessionBuffer` | WebSocket session + Memory Space |
 | Text/media alignment | `AudioTimeline` | Assistant output ID |
@@ -508,6 +527,7 @@ network-provider performance require the corresponding native environment.
 | Spoken backchannel behavior | `harness/turn_taking/` and Web playback |
 | Tone-label protocol | `voicemem/tts_control.py`, prompts, and TTS wiring |
 | Reply provider | `voicemem/reply.py` or `local_llm.py`, then config |
+| Three-way reply routing | `harness/reply_modes/` and Web composition root |
 | TTS provider | `voicemem/tts.py` or provider module, then config |
 | GPU scheduling | `voicemem/utils/gpu_loop.py` |
 | Prompt parsing | `voicemem/prompt_config.py` and `prompt/` schema |

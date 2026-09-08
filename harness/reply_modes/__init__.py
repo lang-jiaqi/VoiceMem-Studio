@@ -1,8 +1,4 @@
-"""Reserved contracts for selecting how a reply is produced.
-
-The runtime does not select among these modes yet. Keeping the identifiers
-stable lets the future router and turn-taking layer agree on mode names.
-"""
+"""Stable contracts for selecting how a Studio reply is produced."""
 
 MEMORY_COT = "memory_cot"
 MEMORY = "memory"
@@ -10,4 +6,28 @@ DIRECT = "direct"
 
 AVAILABLE_MODES = (MEMORY_COT, MEMORY, DIRECT)
 
-__all__ = ["AVAILABLE_MODES", "DIRECT", "MEMORY", "MEMORY_COT"]
+from .thinking import (
+    FAST,
+    MEDIUM,
+    SLOW,
+    THINKING_LEVELS,
+    QwenThinkingRouter,
+    ThinkingDecision,
+    parse_level,
+    thinking_router,
+)
+
+__all__ = [
+    "AVAILABLE_MODES",
+    "DIRECT",
+    "FAST",
+    "MEDIUM",
+    "MEMORY",
+    "MEMORY_COT",
+    "SLOW",
+    "THINKING_LEVELS",
+    "QwenThinkingRouter",
+    "ThinkingDecision",
+    "parse_level",
+    "thinking_router",
+]

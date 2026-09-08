@@ -28,9 +28,43 @@ from __future__ import annotations
 import asyncio
 import inspect
 import os
-from typing import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+
 from voicemem.llm_config import resolve_api_key, resolve_base_url, resolve_model
 from voicemem.prompt_trace import record_request
+
+
+@dataclass(frozen=True)
+class ReplyRequestOptions:
+    """Provider-neutral, task-local options for one reply request."""
+
+    reasoning_effort: str = "none"
+
+
+_REQUEST_OPTIONS: ContextVar[ReplyRequestOptions | None] = ContextVar(
+    "voicemem_reply_request_options", default=None)
+
+
+@contextmanager
+def reply_request_options(*, reasoning_effort: str = "none"):
+    """Apply per-request options across async provider iteration."""
+    if reasoning_effort not in {"none", "low", "high", "max"}:
+        raise ValueError(f"unsupported reasoning_effort={reasoning_effort!r}")
+    token = _REQUEST_OPTIONS.set(ReplyRequestOptions(reasoning_effort))
+    try:
+        yield
+    finally:
+        _REQUEST_OPTIONS.reset(token)
+
+
+async def apply_reply_request_options(stream, *, reasoning_effort: str = "none"):
+    """Iterate a normalized reply stream with task-local provider options."""
+    with reply_request_options(reasoning_effort=reasoning_effort):
+        async for item in stream:
+            yield item
 
 # memory_context 只是「记得关于用户的哪些事」，本身不含人设/风格要求，所以内置
 # provider 把它接在人设后面，而不是拿它整个当 system prompt。
@@ -106,6 +140,7 @@ def deepseek_reply(model: str | None = None, api_key: str | None = None,
     if not key:
         raise ValueError("DeepSeek 回复需要 DEEPSEEK_API_KEY；不要把密钥写进仓库")
     import json
+
     import httpx
     model = model or os.environ.get("VOICEMEM_DEEPSEEK_MODEL", "deepseek-v4-flash")
     url = (base_url or "https://api.deepseek.com").rstrip("/") + "/chat/completions"
@@ -141,9 +176,13 @@ def deepseek_reply(model: str | None = None, api_key: str | None = None,
                         raise RuntimeError("DeepSeek stream returned an error")
                     choices = chunk.get("choices") or []
                     if choices:
-                        content = choices[0].get("delta", {}).get("content")
+                        delta = choices[0].get("delta", {})
+                        reasoning = delta.get("reasoning_content")
+                        if reasoning:
+                            yield "reasoning", reasoning
+                        content = delta.get("content")
                         if content:
-                            yield content
+                            yield "content", content
             raise RuntimeError("DeepSeek stream ended before [DONE]")
 
     async def fn(text: str, memory_context: str = "", history: list | None = None):
@@ -153,8 +192,16 @@ def deepseek_reply(model: str | None = None, api_key: str | None = None,
         messages.append({"role": "user", "content":
                          f"{memory_context}\n\n{text}" if memory_context else text})
         # Consume SSE directly so early generator closure releases httpcore cleanly.
+        options = _REQUEST_OPTIONS.get() or ReplyRequestOptions()
+        effort = options.reasoning_effort
+        default_budget = {"none": 512, "low": 1024, "high": 4096, "max": 8192}[effort]
+        max_tokens = int(os.environ.get(
+            f"VOICEMEM_DEEPSEEK_MAX_TOKENS_{effort.upper()}", default_budget))
         request = {"model": model, "messages": messages, "stream": True,
-                   "thinking": {"type": "disabled"}, "max_tokens": 512}
+                   "thinking": {"type": "disabled" if effort == "none" else "enabled"},
+                   "max_tokens": max_tokens}
+        if effort != "none":
+            request["reasoning_effort"] = effort
         record_request("llm", "deepseek", request)
         last_error = None
         for attempt in range(2):
@@ -191,9 +238,12 @@ def deepseek_reply(model: str | None = None, api_key: str | None = None,
                 raise
             else:
                 try:
-                    yield first
-                    async for content in stream:
-                        yield content
+                    kind, value = first
+                    if kind == "content":
+                        yield value
+                    async for kind, value in stream:
+                        if kind == "content":
+                            yield value
                     return
                 finally:
                     await stream.aclose()

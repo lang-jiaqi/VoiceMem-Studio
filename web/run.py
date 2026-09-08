@@ -51,7 +51,12 @@ from web.harness import (
     is_unfinished,
     system_prompt,
 )
-from harness.reply_modes import DIRECT, MEMORY
+from harness.reply_modes import (
+    DIRECT,
+    MEMORY,
+    MEMORY_COT,
+    thinking_router,
+)
 from harness.turn_taking import (
     Backchannel,
     HandoffKind,
@@ -1220,7 +1225,7 @@ def save_turn_audio(pcm16k) -> str:
 
 @dataclass
 class Pending:
-    """一轮说完时、投机预取早已算好的「预算记忆」——控制流拿来直接回复，不再搜。"""
+    """Confirmed turn with speculative memory that the final reply router validates."""
     text: str
     memory_context: str
     result: object
@@ -1230,14 +1235,83 @@ class Pending:
     stranger: bool = False       # 声纹认出说话的不是这个记忆库的主人
     replay: str = ""             # 该把哪条记忆当时那段原声放回来（memory_id），空=不放
     emotion: str = ""            # 上一轮感知到的情绪，用来给这一轮定语气
-    route: str = gate.DEEP       # 轮次闸门判的路：deep 才注入事实记忆，见 voicemem/gate.py
-    reply_mode: str = DIRECT     # Reply production mode consumed by turn-taking policy.
+    route: str = gate.DEEP       # Provisional gate route; the final reply router may replace it.
+    reply_mode: str = DIRECT     # direct / memory / memory_cot; the final router owns this.
     #: 提前生成的那一份还作数吗。判据是**下注之后你有没有接着说**，不是"文本一模
     #: 一样"——ASR 会边说边修正尾巴，人明明已经闭嘴了也会因为差一个词而白白作废。
     early_ok: bool = False
     # Monotonic time of the last voiced VAD frame. Latency must include the
     # configured turn confirmation and final-ASR work before reply handoff.
     speech_end: float = 0.0
+
+
+_THINKING_ROUTER_ON = os.environ.get("VOICEMEM_THINKING_ROUTER", "1") != "0"
+
+
+async def _ensure_pending_memory(pending: Pending, memory_vm) -> None:
+    """Populate memory after a final route upgrades a speculative shallow turn."""
+    if (pending.route == gate.DEEP
+            and getattr(pending.result, "search_mode", "gated") != "gated"):
+        return
+
+    def search():
+        from voicemem.leftbrain.query_embedding import query_embedding_scope
+        with query_embedding_scope():
+            classification = memory_vm.classify(pending.text)
+            return memory_vm.search(
+                pending.text,
+                slots=classification.slots,
+                entities=classification.entities,
+                emotion=pending.emotion or None,
+            )
+
+    pending.result = await asyncio.to_thread(search)
+    pending.memory_context = build_memory_context(pending.result)
+    pending.route = gate.DEEP
+    pending.replay = _replay_id(pending.text, pending.result)
+
+
+async def route_pending_thinking(pending: Pending, memory_vm=None) -> Pending:
+    """Select the authoritative instant, mem, or mem+cot route off-loop."""
+    if not _THINKING_ROUTER_ON:
+        return pending
+    started = time.monotonic()
+    memory_vm = memory_vm or vm
+    try:
+        decision = await thinking_router().classify_async(
+            pending.text, gate.needs_memory(pending.route))
+    except Exception as exc:
+        print(f"[thinking] router failed; using fast: {type(exc).__name__}: {exc}",
+              flush=True)
+        return pending
+    pending.reply_mode = decision.reply_mode
+    if pending.stranger:
+        # Speaker privacy outranks routing: never expose the owner's retrieved data.
+        from voicemem.stream import empty_result
+        pending.result = empty_result()
+        pending.memory_context = ""
+        pending.replay = ""
+        pending.route = gate.SHALLOW
+    elif decision.reply_mode == DIRECT:
+        from voicemem.stream import empty_result
+        pending.result = empty_result()
+        pending.memory_context = ""
+        pending.replay = ""
+        pending.route = gate.SHALLOW
+    else:
+        try:
+            await _ensure_pending_memory(pending, memory_vm)
+        except Exception as exc:
+            # The selected route still reaches the provider with an explicit
+            # no-memory directive rather than silently degrading to instant.
+            pending.route = gate.DEEP
+            pending.memory_context = ""
+            print(f"[route] memory retrieval failed: {type(exc).__name__}: {exc}",
+                  flush=True)
+    print(f"[route] {decision.display_name} → {decision.reply_mode}"
+          f" / reasoning={decision.reasoning_effort} "
+          f"({(time.monotonic() - started) * 1000:.0f}ms)", flush=True)
+    return pending
 
 
 # ══════════════════ 两条控制流（各 ~10 行，只消费预取好的 Pending）══════════════════
@@ -1861,7 +1935,12 @@ async def _voicemem_llm_tts(pending, send, send_audio, owner, timeline,
         hist = _SESSION_CONTEXT.messages(context_session, context_space,
                                          window=HISTORY_TURNS)
         _lat["pre"] = (time.monotonic() - _t0) * 1000
-        async for d in memory_vm.reply_stream(pending.text, ctx, hist):
+        from voicemem.reply import apply_reply_request_options
+        deltas = apply_reply_request_options(
+            memory_vm.reply_stream(pending.text, ctx, hist),
+            reasoning_effort=("high" if pending.reply_mode == MEMORY_COT else "none"),
+        )
+        async for d in deltas:
             if not _lat["llm"]:
                 _lat["llm"] = (time.monotonic() - _t0) * 1000
             if tone["head"]:
@@ -3282,7 +3361,9 @@ async def llm_tts_session(sock):
                 committed_text = (await refined_text).strip() or text
                 pending = Pending(
                     committed_text, build_memory_context(result), result, spoken=True,
-                    emotion=emotion, route=route)
+                    emotion=emotion, route=route,
+                    reply_mode=(MEMORY if gate.needs_memory(route) else DIRECT))
+                await route_pending_thinking(pending, memory_vm)
                 early["text"] = committed_text
                 early["pending"] = pending
                 if BARGE_DEBUG:
@@ -3398,10 +3479,18 @@ async def llm_tts_session(sock):
             if BARGE_DEBUG:
                 print(f"[barge] 整轮都是附和 {pending.text!r}，不算一轮，继续说", flush=True)
             continue
+        thinking_task = asyncio.create_task(route_pending_thinking(pending, vm))
         stop_prewarm()
+        if early["task"] is not None and pending.early_ok:
+            await thinking_task
+            early_pending = early.get("pending")
+            if (early_pending is None
+                    or early_pending.reply_mode != pending.reply_mode):
+                await drop_early("最终 ASR 的回复路由与提前生成不一致")
         # 文本命中就接管提前生成；可能还没合成出音频，不能把命中等同于立即出声。
         if early["task"] is not None and pending.early_ok:
             await stop_reply(force=True)
+            await thinking_task
             reply_state = early["said"] or {"text": ""}
             timeline = early["timeline"]
             early_task = early["task"]
@@ -3449,6 +3538,7 @@ async def llm_tts_session(sock):
         # 上一轮还没播完就被新的一轮顶掉。force：这里不能被宽限期挡下来，挡下来
         # 旧任务会继续往同一条 socket 里灌音频，两轮交织着播。
         await stop_reply(force=True)
+        await thinking_task
         reply_state = {"text": ""}
         context_space = ACTIVE_SPACE
         memory_vm = vm
@@ -4474,6 +4564,17 @@ if __name__ == "__main__":
     print("[web] 预热本地模型（embedding / ASR / VAD / 感知）…", flush=True)
     vm.warmup(verbose=True)
     _warm_final_asr(vm)
+    if MODE == "llm_tts" and _THINKING_ROUTER_ON:
+        _router_started = time.monotonic()
+        try:
+            _router_decision = thinking_router().warmup()
+        except Exception as exc:
+            print(f"[web] 三级回复路由模型不可用：{type(exc).__name__}: {exc}", flush=True)
+            raise SystemExit(1) from exc
+        print(f"[web] 三级回复路由就位：Qwen3-0.6B → "
+              f"{_router_decision.display_name} "
+              f"({(time.monotonic() - _router_started) * 1000:.0f}ms，含加载)",
+              flush=True)
     if _LOCAL_LLM is not None:
         # **在开门之前**把人设那一截算进 KV 母本。人设一个字都不会变，算一次就
         # 够用一整场；等第一个用户连上来再算，那一秒半就直接摊在他第一句话上

@@ -24,6 +24,9 @@ def session_namespace():
     names = {"prewarm_local", "stop_prewarm", "hearing", "close_session",
              "start_early", "drop_early"}
     functions = [n for n in session.body if getattr(n, "name", "") in names]
+    async def route_pending(pending, memory_vm=None):
+        return pending
+
     ns = dict(
         asyncio=asyncio, threading=threading, time=time,
         prewarm={"task": None, "cancelled": None, "closed": False},
@@ -31,7 +34,9 @@ def session_namespace():
         early={"task": None}, candidate_paused=False,
         _SESSION_CONTEXT=types.SimpleNamespace(messages=lambda *a, **kw: []),
         context_session="session", ACTIVE_SPACE="test", HISTORY_TURNS=6,
-        gate=types.SimpleNamespace(DEEP="deep"),
+        gate=types.SimpleNamespace(DEEP="deep", needs_memory=lambda route: route == "deep"),
+        route_pending_thinking=route_pending,
+        DIRECT="direct", MEMORY="memory",
         build_memory_context=lambda _: "memory",
         build_reply_context=lambda *a, **kw: "context", _replay_id=lambda *a: "",
         BARGE_DEBUG=False, owner={}, speech_rate=None, vm=object(),
