@@ -1,333 +1,483 @@
-# VoiceMem Architecture Overview
+# VoiceMem Studio Architecture
 
-This document describes the framework's current structure, data flows, state
-ownership, and extension boundaries. It is a living design reference, not an
-implementation log.
+This document describes the current Studio architecture, ownership boundaries,
+runtime flows, and extension points. It is a design reference, not a development
+log or benchmark report.
 
-## 1. System role
+## 1. Product scope
 
-VoiceMem is a memory framework for voice agents. It combines:
+VoiceMem Studio is a conversational voice application built around the
+`voicemem` memory framework. The repository contains both:
 
-- factual memory and retrieval;
-- affective and behavioral memory;
-- optional audio-native perception;
-- streaming turn preparation and speculative retrieval;
-- replaceable model-backed capabilities.
+- the reusable memory package; and
+- a latency-oriented voice experience with browser capture, turn-taking,
+  configurable prompts, local or remote reply models, speech synthesis,
+  interruption, and observability.
 
-Reply generation, speech synthesis, user interfaces, and transport are composed
-around the memory framework. No single model or transport implementation defines
-VoiceMem's memory semantics.
+The memory system does not depend on a particular reply model, speech provider,
+or transport. Studio composes those concerns at the application boundary.
 
 ```mermaid
 flowchart LR
-    App[Application] --> API[VoiceMem public API]
-    API --> Orchestrator
-    Orchestrator --> Left[LeftBrain]
-    Orchestrator --> Right[RightBrain]
-    Orchestrator --> Perception[Audio perception]
-    Left --> Stores[(Memory Space stores)]
-    Right --> Stores
-    Perception --> Stores
-    Orchestrator --> Result[Turn / SearchResult]
-    Result --> Output[Replaceable reply and speech adapters]
-    Output --> App
+    Browser --> Capture[Capture and echo defense]
+    Capture --> Turn[Streaming turn pipeline]
+    Turn --> Memory[VoiceMem memory plane]
+    Turn --> Dialogue[Dialogue policy]
+    Memory --> Reply[Reply pipeline]
+    Dialogue --> Reply
+    Reply --> Speech[Speech pipeline]
+    Speech --> Playback[Playback and interruption]
+    Playback --> Browser
+    Playback --> Context[Session and memory finalization]
 ```
 
-The dependency direction is inward: applications may depend on `voicemem`, but
-the `voicemem` package does not depend on `web` or browser code.
+## 2. Architectural planes
 
-## 2. Layer map
+### Client plane
 
-### Public API
+Owned by `web/voicemem.html` and the AudioWorklets:
 
-`voicemem/core.py` exposes the `VoiceMem` facade. Its methods are thin delegates
-to the owning subsystem. `voicemem/memory_api.py` provides convenience memory
-helpers.
+- microphone permission and browser audio graph;
+- browser acoustic echo cancellation;
+- residual playback-reference filtering in `mic-capture-worklet.js`;
+- WebSocket text, PCM, and playback-checkpoint messages;
+- PCM buffering and rendering in `pcm-player-worklet.js`;
+- subtitles, Memory Space controls, and memory visualization.
 
-The public layer owns supported names and compatibility. It does not own search,
-ingest, storage, or browser behavior.
+The client reports rendered source-sample progress. Network receipt does not
+mean that audio was heard.
 
-### Orchestration
+### Conversation plane
 
-`voicemem/orchestrator.py` coordinates the memory domains and defines shared
-result contracts:
+Owned primarily by `web/run.py`, `web/harness.py`, and `harness/`:
 
-- `Utils` lazily resolves injected capabilities;
-- `SearchResult` combines factual and right-brain retrieval;
-- `Orchestrator.Search` coordinates retrieval;
-- `Orchestrator.Ingest` coordinates perception and persistence.
+- turn lifecycle and session wiring;
+- unfinished-utterance handling;
+- spoken backchannel policy and cached clips;
+- tone-label parsing and TTS instruction selection;
+- early reply buffering and commitment;
+- interruption and output cancellation;
+- short-term Session Context.
 
-Domain algorithms and store details stay in their owning packages.
+This plane may use memory results but does not define factual or affective
+storage semantics.
 
-### Left brain
+### Memory plane
 
-`voicemem/leftbrain/` owns factual memory:
+Owned by the reusable `voicemem` package:
 
-- fact extraction and additive storage;
-- embedding search and ranking;
-- cognitive-graph slots and entity narrowing;
-- relative-time expansion;
-- summaries, subgraphs, and archival behavior.
+- `core.py`: public `VoiceMem` facade;
+- `orchestrator.py`: cross-component search and ingest workflows;
+- `leftbrain/`: factual memory, vector retrieval, slots, entities, and time;
+- `rightbrain/`: affective episodes, traits, reactions, and directives;
+- `stream.py`: reusable streaming input and speculative retrieval;
+- `memory_api.py`: prompt-ready memory helpers.
 
-### Right brain
+The package exposes normalized contracts and replaceable capabilities. It does
+not depend on browser code.
 
-`voicemem/rightbrain/` owns affective and behavioral memory:
+### Inference and scheduling plane
 
-- emotional episodes and attribution;
-- traits, reactions, and situation patterns;
-- retrieval directives;
-- right-brain graph and experience storage.
+Owned by provider modules and shared schedulers:
 
-The orchestrator is the coordination boundary between the two brains.
+- `local_llm.py`: local MLX reply generation and prefix/KV caching;
+- `tts.py`, `breeze_tts.py`, `breeze_fast.py`: speech providers and local
+  synthesis support;
+- `utils/gpu_loop.py`: the single process-level MLX execution thread;
+- `utils/torch_lock.py`: serialization for shared Torch/MPS work;
+- the streaming ASR worker and dedicated final-ASR executor in `stream.py`.
 
-### Capabilities and providers
+Provider adapters translate configuration and provider events into shared
+reply, text, PCM, and timing contracts.
 
-`voicemem/utils/defaults.py` defines lazy defaults. `voicemem/config.py` converts
-declarative provider configuration into the same injection points accepted by
-`VoiceMem`. `voicemem/llm_config.py` resolves process-level model roles and
-credentials.
+### Configuration and observability plane
 
-Capabilities include embedding, slot/schema classification, entity extraction,
-emotion, voiceprint, ASR, VAD, memory storage, reply generation, and TTS.
-Provider-specific SDK requests and responses are normalized before they reach
-shared memory behavior.
+Owned by:
 
-### Streaming input
+- `web/harness.py`: Studio Web persona, context directives, and dialogue
+  controls;
+- `prompt/llm_*.md` and `prompt/llm_context.json`: package/default LLM prompt
+  inputs;
+- `prompt/tts.json`: TTS tone and backchannel synthesis configuration;
+- `prompt_config.py`: validated prompt loading and caching;
+- `prompt_trace.py`: asynchronous request tracing;
+- `web/logging_utils.py`: runtime log routing;
+- `evals/`: Studio behavioral and latency regressions.
 
-`voicemem/stream.py` owns input-turn state. `VoiceStream` accepts text, external
-ASR partials, or PCM and emits:
+Prompt traces may contain complete conversation and memory context. They are
+runtime data even though their schema is part of the observability design.
 
-- `StreamState` while a turn is active;
-- `Turn` after the utterance is confirmed.
+## 3. Dependency direction
 
-ASR, VAD, and speculative memory retrieval are coordinated in this layer.
-Expensive audio perception fields remain lazy.
+```text
+browser / application
+        -> conversation and provider adapters
+        -> VoiceMem public API
+        -> orchestrator
+        -> left brain / right brain / audio capabilities
+        -> stores and model adapters
+```
 
-### Application and Web demo
+Allowed cross-cutting infrastructure includes normalized contracts,
+configuration, locks, schedulers, and logging. The memory package does not
+import from `web` or the repository-only `harness` package.
 
-`web/run.py` is the demo composition root. It combines Memory Space selection,
-streaming input, session state, reply adapters, interruption, and memory
-finalization.
+## 4. Mode and provider model
 
-`web/utils.py` owns FastAPI and WebSocket wiring. `web/voicemem.html` owns browser
-capture and UI state. `web/pcm-player-worklet.js` owns PCM rendering.
+Three independent choices shape a Studio run.
 
-`web/audio_timeline.py` tracks provider-neutral output time and heard-text
-finalization. `web/session_context.py` tracks session-local turns that are not
-represented by persistent memory. `voicemem/audio_timing.py` defines optional
-TTS text-to-sample alignment contracts.
+### Memory mode
 
-Reusable memory behavior belongs in `voicemem`. Demo policy, browser behavior,
-and transport behavior belong in `web` or another application layer.
-
-## 3. Mode model
-
-Core memory modes and Web reply modes are independent.
-
-### Core memory modes
-
-| Mode | Capability profile |
+| Mode | Memory capability profile |
 | --- | --- |
-| `left_brain_single` | Factual memory without emotion or audio perception |
-| `text_mode` | Text memory with emotion-related memory logic |
+| `left_brain_single` | Factual memory without affective/audio perception |
+| `text_mode` | Text memory with affective memory logic |
 | `multi_modal` | Text memory plus ASR, voiceprint, and audio perception |
 
-### Web reply modes
+### Reply mode
 
 | Mode | Output path |
 | --- | --- |
-| `llm_tts` | Text reply provider followed by a TTS provider |
-| `realtime` | Speech-to-speech provider emitting transcript and audio |
+| `llm_tts` | Reply provider emits text; TTS provider emits PCM |
+| `realtime` | Realtime provider emits transcript and PCM directly |
 
-The reply modes share memory results, session semantics, output identity,
-interruption behavior, and heard-text finalization.
+### Provider selection
 
-## 4. Core contracts
+Studio can select remote or local reply and TTS implementations. Provider
+selection changes generation and scheduling details, not Session Context,
+memory semantics, output identity, or heard-text finalization.
+
+The local MLX profile has additional scheduling constraints described in
+Section 10.
+
+The reusable package targets Python 3.10 or newer. The current Studio local
+profile and eval workflow are standardized on Python 3.12.
+
+## 5. Core contracts
 
 | Contract | Owner | Meaning |
 | --- | --- | --- |
-| `VoiceMem` | `core.py` | Public facade and component access |
-| `SearchResult` | `orchestrator.py` | Combined left/right-brain retrieval |
-| `Turn` | `stream.py` | Confirmed user text plus prepared memory result |
-| `StreamState` | `stream.py` | Partial turn state and optional completed turn |
-| `AudioPerception` | audio utilities | Normalized scene, speaker, and emotion evidence |
-| `TimedAudioChunk` | `audio_timing.py` | Optional PCM chunk with text-to-sample alignment |
-| `SessionTurn` | `web/session_context.py` | Unpersisted conversation state |
-| `AudioTimeline` | `web/audio_timeline.py` | One assistant output's media and text timeline |
+| `VoiceMem` | `voicemem/core.py` | Public memory facade |
+| `SearchResult` | `voicemem/orchestrator.py` | Combined left/right retrieval |
+| `Turn` | `voicemem/stream.py` | Confirmed user text and prepared memory |
+| `StreamState` | `voicemem/stream.py` | Partial ASR/VAD/EOT state |
+| Gate route | `voicemem/gate.py` | `backchannel`, `shallow`, or `deep` |
+| `Pending` | `web/run.py` | Application-ready confirmed turn |
+| `ReplySink` | `web/run.py` | Hidden speculative output timeline |
+| `TimedAudioChunk` | `voicemem/audio_timing.py` | Optional PCM text alignment |
+| `AudioTimeline` | `web/audio_timeline.py` | One output's text/media clock |
+| `SessionTurn` | `web/session_context.py` | Unpersisted dialogue context |
 
-Provider adapters may add metadata, but shared consumers should depend on these
-normalized meanings rather than vendor payload shapes.
+Shared code consumes these meanings rather than provider-native objects.
 
-## 5. Search flow
-
-```mermaid
-flowchart LR
-    Query --> Normalize[Time and scene normalization]
-    Normalize --> Classify[Slots and entities]
-    Classify --> Candidates[LeftBrain candidate narrowing]
-    Candidates --> Rank[LeftBrain ranking]
-    Candidates --> RB[RightBrain retrieval]
-    Rank --> Result[SearchResult]
-    RB --> Result
-```
-
-Left-brain ranking and right-brain retrieval may overlap when their inputs are
-ready. The result contains normalized hits, classification, directives, and
-timing data. Reply generation remains outside the search flow.
-
-## 6. Ingest flow
+## 6. Input and turn flow
 
 ```mermaid
 flowchart LR
-    Input[Text and optional audio] --> Preprocess
-    Preprocess --> Snapshot[Ingest context snapshot]
-    Snapshot --> Facts[Fact extraction and LeftBrain write]
-    Snapshot --> Affect[RightBrain attribution and write]
-    Snapshot --> Audio[Audio metadata stores]
-    Facts --> Complete[Completion result]
-    Affect --> Complete
-    Audio --> Complete
+    Mic[Browser microphone] --> AEC[Browser AEC]
+    AEC --> Residual[Residual echo guard]
+    Residual --> WS[WebSocket PCM]
+    WS --> Stream[VoiceStream]
+    Stream --> ASR[Streaming ASR worker]
+    Stream --> VAD[VAD]
+    Stream --> EOT[EOT scoring]
+    Stream --> Gate[Turn Gate]
+    ASR --> Final[Final ASR refinement]
+    VAD --> Confirm[Turn confirmation]
+    EOT --> Confirm
+    Final --> Confirm
+    Gate --> Confirm
 ```
 
-`preprocess` resolves available audio evidence. The ingest context freezes the
-turn, reply, user, language, and Memory Space used by later work.
+### Capture
 
-With `async_facts=True`, persistence continues outside the caller's critical
-path. The completion result indicates whether durable memory was created; a
-conversation turn is not automatically a persistent memory.
+Browser AEC is the first echo-control stage. The microphone worklet receives a
+playback reference and suppresses only highly correlated residual blocks. The
+server-side text guard provides a second defense against assistant or
+backchannel echo reaching ASR.
 
-## 7. Streaming turn flow
+Capture batches target short, regular PCM frames. Capture and playback share a
+sample-clock relationship so latency and echo logic can use explicit media
+positions rather than wall-clock guesses.
+
+### ASR and final refinement
+
+Streaming ASR runs in a dedicated serial worker so chunk inference does not
+block WebSocket input. At turn end, full-audio ASR refinement may run in a
+separate final-ASR executor. Epoch checks prevent obsolete worker results from
+overwriting a newer turn.
+
+The complete captured audio remains available for archive and final decoding
+even when obsolete streaming chunks are skipped.
+
+### VAD, EOT, and pause policy
+
+VAD provides acoustic speech/silence state. EOT provides semantic completeness
+evidence. `PauseGate` applies Studio dialogue policy for unfinished phrases and
+spoken backchannels. The timeout remains the fallback when semantic evidence is
+not decisive.
+
+These stages answer different questions and keep separate state:
+
+- VAD: is speech acoustically active?
+- EOT: does the utterance sound semantically complete?
+- Pause policy: should Studio wait because the user may continue?
+- final ASR: what is the best final transcript?
+
+## 7. Turn Gate and memory retrieval
+
+`voicemem/gate.py` assigns a confirmed utterance to one of three routes:
+
+| Route | Interrupt active output | Inject factual memory |
+| --- | --- | --- |
+| `backchannel` | No | No |
+| `shallow` | Yes | No |
+| `deep` | Yes | Yes |
+
+The gate combines a closed backchannel vocabulary, high-precision lexical
+rules, and an embedding fallback. Final route decisions use the complete
+utterance. Earlier partial decisions are provisional.
+
+For deep turns, speculative classify/search starts while speech is still in
+progress. Query embedding work is shared within a search scope, and device
+access follows the existing Torch lock boundary. A shallow or backchannel route
+returns a normalized empty result rather than `None`.
+
+```mermaid
+flowchart LR
+    Text --> Route[Turn Gate]
+    Route -->|backchannel| Continue[Keep listening]
+    Route -->|shallow| Empty[Normalized empty memory]
+    Route -->|deep| Search[Classify and search]
+    Search --> Left[LeftBrain rank]
+    Search --> Right[RightBrain retrieve]
+    Left --> Result[SearchResult]
+    Right --> Result
+```
+
+## 8. Early reply generation
+
+EOT can provide enough confidence to start reply work before final turn
+confirmation. This is a latency optimization, not a change to turn semantics.
+
+`ReplySink` initially buffers JSON events and PCM in one ordered private
+timeline. Nothing reaches the browser until final ASR and turn confirmation
+show that the speculative input still covers the final utterance.
 
 ```text
-text, ASR partial, or PCM
-  -> update ASR/VAD state
-  -> start or refresh speculative classify/search
-  -> observe end-of-utterance silence
-  -> confirm the final text
-  -> emit Turn(text, SearchResult)
+high EOT score
+  -> start speculative reply and TTS
+  -> buffer output in ReplySink
+  -> finalize transcript and route
+  -> compatible: commit buffered timeline and continue live
+  -> incompatible: cancel provider work and discard the timeline
 ```
 
-Speculation reduces post-utterance latency. Its result is provisional: cancelled
-or stale work cannot replace final text or affect a later turn.
+Cancellation removes stale reply, TTS, display, and GPU work before a new
+response becomes authoritative.
 
-## 8. Reply and playback flow
+## 9. Reply, prompt, and speech flow
+
+### Reply context
+
+The reply input combines:
+
+```text
+Studio system prompt
++ current user input
++ recent session history
++ route-eligible persistent memory
++ contextual directives
+```
+
+`build_reply_context` is the shared context builder used by actual generation
+and local-model prewarming. Keeping one builder preserves local prefix-cache
+compatibility.
+
+### Prompt ownership
+
+The Studio Web system prompt and dialogue context live in `web/harness.py`.
+Package/default prompt files live in `prompt/llm_*.md` and
+`prompt/llm_context.json`. TTS tone configuration is loaded from
+`prompt/tts.json`.
+
+Prompt configuration is parsed and cached by `prompt_config.py`; malformed or
+incomplete configuration fails validation rather than changing behavior
+silently. Runtime changes require restart because prompt files are not read in
+the speech loop.
+
+### Tone and TTS
+
+The reply model may prefix text with a tone tag. `harness/speak_tag.py` removes
+that control tag, smooths abrupt tone transitions, and converts it into a TTS
+instruction. Control tags are never spoken or stored as assistant text.
+
+The TTS layer accepts plain 24 kHz mono PCM16 bytes and optional
+`TimedAudioChunk` alignment metadata. Segment concurrency is selected by the
+provider; local GPU providers can require serialized segments.
+
+### Spoken backchannels
+
+`harness/backchannel.py` decides whether to emit a short acknowledgement during
+a user pause and selects a token appropriate to language and context. Audio is
+served from reviewed or prepared clips because generation on the live pause
+window is too late. Backchannels share playback and echo-reference plumbing but
+do not become normal assistant replies.
+
+## 10. Local inference scheduling
+
+### MLX
+
+Local MLX reply and TTS work share one process-level `GpuLoop`. The loop owns the
+GPU execution thread and advances active generators in weighted turns.
+
+Some speech jobs receive temporary first-chunk priority; afterward they rejoin
+weighted scheduling. Cancellation closes the generator and removes it from the
+active set. Creating an independent MLX thread or stream bypasses this safety
+and scheduling model.
+
+### Torch/MPS
+
+Torch-backed embedding and related MPS operations use the process-level lock in
+`utils/torch_lock.py`. Lock scope covers device inference, not unrelated search
+coordination or waits on work that may need the same lock.
+
+### Hot-path priority
+
+Studio tracks whether reply or speech output is on the user-visible hot path.
+Background perception and ingest may wait for an idle window, subject to a
+bounded fallback so memory work cannot starve indefinitely.
+
+## 11. Output, playback, and interruption
 
 ```mermaid
 flowchart LR
-    Turn --> Context[Current input + Session Context + persistent memory]
-    Context --> Adapter[llm_tts or realtime]
-    Adapter --> Timeline[Output ID and media timeline]
-    Timeline --> Browser[PCM playback]
-    Browser --> Checkpoint[Rendered sample checkpoint]
-    Checkpoint --> Finalize[Full or heard-prefix reply]
-    Finalize --> Session[SessionBuffer]
-    Finalize --> Ingest[Background ingest]
+    Provider --> Timeline[Output ID and AudioTimeline]
+    Timeline --> PCM[WebSocket PCM]
+    PCM --> Worklet[PCM player worklet]
+    Worklet --> Progress[Rendered source samples]
+    Progress --> Cutoff[Heard-text cutoff]
+    Cutoff --> UI[Visible history]
+    Cutoff --> Session[Session Context]
+    Cutoff --> Memory[Memory attribution]
 ```
 
-The canonical Web media format is 24 kHz mono PCM16. Every assistant output has
-an output ID and a sample-relative media clock.
+The canonical Web media format is 24 kHz mono PCM16. Each assistant output has
+an output ID. Late audio, subtitle, checkpoint, and cancellation events resolve
+against that ID.
 
-Generated, sent, buffered, rendered, and heard output are distinct states.
-Browser-rendered source samples determine the interruption cutoff. Text mapping
-uses provider alignment when available, completed-segment duration otherwise,
-and calibrated speech rate as the fallback.
+The player reports source samples actually rendered. Pause and underflow do not
+advance the media position. Text-to-audio mapping uses provider timestamps when
+available, completed-segment duration otherwise, and calibrated speech rate as
+the fallback.
 
-## 9. Interruption flow
+Interruption separates reversible detection from cancellation:
 
-Interruption separates detection from commitment:
-
-1. Acoustic activity during playback creates a candidate and pauses rendering
-   without clearing buffered PCM.
-2. ASR text, explicit control text, echo rejection, and backchannel handling
+1. Candidate speech pauses playback while preserving the PCM queue.
+2. ASR growth, explicit control text, backchannel routing, and echo rejection
    confirm or reject the candidate.
-3. Rejection resumes the preserved output.
-4. Confirmation clears browser playback, cancels provider work, and prevents
-   stale output from entering a newer turn.
-5. The rendered sample cutoff produces the heard text prefix used by UI history,
-   Session Context, memory attribution, and supported provider-side truncation.
+3. Rejection resumes the same output.
+4. Confirmation clears browser playback, cancels reply/provider work, and
+   finalizes only the heard assistant prefix.
 
-The unplayed generated tail is diagnostic state, not conversation history.
+Generated, sent, buffered, rendered, and heard output are different states. The
+unheard generated tail is not conversation history.
 
-## 10. Session and memory context
+## 12. Session and persistent memory
 
-The reply model receives three logical inputs:
+Session Context contains turns not yet represented by persistent memory. It is
+isolated by WebSocket session and Memory Space.
 
 ```text
 current user input
-+ unpersisted turns from the current WebSocket session and Memory Space
++ unpersisted Session Context
 + retrieved persistent memory
+-> reply provider
 ```
 
-A completed or interrupted turn enters `SessionBuffer`. Background ingest
-removes it only after the completion result confirms that persistent memory was
-created. A non-persistent turn remains available until the session ends.
+After a normal or interrupted reply, ingest runs outside the response path.
+The completion callback removes the session turn only when durable memory was
+created. Non-persistent dialogue remains until the session ends.
 
-Session Context is isolated by WebSocket session and Memory Space. Background
-work uses the `VoiceMem` instance captured when the work was scheduled, not a
-later mutable active-space value.
+Background ingest captures the target `VoiceMem` instance and Memory Space when
+scheduled. A later UI space change cannot redirect an existing write.
 
-## 11. State ownership
+## 13. State ownership
 
-| State | Scope and owner | Lifetime |
+| State | Owner | Lifetime |
 | --- | --- | --- |
-| Model-role configuration | Process, `llm_config.py` | Process |
-| Lazy capability cache | `VoiceMem.Utils` instance | Instance/process |
-| Factual and affective stores | Memory Space | Persistent |
-| Streaming input state | `VoiceStream` | Input turn/session |
-| Short-term dialogue | SessionBuffer key | WebSocket session + Memory Space |
-| Output timeline | `AudioTimeline` | Assistant output ID |
-| PCM queue | Browser AudioWorklet | Assistant output ID |
+| Model-role and provider configuration | Process configuration | Process |
+| Prompt templates and parsed prompt cache | Harness / prompt config | Process |
+| MLX scheduler | `GpuLoop` | Process |
+| Torch device serialization | `TORCH_LOCK` | Process |
+| `VoiceMem` capability cache | `VoiceMem` instance | Instance |
+| Factual and affective memory | Memory Space stores | Persistent |
+| Streaming ASR/VAD/EOT/gate state | `VoiceStream` | Input turn/session |
+| Backchannel policy and cooldown | Conversation harness | Session |
+| Early output buffer | `ReplySink` | Speculative assistant output |
+| Short-term dialogue | `SessionBuffer` | WebSocket session + Memory Space |
+| Text/media alignment | `AudioTimeline` | Assistant output ID |
+| PCM queue and echo reference | Browser worklets | Assistant output ID/session |
 | Background ingest | Captured turn and `VoiceMem` | Until completion |
 
-Process-level model configuration can affect more than one `VoiceMem` instance.
-Turn-specific state therefore remains explicit and must not be inferred from a
-mutable process global after scheduling.
+Turn-specific state is explicit. Process globals are reserved for configuration,
+shared model caches, and schedulers whose process-wide behavior is intentional.
 
-## 12. Concurrency model
+## 14. Observability and evaluation
 
-The asyncio event loop owns WebSocket I/O, turn transitions, output transitions,
-and provider event routing. Synchronous inference, blocking I/O, and slow store
-work run outside this loop.
+Studio has three distinct verification categories:
 
-Background work retains explicit task references, reports exceptions, respects
-cancellation, and preserves Memory Space ownership. Writes to shared stores are
-serialized when the store is not safe for concurrent mutation.
+- deterministic Python regressions in `tests/` and `evals/test_*.py`;
+- browser/worklet simulations in `evals/*.cjs`;
+- latency, quality, and benchmark scripts in other `evals/` files and
+  `evaluation/`.
 
-Parallelism is applied only after dependencies are satisfied. In search, for
-example, right-brain retrieval and left-brain ranking may overlap after their
-shared candidate context is ready.
+`prompt_trace.py` records allowlisted provider requests asynchronously so disk
+I/O does not block speech. `prompt/logs/` entries can include system prompts,
+history, and retrieved memory; they are sensitive runtime traces.
 
-## 13. Extension map
+Synthetic regressions verify state transitions and protocol behavior. Live
+perceived latency, voice quality, Metal stability, microphone behavior, and
+network-provider performance require the corresponding native environment.
 
-| Change | Owning location |
+## 15. Extension map
+
+| Change | Primary owner |
 | --- | --- |
-| Public convenience API | Thin facade plus the owning subsystem |
+| Public memory API | Thin facade plus owning memory subsystem |
 | Fact extraction or retrieval | `voicemem/leftbrain/` |
 | Affective or behavioral memory | `voicemem/rightbrain/` |
-| Cross-brain sequencing | `voicemem/orchestrator.py` |
-| ASR, VAD, speaker, scene, or emotion component | `voicemem/utils/audio/` |
-| Capability/provider construction | `voicemem/utils/defaults.py` and `voicemem/config.py` |
-| Reply provider | `voicemem/reply.py` and config mapping |
-| TTS provider | `voicemem/tts.py` and config mapping |
-| Realtime output provider | Application adapter using normalized events |
-| Browser UI, playback, or subtitles | `web/voicemem.html` and AudioWorklet |
-| Output timing and heard prefix | `web/audio_timeline.py` and both reply adapters |
-| Transport implementation | Application/transport layer |
-| Persistent schema | Owning store plus an explicit migration path |
+| Cross-brain search or ingest | `voicemem/orchestrator.py` |
+| ASR, VAD, EOT, speaker, scene, emotion | `voicemem/utils/audio/` and config |
+| Turn routing | `voicemem/gate.py` and streaming regressions |
+| Studio persona or pause policy | `web/harness.py` |
+| Spoken backchannel behavior | `harness/backchannel.py` and Web playback |
+| Tone-label protocol | `harness/speak_tag.py`, prompts, and TTS wiring |
+| Reply provider | `voicemem/reply.py` or `local_llm.py`, then config |
+| TTS provider | `voicemem/tts.py` or provider module, then config |
+| GPU scheduling | `voicemem/utils/gpu_loop.py` |
+| Prompt parsing | `voicemem/prompt_config.py` and `prompt/` schema |
+| Prompt tracing | `voicemem/prompt_trace.py` |
+| Early generation | `ReplySink`, EOT callback, and cancellation path |
+| Capture echo control | Browser mic worklet and server echo guard |
+| Playback timing and heard prefix | Audio timeline and both reply modes |
+| Browser UI and visualization | `web/voicemem.html` |
+| Transport | Application boundary; memory contracts remain stable |
+| Persistent schema | Owning store plus explicit migration and rollback |
 
-A cross-layer feature starts with a shared contract, then keeps each part inside
-its owning layer.
+A cross-layer feature begins with a normalized contract. Each implementation
+then remains in its owning layer.
 
-## 14. Architecture update rule
+## 16. Architecture update rule
 
 Update this document when a change modifies:
 
 - a layer's responsibility or dependency direction;
 - a public or provider-neutral contract;
-- a primary data flow;
-- state ownership, isolation, or persistence;
-- concurrency or cancellation semantics;
-- the relationship between reply modes.
+- input, reply, playback, interruption, or persistence flow;
+- state ownership, isolation, cache, or lifetime;
+- GPU, thread, lock, or cancellation semantics;
+- prompt ownership or the relationship between reply modes.
 
-Implementation details, tuning values, incident history, and temporary
-experiments do not belong in this overview.
+Tuning values, local machine observations, incident history, and temporary
+experiments belong in focused evaluation artifacts, not this overview.
