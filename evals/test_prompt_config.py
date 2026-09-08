@@ -7,6 +7,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+
+from voicemem.breeze_tts import BreezeMLXTTS
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -37,7 +40,9 @@ wire = []
 original = httpx.AsyncClient
 def handle(req):
     wire.append(json.loads(req.content))
-    return httpx.Response(200, text='data: [DONE]\n\n'.replace('\\n','\n'))
+    return httpx.Response(200, text=(
+        'data: {"choices":[{"delta":{"content":"ok"}}]}\\n\\n'
+        'data: [DONE]\\n\\n').replace('\\n','\n'))
 async def main():
     with patch('httpx.AsyncClient', side_effect=lambda **kw: original(
             transport=httpx.MockTransport(handle), **kw)):
@@ -85,6 +90,17 @@ class PromptConfigTests(unittest.TestCase):
     def run_probe(self):
         return subprocess.run([sys.executable, '-c', PROBE], cwd=self.directory,
                               env=self.env, text=True, capture_output=True, timeout=15)
+
+    def test_breeze_first_batch_matches_regular_chunk_without_override(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VOICEMEM_BREEZE_FIRST_FRAMES", None)
+            tts = BreezeMLXTTS(model="test-only", chunk_frames=2)
+            self.assertEqual(tts.first_frames, 2)
+
+    def test_breeze_first_batch_keeps_explicit_override(self):
+        with patch.dict(os.environ, {"VOICEMEM_BREEZE_FIRST_FRAMES": "1"}):
+            tts = BreezeMLXTTS(model="test-only", chunk_frames=2)
+            self.assertEqual(tts.first_frames, 1)
 
     def test_file_edits_reach_deepseek_and_breeze_and_backchannel(self):
         (self.directory / 'llm_system_zh.md').write_text('学长修改的人设', encoding='utf-8')

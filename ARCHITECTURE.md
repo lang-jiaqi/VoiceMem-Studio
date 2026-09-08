@@ -66,11 +66,16 @@ The repository-only `harness/` layer separates four dialogue policy areas:
 
 - `reply_modes/` reserves `memory_cot`, `memory`, and `direct` contracts;
 - `persona/` reserves stable agent identity prompts;
-- `speaking_style/` owns context-dependent response depth and textual emotion;
-- `turn_taking/` owns backchannels and filler handoff timing.
+- `speaking_style/` owns the active context-dependent depth and textual emotion
+  arc instructions;
+- `turn_taking/` owns the session state machine, backchannel curve, backchannel
+  voice cache, and short-acknowledgement and long-work filler timing.
 
-Reply modes and persona are scaffolds. Studio currently consumes speaking-style
-and turn-taking policy from the Web composition root.
+The reply-mode router and persona folder are currently scaffolds. Stable
+reply-mode identifiers are already consumed by the turn-taking state machine.
+The Web composition root injects speaking-style prompts and executes the
+state-machine decisions. Low-level pause detection and browser audio transport
+remain in `web/run.py`.
 
 ### Memory plane
 
@@ -288,10 +293,32 @@ high EOT score
 Cancellation removes stale reply, TTS, display, and GPU work before a new
 response becomes authoritative.
 
-`VoiceStream` owns snapshot capture and final-ASR refinement. `web/run.py`
-selects the EOT threshold and starts application-level reply work. Streaming
-ASR remains visible while this work runs, but later transcript revisions cannot
-mutate the frozen provider prompt.
+The Web demo may use EOT to start speculative reply work. `VoiceStream` owns the
+immutable audio snapshot and final-ASR refinement; `web/run.py` owns the policy
+that starts LLM/TTS generation from the refined snapshot text. Streaming ASR
+continues to update the browser while that work runs. ASR-only revisions during
+silence do not rewrite the frozen prompt, but resumed speech cancels the buffered
+work before any transcript or audio is sent. Generated speech stays buffered
+until normal turn confirmation becomes the commit point for playback.
+
+The Web pause gate does not add a second minimum to the configured turn
+confirmation: a complete voice turn remains eligible at the application's EOT
+or `confirm_s` boundary. Only a lexically unfinished clause, question preface,
+short subject/time lead-in, or complement-taking tail gets a 1.2 second
+continuation window. Resumed speech clears that window, so the completed
+utterance again uses the normal confirmation latency. Until confirmation,
+partial ASR remains transient UI state rather than a chat bubble. It may seed
+buffered speculative work, but that work is cancelled if speech resumes and
+cannot become an accepted reply before confirmation.
+
+After confirmation, one session-scoped `TurnTakingStateMachine` chooses the
+handoff. Ready audio is released directly. An ordinary predicted wait may use a
+cached acknowledgement, while only the explicit `memory_cot` mode may request
+an LLM-generated work filler. The current reply-mode router does not yet emit
+`memory_cot`, so normal runtime turns use only direct or cached handoffs. First
+audio observations update the session estimate used by later decisions. Main
+reply work runs into a `ReplySink` while either filler plays; releasing that
+sink shortly before the filler ends overlaps work without interleaving output.
 
 ## 9. Reply, prompt, and speech flow
 
@@ -325,7 +352,7 @@ the speech loop.
 
 ### Tone and TTS
 
-The reply model may prefix text with a tone tag. `harness/speak_tag.py` removes
+The reply model may prefix text with a tone tag. `voicemem/tts_control.py` removes
 that control tag, smooths abrupt tone transitions, and converts it into a TTS
 instruction. Control tags are never spoken or stored as assistant text.
 
@@ -335,7 +362,7 @@ provider; local GPU providers can require serialized segments.
 
 ### Spoken backchannels
 
-`harness/backchannel.py` decides whether to emit a short acknowledgement during
+`harness/turn_taking/backchannel.py` decides whether to emit a short acknowledgement during
 a user pause and selects a token appropriate to language and context. Audio is
 served from reviewed or prepared clips because generation on the live pause
 window is too late. Backchannels share playback and echo-reference plumbing but
@@ -383,10 +410,20 @@ The canonical Web media format is 24 kHz mono PCM16. Each assistant output has
 an output ID. Late audio, subtitle, checkpoint, and cancellation events resolve
 against that ID.
 
-The player reports source samples actually rendered. Pause and underflow do not
-advance the media position. Text-to-audio mapping uses provider timestamps when
-available, completed-segment duration otherwise, and calibrated speech rate as
-the fallback.
+The local Breeze adapter emits an initial acoustic batch sized to satisfy the
+browser's existing admission buffer in one delivery. This avoids a redundant
+one-frame codec call and the subsequent wait for a second server chunk without
+raising the browser prebuffer or delaying audible playback.
+
+Turn fillers use the browser's independent backchannel path so they do not
+become main-output timeline content. End-of-turn fillers are interruptible:
+`answer_start`, barge-in, and reset stop them before main PCM begins. In-speech
+backchannels remain independent and do not mutate the main reply state.
+
+Generated, sent, buffered, rendered, and heard output are distinct states.
+Browser-rendered source samples determine the interruption cutoff. Text mapping
+uses provider alignment when available, completed-segment duration otherwise,
+and calibrated speech rate as the fallback.
 
 Interruption separates reversible detection from cancellation:
 
@@ -430,7 +467,7 @@ scheduled. A later UI space change cannot redirect an existing write.
 | `VoiceMem` capability cache | `VoiceMem` instance | Instance |
 | Factual and affective memory | Memory Space stores | Persistent |
 | Streaming ASR/VAD/EOT/gate state | `VoiceStream` | Input turn/session |
-| Turn-taking phase, latency estimate, and backchannel policy | Conversation harness | Session |
+| Turn-taking phase, latency estimate, and backchannel policy | `TurnTakingStateMachine` | WebSocket session |
 | Early output buffer | `ReplySink` | Speculative assistant output |
 | Short-term dialogue | `SessionBuffer` | WebSocket session + Memory Space |
 | Text/media alignment | `AudioTimeline` | Assistant output ID |

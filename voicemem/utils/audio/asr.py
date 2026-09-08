@@ -135,6 +135,54 @@ class FunASRStreamingASR:
     #: 离线包里的位置。跟回退那套并列放在 asr/ 下——两个都是流式 ASR，区别只是
     #: 默认(FunASR，中文更准) / 回退(sherpa，纯 onnx 不依赖 torch)。
     LOCAL_DIR = "funasr-paraformer-zh-streaming"
+    MODEL_CACHE_DIR = (
+        "iic--speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online")
+
+    @staticmethod
+    def _complete_model_dir(path):
+        """Return a local FunASR directory only when its weight is complete."""
+        from pathlib import Path
+
+        directory = Path(path).expanduser()
+        required = ("config.yaml", "model.pt", "tokens.json", "am.mvn", "seg_dict")
+        if not all((directory / name).is_file() for name in required):
+            return None
+        # Interrupted ModelScope downloads can leave a tiny placeholder beside
+        # valid metadata. Never hand that directory to AutoModel as offline.
+        if (directory / "model.pt").stat().st_size < 1024 * 1024:
+            return None
+        return directory
+
+    @classmethod
+    def _cached_model(cls):
+        """Find a complete repository bundle or standard ModelScope snapshot."""
+        import os
+        from pathlib import Path
+        from voicemem.utils.common.paths import models_dir
+
+        configured = os.environ.get("VOICEMEM_ASR_MODEL", "").strip()
+        if configured:
+            complete = cls._complete_model_dir(configured)
+            if complete is None:
+                raise FileNotFoundError(
+                    f"VOICEMEM_ASR_MODEL is not a complete FunASR model: {configured}")
+            return complete
+
+        bundled = cls._complete_model_dir(models_dir() / "asr" / cls.LOCAL_DIR)
+        if bundled is not None:
+            return bundled
+
+        cache_root = Path(os.environ.get(
+            "MODELSCOPE_CACHE", Path.home() / ".cache" / "modelscope"))
+        snapshots = cache_root / "models" / cls.MODEL_CACHE_DIR / "snapshots"
+        if snapshots.is_dir():
+            for candidate in sorted(
+                    snapshots.iterdir(), key=lambda item: item.stat().st_mtime,
+                    reverse=True):
+                complete = cls._complete_model_dir(candidate)
+                if complete is not None:
+                    return complete
+        return None
 
     def __init__(self, model: str | None = None, device: str | None = None) -> None:
         import logging as _logging
@@ -162,11 +210,8 @@ class FunASRStreamingASR:
         # （"HTTP Request: POST ... 200 OK" 刷几十行）。在 voicemem/__init__ 里给
         # 各个 logger 设等级挡不住这个，因为它改的是 root。直接把参数传进去。
         if model is None:
-            # 有离线包就用本地，没有就交给 funasr 按模型名自己下（848M，会卡在
-            # 用户说的第一句上——所以离线包里带着它，别人拉下来开箱即用）。
-            from voicemem.utils.common.paths import models_dir
-            local = models_dir() / "asr" / self.LOCAL_DIR
-            model = str(local) if (local / "config.yaml").exists() else "paraformer-zh-streaming"
+            local = self._cached_model()
+            model = str(local) if local is not None else "paraformer-zh-streaming"
         # 跑 MPS。试过挪到 CPU：一块 600ms 音频要 683ms，比实时还慢，说完要排空
         # 几秒积压。MPS 上 55~167ms 一块。多线程撞 MPS 的问题靠 TORCH_LOCK 解决
         # （见 _run）。VOICEMEM_ASR_DEVICE 可强制。

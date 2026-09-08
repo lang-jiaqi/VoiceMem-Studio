@@ -32,7 +32,7 @@ class _Tee:
         warning = bool(re.search(r"失败|异常|⚠|\b(?:warning|error|exception|critical|traceback)\b", clean, re.I))
         if clean.startswith("Traceback"):
             self._traceback = True
-        if clean.startswith(("[lat]", "[tts-prompt]", "[log]")) or warning or self._traceback:
+        if clean.startswith(("[lat]", "[tts-prompt]", "[log]", "[status]")) or warning or self._traceback:
             # Leave the full timing breakdown in the file; hide rolling medians
             # in the terminal. Browser playback latency remains its own line.
             self.console.write(line.split("｜", 1)[0].rstrip() + "\n")

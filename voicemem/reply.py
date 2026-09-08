@@ -109,23 +109,23 @@ def deepseek_reply(model: str | None = None, api_key: str | None = None,
     import httpx
     model = model or os.environ.get("VOICEMEM_DEEPSEEK_MODEL", "deepseek-v4-flash")
     url = (base_url or "https://api.deepseek.com").rstrip("/") + "/chat/completions"
+    first_token_timeout = max(
+        0.2, float(os.environ.get("VOICEMEM_DEEPSEEK_FIRST_TOKEN_TIMEOUT", "2.0")))
     client = None
 
-    async def fn(text: str, memory_context: str = "", history: list | None = None):
+    async def reset_client(expected=None):
+        """Drop a stalled pooled connection without closing a newer one."""
         nonlocal client
-        if client is None:
-            # 长连接复用；不自动重试，避免把失败藏成几秒钟的静默等待。
-            client = httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0))
-        messages = [{"role": "system", "content": system or default_system()}]
-        messages += list(history or [])
-        messages.append({"role": "user", "content":
-                         f"{memory_context}\n\n{text}" if memory_context else text})
-        # 直接消费 SSE，避免当前 SDK/httpcore2 在提前关闭生成器时的清理异常。
-        request = {"model": model, "messages": messages, "stream": True,
-                   "thinking": {"type": "disabled"}, "max_tokens": 512}
-        record_request("llm", "deepseek", request)
-        async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"},
-                                 json=request) as response:
+        if client is None or (expected is not None and client is not expected):
+            return
+        old, client = client, None
+        await old.aclose()
+
+    async def stream_once(active_client, request):
+        """Yield one HTTP attempt. The caller owns first-token timing/retry."""
+        async with active_client.stream(
+                "POST", url, headers={"Authorization": f"Bearer {key}"},
+                json=request) as response:
             response.raise_for_status()
             data = []
             async for line in response.aiter_lines():
@@ -146,11 +146,61 @@ def deepseek_reply(model: str | None = None, api_key: str | None = None,
                             yield content
             raise RuntimeError("DeepSeek stream ended before [DONE]")
 
-    async def close():
+    async def fn(text: str, memory_context: str = "", history: list | None = None):
         nonlocal client
-        if client is not None:
-            await client.aclose()
-            client = None
+        messages = [{"role": "system", "content": system or default_system()}]
+        messages += list(history or [])
+        messages.append({"role": "user", "content":
+                         f"{memory_context}\n\n{text}" if memory_context else text})
+        # Consume SSE directly so early generator closure releases httpcore cleanly.
+        request = {"model": model, "messages": messages, "stream": True,
+                   "thinking": {"type": "disabled"}, "max_tokens": 512}
+        record_request("llm", "deepseek", request)
+        last_error = None
+        for attempt in range(2):
+            if client is None:
+                client = httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0))
+            active_client = client
+            stream = stream_once(active_client, request)
+            try:
+                # SSE keepalives renew httpx's read timeout. Enforce wall-clock
+                # time so a live connection cannot wait forever without content.
+                first = await asyncio.wait_for(
+                    anext(stream), timeout=first_token_timeout)
+            except asyncio.CancelledError:
+                await stream.aclose()
+                raise
+            except httpx.HTTPStatusError:
+                await stream.aclose()
+                raise                         # Explicit HTTP failures are not transient stalls.
+            except (asyncio.TimeoutError, httpx.TransportError,
+                    RuntimeError, StopAsyncIteration) as exc:
+                last_error = exc
+                await stream.aclose()
+                if attempt == 0:
+                    print(f"[llm] DeepSeek 首字超时/断流，立即换连接重试一次："
+                          f"{type(exc).__name__}", flush=True)
+                    await reset_client(active_client)
+                    continue
+                await reset_client(active_client)
+                if isinstance(exc, asyncio.TimeoutError):
+                    raise TimeoutError(
+                        f"DeepSeek 连续两次在 {first_token_timeout:g}s 内没有返回首字") from exc
+                if isinstance(exc, StopAsyncIteration):
+                    raise RuntimeError("DeepSeek 连续两次返回了空回复") from exc
+                raise
+            else:
+                try:
+                    yield first
+                    async for content in stream:
+                        yield content
+                    return
+                finally:
+                    await stream.aclose()
+        raise RuntimeError("DeepSeek reply failed") from last_error
+
+    async def close():
+        await reset_client()
 
     fn.aclose = close
     return fn

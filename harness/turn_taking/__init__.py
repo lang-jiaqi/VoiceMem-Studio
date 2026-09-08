@@ -11,6 +11,12 @@ from .filler import (
     short_ack_plan,
 )
 from .frequency import SessionFrequencyCurve
+from .state_machine import (
+    HandoffDecision,
+    HandoffKind,
+    TurnPhase,
+    TurnTakingStateMachine,
+)
 
 __all__ = [
     "FillerPlan",
@@ -20,6 +26,10 @@ __all__ = [
     "LONG_WORK_FILLER",
     "SHORT_ACK",
     "SessionFrequencyCurve",
+    "HandoffDecision",
+    "HandoffKind",
+    "TurnPhase",
+    "TurnTakingStateMachine",
     "generate_filler",
     "run_overlapped_handoff",
     "short_ack_plan",

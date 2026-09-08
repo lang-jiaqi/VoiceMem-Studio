@@ -273,6 +273,10 @@ class Backchannel:
     _speech_started: float = 0.0
     _completed_turns: int = 0
 
+    @property
+    def completed_turns(self) -> int:
+        return self._completed_turns
+
     def reset_turn(self) -> None:
         self._speech_started = 0.0
         self._armed = True
@@ -281,6 +285,29 @@ class Backchannel:
         """Advance the session frequency curve after one accepted user turn."""
         self._completed_turns += 1
         self.reset_turn()
+
+    def can_emit(self, now: float | None = None) -> bool:
+        """Return whether the shared session cooldown permits another clip."""
+        now = now if now is not None else time.monotonic()
+        return (emitting() and
+                (self._last_at is None or
+                 now - self._last_at >= max(3.0, self.policy.refractory_s)))
+
+    def choose(self, *, text: str, emotion: str = "", lang: str = "zh",
+               available=None, now: float | None = None) -> str | None:
+        """Choose an acknowledgement without committing it as emitted."""
+        if not self.can_emit(now):
+            return None
+        token = pick_token(text, emotion, lang, self.rng, self._recent, available)
+        return token or None
+
+    def mark_emitted(self, token: str, now: float | None = None) -> None:
+        """Commit a clip only after the transport has accepted it."""
+        if not token:
+            return
+        self._last_at = now if now is not None else time.monotonic()
+        self._last_token = token
+        self._recent = (self._recent + [token])[-3:]
 
     def probability(self, *, text: str, speech_s: float, emotion: str = "",
                     tail_rms: float = 0.0, prev_rms: float = 0.0,
@@ -347,8 +374,7 @@ class Backchannel:
             token = pick_token(text, emotion, lang, self.rng, self._recent, available)
         if not token:
             return None
-        self._last_at, self._last_token = now, token
-        self._recent = (self._recent + [token])[-3:]
+        self.mark_emitted(token, now)
         return token
 
 

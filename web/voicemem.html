@@ -1568,6 +1568,22 @@ function addTurn(s,role,text,speaker){
   if(role==='user'&&!s.named){ s.title=text.length>20?text.slice(0,20)+'…':text; s.named=true; }
   renderSessions(); if(s===currentSession()) renderChat();
 }
+function addOrMergeUserTurn(s,text,speaker){
+  const last=s.turns[s.turns.length-1];
+  const draftText=(liveChatDraft&&liveChatDraft.sessionId===s.id)
+    ?liveChatDraft.said.textContent.trim():'';
+  const now=Date.now();
+  if(last&&last.role==='user'&&Number(last.mergeUntil)>=now&&!draftText){
+    const join=/[\u3400-\u9fff\uf900-\ufaff]$/.test(last.text)||
+      /^[\u3400-\u9fff\uf900-\ufaff]/.test(text)?'':' ';
+    last.text+=join+text;
+    last.mergeUntil=now+2500;
+    renderSessions(); if(s===currentSession()) renderChat();
+    return;
+  }
+  addTurn(s,'user',text,speaker);
+  s.turns[s.turns.length-1].mergeUntil=now+2500;
+}
 function paint(s){ if(s===currentSession()) renderIO(s); }
 function applyHits(s,sp,ex){
   const L=(ex.left||[]).map((i,k)=>({m:sp.left[i],score:(0.88-k*0.09).toFixed(2)})).filter(x=>x.m);
@@ -1644,6 +1660,7 @@ function configurePcmPlayer(){
 }
 // 附和略低于正文音量，避免盖过用户接下来的话。
 let bcGain=0.8;
+const activeTurnFillers=new Set();
 function playBackchannel(m){
   // 走独立的 AudioBufferSource，**不进 pcm worklet**：进了的话服务端的 hearing()
   // 会以为助手在说话，用户接着说就被判成插话——自己的"嗯"把自己掐了。
@@ -1661,7 +1678,12 @@ function playBackchannel(m){
   const g=ctx.createGain();
   // 抖动只往下不往上。
   g.gain.value=bcGain*(0.88+Math.random()*0.12);
-  src.connect(g); g.connect(playBus); src.start();
+  src.connect(g); g.connect(playBus);
+  if(m.interruptible){
+    activeTurnFillers.add(src);
+    src.onended=()=>activeTurnFillers.delete(src);
+  }
+  src.start();
 }
 // 现场调音量：VM_BC(0.6) 调大、VM_BC(0) 静音（服务端仍在判，只是听不见）。
 window.VM_BC=v=>{ bcGain=Math.max(0,Math.min(1,Number(v)||0)); };
@@ -1789,6 +1811,8 @@ function stopPlayback(reason='reset'){
   pcmOutputId='';
   resolvePcmDrain();
   for(const s of scheduled.splice(0)){ try{ s.stop(); }catch(e){} }
+  for(const s of activeTurnFillers){ try{ s.stop(); }catch(e){} }
+  activeTurnFillers.clear();
   releaseMic();                 // 回放被打断，麦克风不该还被挂着
   if(playCtx) nextPlay=playCtx.currentTime;
 }
@@ -2161,7 +2185,7 @@ function handle(m){
       // 不清的话，说一句抽不出东西的话（「啦啦啦」），标签栏还挂着上一句的实体。
       s.ui.tags={emo:'',ent:'',sch:''};
       lvOn=false; s.ui.input=m.text; paint(s);
-      addTurn(s,'user',m.text,s.ui.speaker||'你'); break;
+      addOrMergeUserTurn(s,m.text,s.ui.speaker||'你'); break;
 
     case 'memory_hits': {
       // 展示可能晚于首音频；旧回合的后台结果不能覆盖新回合。

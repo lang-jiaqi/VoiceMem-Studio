@@ -4,8 +4,10 @@ from pathlib import Path
 import sys
 import threading
 import time
+import tempfile
 import types
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -64,6 +66,36 @@ class FunASRFlushPaddingTests(unittest.TestCase):
             np.zeros(FunASRStreamingASR.FINAL_PAD_SAMPLES, dtype=np.float32),
         ])
         np.testing.assert_array_equal(combined, expected)
+
+
+class FunASRLocalCacheTests(unittest.TestCase):
+    @staticmethod
+    def make_complete(directory: Path) -> Path:
+        directory.mkdir(parents=True)
+        for name in ("config.yaml", "tokens.json", "am.mvn", "seg_dict"):
+            (directory / name).write_text("test", encoding="utf-8")
+        with (directory / "model.pt").open("wb") as weight:
+            weight.truncate(1024 * 1024 + 1)
+        return directory
+
+    def test_standard_modelscope_snapshot_is_reused_without_hub_lookup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = self.make_complete(
+                root / "models" / FunASRStreamingASR.MODEL_CACHE_DIR
+                / "snapshots" / "master")
+            with patch.dict("os.environ", {"MODELSCOPE_CACHE": str(root)}, clear=False), \
+                 patch("voicemem.utils.common.paths.models_dir",
+                       return_value=root / "bundle"):
+                self.assertEqual(FunASRStreamingASR._cached_model(), snapshot)
+
+    def test_incomplete_weight_is_not_treated_as_offline_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for name in ("config.yaml", "tokens.json", "am.mvn", "seg_dict"):
+                (directory / name).write_text("test", encoding="utf-8")
+            (directory / "model.pt").write_bytes(b"incomplete")
+            self.assertIsNone(FunASRStreamingASR._complete_model_dir(directory))
 
 
 class FinishTests(unittest.IsolatedAsyncioTestCase):

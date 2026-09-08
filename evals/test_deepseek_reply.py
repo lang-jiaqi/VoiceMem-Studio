@@ -112,6 +112,58 @@ class DeepSeekTests(unittest.IsolatedAsyncioTestCase):
                 await provider.aclose()
         self.assertEqual(len(calls), 1)
 
+    async def test_first_token_timeout_retries_with_fresh_connection(self):
+        bodies = [Body(b": keepalive\n\n", wait=True),
+                  Body(event({"choices": [{"delta": {"content": "好了"}}]}) +
+                       b"data: [DONE]\n\n")]
+        clients = []
+        original = httpx.AsyncClient
+
+        def client(**kw):
+            body = bodies[len(clients)]
+            transport = httpx.MockTransport(
+                lambda _: httpx.Response(200, stream=body))
+            made = original(transport=transport, **kw)
+            clients.append(made)
+            return made
+
+        with patch.dict(os.environ,
+                        {"VOICEMEM_DEEPSEEK_FIRST_TOKEN_TIMEOUT": "0.02"}), \
+                patch("httpx.AsyncClient", side_effect=client):
+            provider = deepseek_reply(api_key="test-only")
+            try:
+                self.assertEqual([x async for x in provider("hello")], ["好了"])
+            finally:
+                await provider.aclose()
+        self.assertEqual(len(clients), 2)
+        self.assertTrue(all(c.is_closed for c in clients))
+        self.assertTrue(all(b.closed for b in bodies))
+
+    async def test_two_first_token_timeouts_fail_in_bounded_time(self):
+        bodies = [Body(b": keepalive\n\n", wait=True),
+                  Body(b": keepalive\n\n", wait=True)]
+        original = httpx.AsyncClient
+        made = []
+
+        def client(**kw):
+            body = bodies[len(made)]
+            c = original(transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, stream=body)), **kw)
+            made.append(c)
+            return c
+
+        with patch.dict(os.environ,
+                        {"VOICEMEM_DEEPSEEK_FIRST_TOKEN_TIMEOUT": "0.02"}), \
+                patch("httpx.AsyncClient", side_effect=client):
+            provider = deepseek_reply(api_key="test-only")
+            try:
+                with self.assertRaisesRegex(TimeoutError, "连续两次"):
+                    await asyncio.wait_for(anext(provider("hello")), 0.5)
+            finally:
+                await provider.aclose()
+        self.assertEqual(len(made), 2)
+        self.assertTrue(all(b.closed for b in bodies))
+
     def test_no_implicit_openai_key_fallback_and_factory_support(self):
         from voicemem.config import _reply_factory
         with patch.dict(os.environ, {"OPENAI_API_KEY": "wrong-provider"}, clear=True):

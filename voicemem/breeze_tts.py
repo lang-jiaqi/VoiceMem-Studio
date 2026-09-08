@@ -37,13 +37,19 @@ class BreezeMLXTTS:
         self.cfg_scale = float(os.environ.get("VOICEMEM_BREEZE_CFG_SCALE", cfg_scale))
         self.seed = int(os.environ.get("VOICEMEM_BREEZE_SEED", seed))
         self.chunk_frames = int(chunk_frames)
-        #: 首块几帧。默认 1：首块是"多久能出声"，主干+depth+codec 少算一帧就少
-        #: 40~60ms；播放端有 160ms 预缓冲，1 帧（约 80ms 音频）足够起播。后面的块
-        #: 仍按 chunk_frames 攒——codec 每块调一次，块太碎开销多。
-        self.first_frames = int(first_frames or os.environ.get("VOICEMEM_BREEZE_FIRST_FRAMES", "1"))
+        # Match the first codec batch to the browser's admission buffer. A
+        # one-frame server chunk cannot start 160 ms playback by itself, so it
+        # only adds an extra codec call before the browser waits for frame two.
+        # An explicit environment override remains available for other players.
+        configured_first = (
+            first_frames if first_frames is not None
+            else os.environ.get("VOICEMEM_BREEZE_FIRST_FRAMES", self.chunk_frames)
+        )
+        self.first_frames = int(configured_first)
         self.max_tokens = int(max_tokens)
-        if self.chunk_frames < 1 or self.max_tokens < 1:
-            raise ValueError("chunk_frames and max_tokens must be positive")
+        if self.chunk_frames < 1 or self.first_frames < 1 or self.max_tokens < 1:
+            raise ValueError(
+                "chunk_frames, first_frames and max_tokens must be positive")
         if depth_mode not in {"cached", "native", "compiled"}:
             raise ValueError("depth_mode must be cached, native, or compiled")
         self.depth_mode = depth_mode

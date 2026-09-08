@@ -51,6 +51,15 @@ from web.harness import (
     is_unfinished,
     system_prompt,
 )
+from harness.reply_modes import DIRECT, MEMORY
+from harness.turn_taking import (
+    Backchannel,
+    HandoffKind,
+    LONG_WORK_FILLER,
+    TurnTakingStateMachine,
+    generate_filler,
+    short_ack_plan,
+)
 from voicemem.prompt_config import tts_prompts
 os.environ.setdefault("VOICEMEM_MODELS_DIR", str(_ROOT / "models"))
 # 记忆空间锚在**仓库根**，不跟当前目录走。否则 `cd web && python run.py` 会在
@@ -130,6 +139,8 @@ if __name__ == "__main__" and not ARGS.no_file_log:
 if __name__ == "__main__":
     from voicemem.prompt_trace import configure as _configure_prompt_trace
     print(f"[log] Prompt 请求记录：{_configure_prompt_trace(_ROOT / 'prompt' / 'logs')}", flush=True)
+    print("[status] 正在初始化本地 ASR 和 Breeze，首次启动通常需要约 1 分钟…",
+          flush=True)
 
 # Set the demo default before utils imports the TTS provider registry.
 if ARGS.mode == "llm_tts":
@@ -317,7 +328,7 @@ def set_lang(lang: str) -> str:
         空库    → 界面和记忆/回复语言一起切，并写进空间
         非空库  → 只切界面，**并把这件事告诉用户**（返回值让前端弹一句）
     """
-    global UI_LANG, SPACE_LANG
+    global UI_LANG, SPACE_LANG, vm
     UI_LANG = "en" if str(lang).lower().startswith("en") else "zh"
     if UI_LANG == SPACE_LANG:
         return SPACE_LANG
@@ -325,6 +336,13 @@ def set_lang(lang: str) -> str:
         _write_space_language(ACTIVE_SPACE, UI_LANG)
         SPACE_LANG = UI_LANG
         _set_lang(SPACE_LANG)
+        spaces = globals().get("_SPACES", {})
+        if ACTIVE_SPACE in spaces:
+            spaces.pop(ACTIVE_SPACE)
+            vm = get_space(ACTIVE_SPACE)
+        voice_cache = globals().get("_BC_VOICE")
+        if isinstance(voice_cache, dict):
+            voice_cache["obj"] = None
         print(f"[lang] 空间「{ACTIVE_SPACE}」还是空的 → 记忆和回复一起切到 {UI_LANG}",
               flush=True)
     else:
@@ -1083,8 +1101,11 @@ def space_dir(name: str):
 
 def get_space(name: str):
     """取（必要时创建）这个空间的 VoiceMem。"""
-    _, safe = space_dir(name)
+    directory, safe = space_dir(name)
     if safe not in _SPACES:
+        if not directory.exists() or not any(directory.iterdir()):
+            directory.mkdir(parents=True, exist_ok=True)
+            _write_space_language(safe, ARGS.lang)
         cfg = dict(CONFIG)
         cfg["space"] = safe
         # 人设按这个空间的语言选。实例是按空间缓存的，所以一个空间灌一次就够，
@@ -1210,12 +1231,12 @@ class Pending:
     replay: str = ""             # 该把哪条记忆当时那段原声放回来（memory_id），空=不放
     emotion: str = ""            # 上一轮感知到的情绪，用来给这一轮定语气
     route: str = gate.DEEP       # 轮次闸门判的路：deep 才注入事实记忆，见 voicemem/gate.py
+    reply_mode: str = DIRECT     # Reply production mode consumed by turn-taking policy.
     #: 提前生成的那一份还作数吗。判据是**下注之后你有没有接着说**，不是"文本一模
     #: 一样"——ASR 会边说边修正尾巴，人明明已经闭嘴了也会因为差一个词而白白作废。
     early_ok: bool = False
-    #: VAD 最后一次判到人声的时刻（monotonic）。用来量"你闭嘴到助手出声"这整段——
-    #: [lat] 原来的起点是"回合交出"，那已经在 300ms 静音确认 + 离线 ASR 复核之后了，
-    #: 中间那截从没被量过，而用户感受到的等待正是从闭嘴那一刻开始算的。
+    # Monotonic time of the last voiced VAD frame. Latency must include the
+    # configured turn confirmation and final-ASR work before reply handoff.
     speech_end: float = 0.0
 
 
@@ -1474,6 +1495,8 @@ class ReplySink:
         self._buf: list[tuple[str, object]] = []
         self.live = False
         self._lock = asyncio.Lock()
+        self._audio_ready = asyncio.Event()
+        self.first_audio_at = 0.0
 
     async def send(self, msg):
         async with self._lock:
@@ -1484,6 +1507,10 @@ class ReplySink:
 
     async def send_audio(self, pcm: bytes):
         async with self._lock:
+            if pcm:
+                if not self.first_audio_at:
+                    self.first_audio_at = time.monotonic()
+                self._audio_ready.set()
             if self.live:
                 await self._send_audio(pcm)
             else:
@@ -1493,6 +1520,9 @@ class ReplySink:
     def buffered_ms(self) -> float:
         n = sum(len(p) for k, p in self._buf if k == "pcm")
         return n / 2 / MIC_RATE * 1000
+
+    async def wait_for_audio(self) -> None:
+        await self._audio_ready.wait()
 
     async def commit(self) -> None:
         """赌对了：把攒下的按原顺序放出去，之后转直发。"""
@@ -1624,6 +1654,16 @@ async def voicemem_llm_tts(pending, send, send_audio, owner, timeline,
                 pending, send, send_audio, owner, timeline, said=said,
                 context_session=context_session, context_space=context_space,
                 memory_vm=memory_vm, first_audio_ready=ready)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Surface provider failure without exposing exception details or credentials.
+        try:
+            await send({"type": "error", "message":
+                        "回复服务刚才没有及时返回，已自动重试；请再说一次。"})
+        except Exception:
+            pass
+        raise
     finally:
         display.cancel()
         await asyncio.gather(display, return_exceptions=True)
@@ -2443,7 +2483,9 @@ HISTORY_TURNS = int(os.environ.get("VOICEMEM_HISTORY_TURNS", "6"))
 async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=None,
                      said=None, on_candidate=None, on_candidate_reject=None,
                      on_playback_checkpoint=None, on_early=None,
-                     on_speech_start=None, textless_confirm_s=None):
+                     on_early_cancel=None,
+                     on_speech_start=None, textless_confirm_s=None,
+                     turn_taking=None):
     """驱动核心流式会话，逐个 yield 确认回合的 Pending。
     on_frame(raw24k)：realtime 用它把原始音频平行喂给 OpenAI（方案 A）。
     on_speech()：本地 VAD 一听到人声就叫一次——realtime 拿它做打断（barge-in）。
@@ -2461,9 +2503,11 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
     last_partial = ""
     if owner is None:
         owner = {"id": "", "last": "", "miss": 0}   # 主人的声纹 / 上一轮是谁 / 连续认错几轮
-    from harness.turn_taking import Backchannel
     from harness.turn_taking import backchannel as _bc_mod
-    bc = Backchannel(policy=backchannel_policy())  # 冷却跨轮保留，开头只增加概率
+    turn_taking = turn_taking or TurnTakingStateMachine(
+        backchannel=Backchannel(policy=backchannel_policy()),
+        echo_window_s=BC_ECHO_WINDOW_S)
+    bc = turn_taking.backchannel
     bc_speech_t0 = 0.0                    # 这一轮用户什么时候开的口
     prewarm_idle = True                   # 该趁空闲把「人设+历史」热一遍了
     prewarm_mem = None                    # 已经拿去续热过的那份投机记忆
@@ -2480,12 +2524,11 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
     # 不是参数没调对。
     #
     # 阈值取"这段话当前响度的 25%"，不用绝对值——每个人音量不同、房间也不同。
-    bc_recent: list = []                  # 最近播的附和词 [(时刻, 词)]，用来挡它自己的回声
     early_text = ""                       # 上次提前起跑时赌的那句话
     speak_run = 0.0                       # 连续听到人声多久（挡回声误触暂停）
     eot_peak = 0.0                        # 本轮 EOT 最高分（debug 用）
     early_at = 0.0                        # 什么时候下的注
-    early_speech = 0.0                    # （保留字段，现在不参与判定）
+    early_paused = False                  # A real pause has followed the EOT bet.
     if _bc_mod.emitting():
         # 接通就起预合成。等第一次触发才合成的话，那几十秒里每次触发都拿不到音频、
         # 安静跳过——表现就是"开了但完全不响"，而且没有任何提示。
@@ -2501,9 +2544,9 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         ``bc_speech_t0`` 同理，而且坏得更隐蔽：它是"这一轮什么时候开的口"，
         不归零就等于整场只开过一次口——本地模型只在第一轮预热（后面每轮都
         `没命中`，首字回到两秒），附和用的 speech_s 也会一路涨到几百秒。"""
-        nonlocal early_at, early_speech, early_text, eot_peak, bc_speech_t0
+        nonlocal early_at, early_paused, early_text, eot_peak, bc_speech_t0
         nonlocal prewarm_idle, prewarm_mem
-        early_at, early_speech, early_text = 0.0, 0.0, ""
+        early_at, early_paused, early_text = 0.0, False, ""
         eot_peak = 0.0
         bc_speech_t0 = 0.0
         prewarm_idle = True
@@ -2523,9 +2566,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         # ECHO_WINDOW(300) 个字符，于是附和词把助手真正说的话整个挤出去了。
         # 后果是用户说的话越来越容易被判成"回声"，打断确认永远不成立：
         # 表现就是"我说话它还在说"。
-        now = time.monotonic()
-        recent = "".join(w for t, w in bc_recent if now - t < BC_ECHO_WINDOW_S)
-        return (said() if said else "") + recent
+        return (said() if said else "") + turn_taking.recent_agent_text()
 
     def heard_from_agent():
         return utterance.reference or live_agent_text()
@@ -2548,13 +2589,15 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                     await on_playback_checkpoint(data)
                 continue
             if data.get("type") == "user_text" and data.get("text", "").strip():
+                turn_taking.begin_user_turn()
                 stream.emotion = owner.get("emotion") or None
                 turn = await stream.feed_text(data["text"])
-                bc.complete_turn()
+                turn_taking.commit_user_turn()
                 yield Pending(turn.text, turn.memory_context, turn.result, spoken=False,
                               replay=_replay_id(turn.text, turn.result),
                               emotion=owner.get("emotion", ""),
-                              route=turn.route)
+                              route=turn.route,
+                              reply_mode=MEMORY if gate.needs_memory(turn.route) else DIRECT)
             continue
         if msg.get("bytes") is None:
             continue
@@ -2589,6 +2632,21 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         if st.state == "<speak>" and not getattr(st, "speech_end", 0):
             last_speak_t = time.monotonic()
 
+        # Early generation is speculative until the user turn is confirmed.
+        # ASR may revise text during silence, but actual speech after a pause
+        # means the user continued the same sentence and invalidates the bet.
+        resumed_after_early = False
+        if early_at:
+            if st.state == "<silence>" and st.silence > 0:
+                early_paused = True
+            elif early_paused and st.state == "<speak>":
+                resumed_after_early = True
+                early_at, early_paused, early_text = 0.0, False, ""
+                eot_peak = 0.0
+                prewarm_idle = True
+                if on_early_cancel:
+                    await on_early_cancel("用户停顿后继续说")
+
         # 空闲时先把模型热上。**时机是这里，不是等他开口**：人设和历史在上一轮
         # 回复说完那一刻就定了，而预热要跑一秒多——挂在"开口"上，一句"who am i"
         # 说完预热还没跑完，等于白热。实测挂在开口上时每轮首字都是全量 prefill
@@ -2613,14 +2671,15 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         # audio before the LLM sees this turn.
         if st.eot_score > eot_peak:
             eot_peak = st.eot_score
-        # The first accepted EOT is the commit point for this LLM turn.  Later
-        # speech remains visible in the live transcript but does not revise the
-        # already committed prompt.
+        # EOT starts buffered work, but confirmation remains the commit point.
+        # Resumed speech cancels this bet before any transcript or audio is sent.
         if (on_early and not busy and not input_echo and st.spoke and cur
                 and not is_unfinished(cur) and not pause_gate.hold_until
                 and not (utterance.started_busy and _is_backchannel(cur))
-                and st.eot_score >= EARLY_EOT and not early_at):
+                and st.eot_score >= EARLY_EOT and not early_at
+                and not resumed_after_early):
             early_text, early_at = cur, time.monotonic()
+            early_paused = st.state == "<silence>"
             refined_text = stream.refine_current_snapshot()
             await on_early(cur, st, refined_text)
             # Generation is buffered; normal turn confirmation still owns when
@@ -2643,6 +2702,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
             bc_rms_slow = (0.9 * bc_rms_slow + 0.1 * rms) if bc_rms_slow else rms
             if not bc_speech_t0:
                 bc_speech_t0 = time.monotonic()
+                turn_taking.begin_user_turn()
         quiet = rms < max(0.008, BC_QUIET_RATIO * bc_rms_slow)
         bc_gap = bc_gap + frame_s if quiet else 0.0
         # 助手正在说话时不附和：那不是"我在听"，那是抢话。
@@ -2657,13 +2717,14 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                      and cur != early_text and st.state == "<speak>"))
         if not st.turn and not busy and not input_echo and not utterance.started_busy and bc_speech_t0 and bc_ok:
             voice = _backchannel_voice() if _bc_mod.emitting() else None
-            token = bc.offer(text=cur, silence=bc_gap, spoke=st.spoke,
-                             speech_s=time.monotonic() - bc_speech_t0,
-                             emotion=owner.get("emotion", ""),
-                             tail_rms=bc_rms_fast, prev_rms=bc_rms_slow,
-                             lang=space_language(ACTIVE_SPACE),
-                             available=voice.available if voice else set(),
-                             unfinished=unfinished)
+            token = turn_taking.offer_backchannel(
+                text=cur, silence=bc_gap, spoke=st.spoke,
+                speech_s=time.monotonic() - bc_speech_t0,
+                emotion=owner.get("emotion", ""),
+                tail_rms=bc_rms_fast, prev_rms=bc_rms_slow,
+                lang=space_language(ACTIVE_SPACE),
+                available=voice.available if voice else set(),
+                unfinished=unfinished)
             if token:
                 voice = _backchannel_voice()
                 pcm = voice.get(token, bc.rng) if voice else None
@@ -2675,7 +2736,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                         "sample_rate": 24000,
                         "pcm": base64.b64encode(pcm).decode()})
                     pause_gate.emitted(len(pcm) / (24000 * 2))
-                    bc_recent.append((time.monotonic(), token))  # 见 heard_from_agent()
+                    turn_taking.record_emission(token)
                     if BARGE_DEBUG:
                         print(f"[backchannel] {token!r}", flush=True)
                 elif BARGE_DEBUG:
@@ -2868,21 +2929,20 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                     print(f"[early] 本轮 EOT 最高 {eot_peak:.2f}（下注线 {EARLY_EOT}）"
                           f"{'，下过注' if early_at else '，没下注'}", flush=True)
             eot_peak = 0.0
-            _now = time.monotonic()
-            bc_recent[:] = [(t, w) for t, w in bc_recent if _now - t < BC_ECHO_WINDOW_S]
-            _bc_echo = bool(bc_recent) and _is_echo(
-                st.turn.text, "".join(w for _, w in bc_recent))
+            recent_emission = turn_taking.recent_agent_text()
+            _bc_echo = bool(recent_emission) and _is_echo(
+                st.turn.text, recent_emission)
             if _bc_echo:
                 if BARGE_DEBUG:
                     print(f"[backchannel] 这一轮是自己那声附和的回声 → 丢弃："
                           f"{st.turn.text!r}", flush=True)
                 _reset_early()
                 continue
-            # EOT is an irreversible prompt commit for the early path.  Later
-            # streaming/final text is retained for display and recording, but it
-            # must not invalidate or rewrite the LLM request already in flight.
+            # Only a bet that survived the continuation window can be released.
+            # ASR-only revisions during silence keep the same frozen prompt;
+            # actual resumed speech already cancelled it above.
             _early_ok = bool(early_at)
-            early_at, early_speech, early_text = 0.0, 0.0, ""
+            early_at, early_paused, early_text = 0.0, False, ""
             # 开口时刻也要归零，而且**这条成功路径最容易漏**——它不走
             # _reset_early()，自己就地清 early_at。漏了的后果不是"少一次下注"，
             # 是本地模型只在整场第一轮预热：prewarm_local 挂在"这一轮第一次开口"
@@ -2904,7 +2964,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                 # person_* 时就会这样：记忆被清空，指令换成"就当第一次见面"。
                 print(f"[speaker] owner={owner['id'] or '-'} last={owner['last'] or '-'}"
                       f" miss={owner.get('miss', 0)} stranger={stranger}", flush=True)
-            bc.complete_turn()
+            turn_taking.commit_user_turn()
             yield Pending(st.turn.text,
                           "" if stranger else st.turn.memory_context,
                           st.turn.result, spoken=True,
@@ -2914,6 +2974,8 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                           replay="" if stranger else _replay_id(st.turn.text, st.turn.result),
                           emotion=owner.get("emotion", ""),
                           route=st.turn.route,
+                          reply_mode=(MEMORY if gate.needs_memory(st.turn.route)
+                                      else DIRECT),
                           early_ok=_early_ok,
                           speech_end=last_speak_t)
 
@@ -2943,10 +3005,14 @@ async def llm_tts_session(sock):
 
     现在回复丢进后台任务，读 socket 的循环一刻不停；听到人声就取消那个任务。
     """
+    turn_taking = TurnTakingStateMachine(
+        backchannel=Backchannel(policy=backchannel_policy()),
+        echo_window_s=BC_ECHO_WINDOW_S)
     # until：前端预计几点才把已发出去的音频播完（见 hearing()）。
     turn = {"task": None, "t0": 0.0, "until": 0.0, "echo_until": 0.0,
             "speech_end": 0.0, "play_started": False,
-            "reply": {"text": ""}, "timeline": None}
+            "reply": {"text": ""}, "timeline": None,
+            "measure_started": 0.0, "measure_recorded": False}
     owner = {"id": "", "last": "", "miss": 0}
     speech_rate = SpeechRateEstimator()
     context_session = uuid.uuid4().hex
@@ -3017,6 +3083,10 @@ async def llm_tts_session(sock):
             # 宽限期从**助手真的出声**那一刻起算，不是从任务创建。TTS 首帧要
             # ~1.2s，按任务创建算的话宽限期在它开口前就过完了，等于没有。
             turn["t0"] = time.monotonic()
+        if turn["measure_started"] and not turn["measure_recorded"]:
+            turn["measure_recorded"] = True
+            turn_taking.observe_first_audio(
+                time.monotonic() - turn["measure_started"])
         await sock.send_bytes(pcm)
 
     async def stop_reply(force: bool = False):
@@ -3055,15 +3125,125 @@ async def llm_tts_session(sock):
             except asyncio.CancelledError:
                 pass
 
+    def reset_output_state(pending, timeline, reply_state) -> None:
+        turn.update(
+            t0=0.0,
+            until=0.0,
+            speech_end=pending.speech_end,
+            play_started=False,
+            reply=reply_state,
+            timeline=timeline,
+            measure_started=0.0,
+            measure_recorded=False,
+        )
+
+    def cached_ack(pending):
+        if not pending.spoken:
+            return None
+        voice = _backchannel_voice()
+        if not voice or not voice.ready:
+            return None
+        token = turn_taking.prepare_cached_ack(
+            text=pending.text,
+            emotion=pending.emotion,
+            lang=space_language(ACTIVE_SPACE),
+            available=voice.available,
+        )
+        pcm = voice.get(token, turn_taking.backchannel.rng) if token else None
+        return (token, pcm) if pcm else None
+
+    async def emit_filler(token: str, pcm: bytes) -> float:
+        """Send interruptible filler audio and return its PCM duration."""
+        duration = len(pcm) / (MIC_RATE * 2)
+        await sock.send_json({
+            "type": "backchannel",
+            "token": token,
+            "sample_rate": MIC_RATE,
+            "pcm": base64.b64encode(pcm).decode(),
+            "interruptible": True,
+        })
+        turn_taking.record_emission(token, committed=True)
+        turn["until"] = max(turn["until"], time.monotonic() + duration)
+        turn["echo_until"] = max(turn["echo_until"], turn["until"] + 2.0)
+        return duration
+
+    async def synthesize_work_filler(pending, memory_vm, context_space):
+        """Generate and synthesize a bridge without delaying the main work."""
+        history = _SESSION_CONTEXT.messages(
+            context_session, context_space, window=HISTORY_TURNS)
+        text = await generate_filler(
+            memory_vm.reply_stream,
+            pending.text,
+            history=history,
+            lang=space_language(context_space),
+        )
+        if not text:
+            return "", b""
+        tts = memory_vm.utils.get("tts")
+        instruction = _speak_instruction(pending.emotion)
+        print(f"[tts-prompt] filler {json.dumps(instruction, ensure_ascii=False)}", flush=True)
+        try:
+            stream = tts.stream(text, instruction)
+        except TypeError:
+            stream = tts.stream(text)
+        chunks = bytearray()
+        async for chunk in stream:
+            chunks.extend(chunk.pcm if isinstance(chunk, TimedAudioChunk) else chunk)
+        return text, bytes(chunks)
+
+    async def release_buffered_reply(sink, decision, ack, pending,
+                                     memory_vm, context_space) -> None:
+        """Bridge into an already-running buffered reply, then release it."""
+        filler_task = None
+        ready_task = None
+        try:
+            if decision.kind is HandoffKind.CACHED_ACK and ack:
+                duration = await emit_filler(*ack)
+                await asyncio.sleep(short_ack_plan(duration).main_start_seconds)
+            elif decision.kind is HandoffKind.LLM_FILLER:
+                filler_task = asyncio.create_task(
+                    synthesize_work_filler(pending, memory_vm, context_space))
+                ready_task = asyncio.create_task(sink.wait_for_audio())
+                done, _ = await asyncio.wait(
+                    (filler_task, ready_task), return_when=asyncio.FIRST_COMPLETED)
+                if ready_task in done or sink.buffered_ms > 0:
+                    filler_task.cancel()
+                else:
+                    try:
+                        text, pcm = await filler_task
+                    except Exception as e:
+                        print(f"[web] 垫话生成失败，直接回复："
+                              f"{type(e).__name__}: {e}", flush=True)
+                        text, pcm = "", b""
+                    if text and pcm and sink.buffered_ms <= 0:
+                        duration = await emit_filler(text, pcm)
+                        await asyncio.sleep(max(
+                            0.0, duration - LONG_WORK_FILLER.lead_seconds))
+            turn["until"] = 0.0
+            turn_taking.start_reply()
+            if sink.first_audio_at and turn["measure_started"]:
+                turn["measure_recorded"] = True
+                turn_taking.observe_first_audio(
+                    sink.first_audio_at - turn["measure_started"])
+            await sink.commit()
+        finally:
+            for task in (filler_task, ready_task):
+                if task is not None and not task.done():
+                    task.cancel()
+            await asyncio.gather(
+                *(task for task in (filler_task, ready_task) if task is not None),
+                return_exceptions=True)
+
     # 提前起跑的那一份：{"text","task","sink","timeline","pending"}。
     early = {"text": "", "task": None, "sink": None, "timeline": None,
-             "pending": None, "said": None}
+             "pending": None, "said": None, "space": "", "memory_vm": None,
+             "started": 0.0}
 
     async def drop_early(why: str = "") -> None:
         """赌错了：把提前生成的整个丢掉。它一个字节都没发出去，用户无感。"""
         t = early["task"]
         early.update(text="", task=None, sink=None, timeline=None, pending=None,
-                     said=None)
+                     said=None, space="", memory_vm=None, started=0.0)
         if t is not None and not t.done():
             t.cancel()
             try:
@@ -3095,7 +3275,7 @@ async def llm_tts_session(sock):
         # please"，被当成用户新说的一轮，还照着它下了注。
         said_state = {"text": ""}
         early.update(text=text, sink=sink, timeline=timeline, pending=None,
-                     said=said_state)
+                     said=said_state, space=context_space, memory_vm=vm, started=0.0)
 
         async def run():
             try:
@@ -3108,6 +3288,7 @@ async def llm_tts_session(sock):
                 if BARGE_DEBUG:
                     print(f"[early] EOT {st.eot_score:.2f} · offline ASR committed: "
                           f"{committed_text[-20:]!r}", flush=True)
+                early["started"] = time.monotonic()
                 await voicemem_llm_tts(pending, sink.send, sink.send_audio, owner,
                                        timeline, said=said_state,
                                        context_session=context_session,
@@ -3189,13 +3370,23 @@ async def llm_tts_session(sock):
         except Exception as e:
             print(f"[web] 回复收尾失败：{type(e).__name__}: {e}", flush=True)
 
+    def reply_done(done_task):
+        try:
+            done_task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f"[web] 回复任务失败：{type(e).__name__}: {e}", flush=True)
+
     async for pending in _session_anticipate(
             context_session, sock, on_speech=stop_reply, owner=owner,
             is_busy=hearing, said=lambda: (turn["reply"]["text"]
                 if hearing() or time.monotonic() < turn["echo_until"] else ""),
             on_candidate=pause_candidate, on_candidate_reject=resume_candidate,
             on_playback_checkpoint=playback_checkpoint, on_close=close_session,
-            on_early=start_early, on_speech_start=prewarm_local, textless_confirm_s=0.2):
+            on_early=start_early, on_early_cancel=drop_early,
+            on_speech_start=prewarm_local,
+            textless_confirm_s=0.2, turn_taking=turn_taking):
         # 整轮都是附和、而助手还在说：当没听见。
         #
         # _is_backchannel 原来只挡在"说到一半"那条路上（anticipate 里），可 VAD
@@ -3211,74 +3402,124 @@ async def llm_tts_session(sock):
         # 文本命中就接管提前生成；可能还没合成出音频，不能把命中等同于立即出声。
         if early["task"] is not None and pending.early_ok:
             await stop_reply(force=True)
-            turn["t0"] = turn["until"] = 0.0
-            turn["speech_end"], turn["play_started"] = pending.speech_end, False
-            # 接管提前生成那份的 said——它记着助手已经说出口的话，防回声全靠它。
-            # 原来这里给了个新的空 dict，等于把回声比对的依据清空了：助手说
-            # "Are you looking for a place to"，麦克风听回去转成 "looking for a
-            # please"，就被当成用户新说的一轮。
-            turn["reply"] = early["said"] or {"text": ""}
-            turn["timeline"] = early["timeline"]
-            turn["task"] = early["task"]
+            reply_state = early["said"] or {"text": ""}
+            timeline = early["timeline"]
+            early_task = early["task"]
+            context_space = early["space"] or ACTIVE_SPACE
+            memory_vm = early["memory_vm"] or vm
+            generation_started = early["started"] or time.monotonic()
             sink, ms = early["sink"], early["sink"].buffered_ms
+            reset_output_state(pending, timeline, reply_state)
             early.update(text="", task=None, sink=None, timeline=None, pending=None,
-                     said=None)
-            await sink.commit()
+                     said=None, space="", memory_vm=None, started=0.0)
+
+            ack = cached_ack(pending)
+            decision = turn_taking.decide_handoff(
+                main_audio_ready=ms > 0,
+                reply_mode=pending.reply_mode,
+                cached_ack_available=bool(ack),
+                spoken=pending.spoken,
+            )
+
+            async def accept_early():
+                try:
+                    turn_taking.start_handoff(decision)
+                    turn["measure_started"] = generation_started
+                    await release_buffered_reply(
+                        sink, decision, ack, pending, memory_vm, context_space)
+                    await early_task
+                except asyncio.CancelledError:
+                    if not early_task.done():
+                        early_task.cancel()
+                    await asyncio.gather(early_task, return_exceptions=True)
+                    raise
+                finally:
+                    turn_taking.finish_reply()
+
+            task = asyncio.create_task(accept_early())
+            turn["task"] = task
+            task.add_done_callback(reply_done)
             if BARGE_DEBUG:
                 state = "释放现成音频" if ms > 0 else "尚无音频，继续等待生成"
-                print(f"[early] ★ 文本命中，已缓冲 {ms:.0f}ms 音频，{state}", flush=True)
+                print(f"[early] ★ 文本命中，已缓冲 {ms:.0f}ms 音频，{state}"
+                      f"；handoff={decision.kind.value}", flush=True)
             continue
         await drop_early("这一轮没赌成" if early["task"] else "")
 
         # 上一轮还没播完就被新的一轮顶掉。force：这里不能被宽限期挡下来，挡下来
         # 旧任务会继续往同一条 socket 里灌音频，两轮交织着播。
         await stop_reply(force=True)
-        turn["t0"] = turn["until"] = 0.0
-        turn["speech_end"], turn["play_started"] = pending.speech_end, False
-        turn["reply"] = {"text": ""}            # 新一轮，回声比对从空的开始
-        reply_state = turn["reply"]
+        reply_state = {"text": ""}
         context_space = ACTIVE_SPACE
         memory_vm = vm
         timeline = AudioTimeline(
             prebuffer_seconds=0.16, rate_estimator=speech_rate)
-        turn["timeline"] = timeline
+        reset_output_state(pending, timeline, reply_state)
 
-        async def run_reply(pending=pending, timeline=timeline,
+        def save_interrupted_context() -> None:
+            if timeline.context_saved:
+                return
+            reply = timeline.heard_text()
+            history_turn_id = _push_history(
+                context_session, context_space, pending.text, reply,
+                interrupted=True)
+            queue_remember_turn(
+                pending, reply, owner, history_turn_id,
+                memory_vm=memory_vm)
+            timeline.context_saved = True
+
+        async def run_reply(send_json=sock.send_json, send_pcm=send_audio,
+                            pending=pending, timeline=timeline,
                             context_space=context_space, memory_vm=memory_vm,
                             reply_state=reply_state):
             try:
                 await voicemem_llm_tts(
-                    pending, sock.send_json, send_audio, owner, timeline,
+                    pending, send_json, send_pcm, owner, timeline,
                     said=reply_state, context_session=context_session,
                     context_space=context_space, memory_vm=memory_vm)
             finally:
-                if not timeline.context_saved:
-                    reply = timeline.heard_text()
-                    history_turn_id = _push_history(
-                        context_session, context_space, pending.text, reply,
-                        interrupted=True)
-                    queue_remember_turn(
-                        pending, reply, owner, history_turn_id,
-                        memory_vm=memory_vm)
-                    timeline.context_saved = True
+                save_interrupted_context()
 
-        task = asyncio.create_task(run_reply())
-        turn["task"] = task
+        ack = cached_ack(pending)
+        decision = turn_taking.decide_handoff(
+            main_audio_ready=False,
+            reply_mode=pending.reply_mode,
+            cached_ack_available=bool(ack),
+            spoken=pending.spoken,
+        )
 
-        def reply_done(done_task):
+        async def coordinate_reply():
+            child_tasks = []
             try:
-                done_task.result()
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                print(f"[web] 回复任务失败：{type(e).__name__}: {e}", flush=True)
+                turn_taking.start_handoff(decision)
+                if decision.kind is not HandoffKind.DIRECT:
+                    sink = ReplySink(sock.send_json, send_audio)
+                    turn["measure_started"] = time.monotonic()
+                    main = asyncio.create_task(run_reply(sink.send, sink.send_audio))
+                    child_tasks.append(main)
+                    await release_buffered_reply(
+                        sink, decision, ack, pending, memory_vm, context_space)
+                    await main
+                    return
+                turn_taking.start_reply()
+                turn["measure_started"] = time.monotonic()
+                await run_reply()
+            finally:
+                for child in child_tasks:
+                    if not child.done():
+                        child.cancel()
+                if child_tasks:
+                    await asyncio.gather(*child_tasks, return_exceptions=True)
+                save_interrupted_context()
+                turn_taking.finish_reply()
 
+        task = asyncio.create_task(coordinate_reply())
+        turn["task"] = task
         task.add_done_callback(reply_done)
 
 
 async def realtime_session(sock):
-    """方案 A：整段麦克风音频平行喂给 OpenAI Realtime；本地 ASR+VAD 只负责投机记忆 +
-    用 500ms 判回合（关掉 OpenAI 自带 server_vad）。"""
+    """Run Realtime speech while local ASR/VAD owns turn confirmation."""
     connected = False
     context_session = uuid.uuid4().hex
     try:
@@ -4272,4 +4513,5 @@ if __name__ == "__main__":
           f"MLX缓存上限 {os.environ.get('VOICEMEM_MLX_CACHE_MB', '512')}MB", flush=True)
     _print_backchannel_status()
     print("[web] 就绪", flush=True)
+    print(f"[status] 已就绪：http://localhost:{ARGS.port}", flush=True)
     uvicorn.run(app, host=ARGS.host, port=ARGS.port)

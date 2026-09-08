@@ -12,7 +12,10 @@ from harness.speaking_style import content_emotion_note, prompt_rule
 from harness.turn_taking import (
     Backchannel,
     FillerPlan,
+    HandoffKind,
     SessionFrequencyCurve,
+    TurnPhase,
+    TurnTakingStateMachine,
     generate_filler,
     run_overlapped_handoff,
     short_ack_plan,
@@ -51,6 +54,15 @@ class BackchannelTests(unittest.TestCase):
                                   speech_s=1, now=5, unfinished=True))
         self.assertIsNone(self.offer(bc, 6, available={"太好了", "对"}))
 
+    @patch.dict(os.environ, {"VOICEMEM_BACKCHANNEL_EMIT": "1"})
+    def test_end_ack_and_in_speech_backchannel_share_cooldown(self):
+        bc = Backchannel(policy=backchannel_policy(), rng=random.Random(1))
+        token = bc.choose(text="我说完了", available={"嗯"}, now=0)
+        self.assertEqual(token, "嗯")
+        bc.mark_emitted(token, now=0)
+        self.assertIsNone(bc.choose(text="下一句", available={"嗯"}, now=2.99))
+        self.assertEqual(bc.choose(text="下一句", available={"嗯"}, now=3), "嗯")
+
     def test_session_probability_is_50_then_10_then_30_percent(self):
         bc = Backchannel(policy=backchannel_policy())
         probabilities = [bc.probability(text="今天路上有点堵车", speech_s=1, now=0)[0]]
@@ -66,10 +78,14 @@ class BackchannelTests(unittest.TestCase):
         self.assertIn("session概率=50%/10%/30%", backchannel_policy_summary())
 
     def test_unfinished_detection_tolerates_asr_punctuation(self):
-        for text in ("我经常就", "我就是觉得。", "我就是觉得这种", "因为，", "I feel..."):
+        for text in (
+            "我经常就", "我就是觉得。", "我就是觉得这种", "因为，", "I feel...",
+            "我想问一下。", "我今天", "好你先跟我", "我想打断一", "我有一个问题",
+        ):
             self.assertTrue(is_unfinished(text), text)
         for text in ("我觉得今天很好。", "为什么？", "我经常就这样结束。", "ok", "我想你了",
-                     "我也是这么觉得", "你怎么想？", "你觉得？", "我不想将就"):
+                     "我也是这么觉得", "你怎么想？", "你觉得？", "我不想将就",
+                     "你还能更快吗？", "今天下雨了"):
             self.assertFalse(is_unfinished(text), text)
 
     def test_realtime_never_gets_spoken_control_tags(self):
@@ -79,7 +95,8 @@ class BackchannelTests(unittest.TestCase):
 
 
 class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
-    def make_stream(self, text="我就是觉得", *, final_text=None, textless=False):
+    def make_stream(self, text="我就是觉得", *, final_text=None, textless=False,
+                    eot_score=.99):
         self.text = "" if textless else text
         self.speaking = True
         self.calls = []
@@ -88,7 +105,8 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
                              gate=lambda _: "backchannel", confirm_s=.2,
                              textless_confirm_s=.2, spec_min_chars=1000,
                              gamble_s=999, turn_end_guard=gate.allow_end,
-                             eot=types.SimpleNamespace(score=lambda _: .99, threshold=.5))
+                             eot=types.SimpleNamespace(
+                                 score=lambda _: eot_score, threshold=.5))
         def transcribe(pcm):
             self.calls.append(pcm.copy())
             return final_text if final_text is not None else text
@@ -108,21 +126,39 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_incomplete_wait_blocks_both_high_eot_and_timeout(self):
         stream = self.make_stream()
         await self.feed(stream, .2, speaking=True)
-        states = await self.feed(stream, .38)
+        states = await self.feed(stream, 1.16)
         self.assertFalse(any(s.turn for s in states))
-        states = await self.feed(stream, .02)
-        self.assertEqual(states[-1].turn.text, "我就是觉得")
+        turns = [s.turn for s in await self.feed(stream, .08) if s.turn]
+        self.assertEqual([turn.text for turn in turns], ["我就是觉得"])
+
+    async def test_complete_turn_keeps_the_configured_200ms_fallback(self):
+        stream = self.make_stream(text="你还能更快吗", eot_score=0)
+        await self.feed(stream, .2, speaking=True)
+        states = await self.feed(stream, .18)
+        self.assertFalse(any(s.turn for s in states))
+        turns = [s.turn for s in await self.feed(stream, .04) if s.turn]
+        self.assertEqual([turn.text for turn in turns], ["你还能更快吗"])
+
+    async def test_question_preface_and_question_remain_one_turn(self):
+        stream = self.make_stream(
+            text="我想问一下", final_text="我想问一下你还能更快吗")
+        await self.feed(stream, .2, speaking=True)
+        self.assertFalse(any(s.turn for s in await self.feed(stream, 1.0)))
+        self.text = "我想问一下你还能更快吗"
+        await self.feed(stream, .2, speaking=True)
+        turns = [s.turn for s in await self.feed(stream, .04) if s.turn]
+        self.assertEqual(
+            [turn.text for turn in turns], ["我想问一下你还能更快吗"])
 
     async def test_clip_then_300ms_blank_before_confirm(self):
-        stream = self.make_stream()
+        stream = self.make_stream(text="我觉得今天很好", eot_score=0)
         await self.feed(stream, .2, speaking=True)
-        await self.feed(stream, .1)
         self.pause_gate.emitted(.2)
         self.assertFalse(any(s.turn for s in await self.feed(stream, .48)))
-        self.assertIsNotNone((await self.feed(stream, .02))[-1].turn)
+        self.assertTrue(any(s.turn for s in await self.feed(stream, .04)))
 
     async def test_vad_bridging_quiet_does_not_cancel_clip_wait(self):
-        stream = self.make_stream()
+        stream = self.make_stream(text="我觉得今天很好")
         await self.feed(stream, .2, speaking=True)
         await self.feed(stream, .1, speaking=True, quiet=True)
         self.pause_gate.emitted(.2)
@@ -134,14 +170,13 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_resuming_speech_preserves_turn_and_cancels_wait(self):
         stream = self.make_stream(final_text="我就是觉得今天很好")
         await self.feed(stream, .2, speaking=True)
-        await self.feed(stream, .1)
-        self.pause_gate.emitted(.2)
-        await self.feed(stream, .16)
+        states = await self.feed(stream, 1.0)
+        self.assertFalse(any(s.turn for s in states))
         self.text = "我就是觉得今天很好"
         states = await self.feed(stream, .2, speaking=True)
         self.assertFalse(any(s.turn for s in states))
         self.assertEqual(self.pause_gate.hold_until, 0)
-        turns = [s.turn for s in await self.feed(stream, .2) if s.turn]
+        turns = [s.turn for s in await self.feed(stream, .04) if s.turn]
         self.assertEqual([t.text for t in turns], [self.text])
 
     async def test_late_offline_incomplete_text_is_held_without_redecoding(self):
@@ -149,19 +184,22 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
             stream = self.make_stream(text="今天", final_text="我就是觉得", textless=textless)
             await self.feed(stream, .2, speaking=True)
             # Complete-looking partial or no partial at all: offline ASR discovers a half-sentence.
-            states = await self.feed(stream, .2)
+            states = await self.feed(stream, .5)
             self.assertFalse(any(s.turn for s in states))
-            turns = [s.turn for s in await self.feed(stream, .6) if s.turn]
+            remaining = self.pause_gate.unfinished_until - self.pause_gate.silence
+            self.assertFalse(any(s.turn for s in await self.feed(stream, remaining - .04)))
+            turns = [s.turn for s in await self.feed(stream, .08) if s.turn]
             self.assertEqual([t.text for t in turns], ["我就是觉得"])
             self.assertEqual(len(self.calls), 1)
 
     async def test_web_emits_short_audio_before_turn_and_keeps_cooldown_next_turn(self):
-        stream = self.make_stream()
+        stream = self.make_stream(text="我就是觉得")
         stream.src_rate = 24000
         ns = anticipate_namespace()
-        sent, turns, early = [], [], []
-        # 200ms voiced + 800ms silence, twice: the next opening is within 3s.
-        frames = iter(([True] * 10 + [False] * 40) * 2)
+        sent, turns = [], []
+        # 200ms voiced + enough silence for the unfinished-turn fallback, twice.
+        # The second opportunity is still inside the cross-turn cooldown.
+        frames = iter(([True] * 10 + [False] * 65) * 2)
         captured = 0
         def stream_factory(**kwargs):
             stream.turn_end_guard = kwargs['turn_end_guard']
@@ -181,18 +219,16 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
                 return {'bytes': np.full(480, 1200 if speaking else 0, np.int16).tobytes()}
             async def send_json(self, message):
                 sent.append((captured, message))
-        async def on_early(*args):
-            early.append(args)
         with patch.dict(os.environ, {'VOICEMEM_BACKCHANNEL_EMIT': '1'}), \
              patch('random.Random.random', return_value=.39):
-            async for turn in ns['anticipate'](Sock(), is_busy=lambda: False, on_early=on_early):
+            async for turn in ns['anticipate'](Sock(), is_busy=lambda: False):
                 turns.append((captured, turn))
         clips = [(frame, msg) for frame, msg in sent if msg['type'] == 'backchannel']
         self.assertEqual(len(clips), 1)
-        self.assertEqual([turn.text for _, turn in turns], ['我就是觉得', '我就是觉得'])
+        self.assertEqual([turn.text for _, turn in turns],
+                         ['我就是觉得', '我就是觉得'])
         # One 200ms clip followed by 300ms silence, measured in captured audio.
         self.assertGreaterEqual((turns[0][0] - clips[0][0]) * .02, .5)
-        self.assertEqual(early, [])
 
 
 class SpeakingStyleTests(unittest.TestCase):
@@ -207,6 +243,60 @@ class SpeakingStyleTests(unittest.TestCase):
 
 
 class TurnTakingTimingTests(unittest.IsolatedAsyncioTestCase):
+    def test_state_machine_selects_handoff_from_readiness_and_reply_mode(self):
+        machine = TurnTakingStateMachine(initial_wait_s=2.0)
+        machine.commit_user_turn()
+
+        self.assertIs(
+            machine.decide_handoff(
+                main_audio_ready=True,
+                reply_mode="memory_cot",
+                cached_ack_available=True,
+            ).kind,
+            HandoffKind.DIRECT,
+        )
+        self.assertEqual(
+            machine.decide_handoff(
+                main_audio_ready=False,
+                reply_mode="memory_cot",
+                cached_ack_available=True,
+                spoken=False,
+            ).reason,
+            "text_turn",
+        )
+        self.assertIs(
+            machine.decide_handoff(
+                main_audio_ready=False,
+                reply_mode="memory",
+                cached_ack_available=True,
+            ).kind,
+            HandoffKind.CACHED_ACK,
+        )
+        decision = machine.decide_handoff(
+            main_audio_ready=False,
+            reply_mode="memory_cot",
+            cached_ack_available=True,
+        )
+        self.assertIs(decision.kind, HandoffKind.LLM_FILLER)
+        machine.start_handoff(decision)
+        self.assertIs(machine.phase, TurnPhase.FILLING)
+
+    def test_state_machine_tracks_session_echo_and_latency(self):
+        machine = TurnTakingStateMachine(
+            initial_wait_s=1.0, estimate_weight=0.5, echo_window_s=4.0)
+        machine.begin_user_turn()
+        machine.commit_user_turn()
+        machine.record_emission("嗯嗯", now=10.0)
+        machine.observe_first_audio(0.6)
+        machine.start_reply()
+        machine.finish_reply()
+
+        self.assertEqual(machine.completed_turns, 1)
+        self.assertEqual(machine.recent_agent_text(now=12.0), "嗯嗯")
+        self.assertEqual(machine.recent_agent_text(now=15.0), "")
+        self.assertAlmostEqual(machine.expected_wait_s, 0.8)
+        self.assertIs(machine.phase, TurnPhase.LISTENING)
+
     def test_frequency_curve_boundaries(self):
         curve = SessionFrequencyCurve()
         self.assertEqual([curve.probability(i) for i in range(8)],

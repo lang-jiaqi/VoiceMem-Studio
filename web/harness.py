@@ -20,7 +20,8 @@ from harness.turn_taking import SessionFrequencyCurve
 
 CONTROLS = {
     "pause_ms": 100,
-    "unfinished_wait_ms": 300,
+    "unfinished_wait_ms": 1200,
+    "backchannel_resume_ms": 300,
     "backchannel_cooldown_ms": 3000,
     "backchannel_opening_turns": 3,
     "backchannel_recovery_turn": 6,
@@ -123,6 +124,20 @@ _UNFINISHED = re.compile(
     re.IGNORECASE,
 )
 
+# Prefaces and complement-taking tails are incomplete even when ASR adds a
+# full stop. They cover natural planning pauses without delaying ordinary
+# complete clauses.
+_UNFINISHED_PREFACE = re.compile(
+    r"(?:想|要|准备)(?:问|说|讲|确认|了解|请教|补充|告诉|打断)(?:你|我)?"
+    r"(?:一下|一件事|一个问题|个问题|一|一个)?$"
+    r"|(?:我|你|他|她|我们|他们)(?:今天|昨天|明天|现在|刚才|最近|本来)$"
+    r"|(?:先|再)?(?:跟|给|对|向)(?:我|你|他|她|我们|他们)$"
+    r"|(?:我)?(?:有|还有)(?:一|一个|个)(?:问题|事情|事)$"
+    r"|\b(?:i (?:want|wanted|need) to (?:ask|say|tell you)|"
+    r"can you (?:tell|help|explain)|i have (?:a )?(?:question|thing))$",
+    re.IGNORECASE,
+)
+
 
 def is_unfinished(text: str) -> bool:
     tail = re.sub(r"[\s，。！？、,.!?…；;：:]+$", "", text or "")
@@ -132,12 +147,13 @@ def is_unfinished(text: str) -> bool:
         return False
     if re.fullmatch(r"(?:那)?你(?:觉得|认为)", tail) and re.search(r"[?？]\s*$", text):
         return False
-    return bool(tail and _UNFINISHED.search(tail))
+    return bool(tail and (
+        _UNFINISHED.search(tail) or _UNFINISHED_PREFACE.search(tail)))
 
 
 @dataclass
 class PauseGate:
-    """音频静音时钟上的让话状态；不会用服务端处理耗时冒充 300ms 空白。"""
+    """Keep incomplete speech in one turn using the audio silence clock."""
     hold_until: float = 0.0
     silence: float = 0.0
     rms_slow: float = 0.0
@@ -149,7 +165,7 @@ class PauseGate:
 
     def allow_end(self, text: str, silence: float, speaking: bool,
                   frame_s: float, rms: float) -> bool:
-        # 与附和相同的能量停顿：VAD 会桥接词间空白，不能把它当成用户续说。
+        # Energy catches a resumed utterance before a bridged VAD pause does.
         if speaking:
             self.rms_slow = .9 * self.rms_slow + .1 * rms if self.rms_slow else rms
         quiet = rms < max(.008, .25 * self.rms_slow)
@@ -160,14 +176,17 @@ class PauseGate:
             self.unfinished_until = 0.0
         if is_unfinished(text):
             if not self.unfinished_until:
-                self.unfinished_until = max(self.silence, CONTROLS["pause_ms"] / 1000) + CONTROLS["unfinished_wait_ms"] / 1000
+                self.unfinished_until = (
+                    self.silence + CONTROLS["unfinished_wait_ms"] / 1000)
         else:
             self.unfinished_until = 0.0
-        return self.silence + 1e-9 >= max(self.hold_until, self.unfinished_until)
+        return self.silence + 1e-9 >= max(
+            self.hold_until, self.unfinished_until)
 
     def emitted(self, duration_s: float):
-        # 短音播完，再留 300ms 让用户接上。没有音频则不虚构播放等待。
-        self.hold_until = self.silence + duration_s + CONTROLS["unfinished_wait_ms"] / 1000
+        """Leave a short continuation gap after an in-speech acknowledgement."""
+        self.hold_until = (
+            self.silence + duration_s + CONTROLS["backchannel_resume_ms"] / 1000)
 
 
 def backchannel_policy():

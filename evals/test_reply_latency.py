@@ -112,6 +112,19 @@ class DisplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(t.get_coro().__name__ == "_send_reply_display"
                              for t in asyncio.all_tasks() if not t.done()))
 
+    async def test_wrapper_reports_reply_failure_to_browser(self):
+        async def pipeline(*a, **kw):
+            raise TimeoutError("provider stalled")
+        self.ns["_voicemem_llm_tts"] = pipeline
+        with self.assertRaises(TimeoutError):
+            await self.ns["voicemem_llm_tts"](
+                self.pending, self.send, self.send, {},
+                types.SimpleNamespace(output_id="x"))
+        self.assertEqual(self.sent, [{
+            "type": "error",
+            "message": "回复服务刚才没有及时返回，已自动重试；请再说一次。",
+        }])
+
     def test_pipeline_does_not_build_display_before_generation(self):
         tree = ast.parse((ROOT / "web/run.py").read_text())
         fn = next(n for n in tree.body if getattr(n, "name", "") == "_voicemem_llm_tts")

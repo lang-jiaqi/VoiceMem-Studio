@@ -100,8 +100,9 @@ Restart the existing demo command to load this change (keep DeepSeek + Breeze).
   a sufficiently long phrase. Confirmed echo cannot increment interruption
   evidence or create a new reply; evidence expires after playback plus 2s.
 - Short first clauses such as “在呢，” can launch TTS. The playback jitter buffer
-  remains 160ms: the old trace already showed underflow, so shrinking it without
-  measuring synthesis throughput would risk more gaps.
+  remains 160ms. Breeze's default first codec batch now supplies that existing
+  admission target in one chunk instead of sending 80ms and making the browser
+  wait for a second codec call. The buffer itself is not increased.
 - `[lat] 闭嘴→首帧` uses the last server-received VAD speech frame. A separate
   browser playback-start checkpoint includes buffering and acknowledgement
   transit. These are software estimates, not a measured microphone-to-DAC test.

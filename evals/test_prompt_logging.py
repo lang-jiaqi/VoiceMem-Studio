@@ -23,7 +23,8 @@ class ConsoleTests(unittest.TestCase):
     def test_split_prints_filtered_console_but_full_file_preserved(self):
         console, logfile = io.StringIO(), io.StringIO()
         tee = _Tee(console, logfile, "stdout", threading.RLock(), concise=True)
-        for piece in ("[asr] verbose\n", "[tts-prompt] ", '认真 "语速平稳"', "\n",
+        for piece in ("[asr] verbose\n", "[status] 正在初始化\n",
+                      "[tts-prompt] ", '认真 "语速平稳"', "\n",
                       "[lat] 闭嘴→首帧 900ms｜后续中位 888ms\n",
                       "INFO: GET /api/memories 200 OK\n", "[web] 合成失败：test\n"):
             tee.write(piece)
@@ -31,6 +32,7 @@ class ConsoleTests(unittest.TestCase):
         self.assertNotIn("GET", console.getvalue())
         self.assertNotIn("中位", console.getvalue())
         self.assertIn("[tts-prompt] 认真", console.getvalue())
+        self.assertIn("[status] 正在初始化", console.getvalue())
         self.assertIn("900ms", console.getvalue())
         self.assertIn("失败", console.getvalue())
         self.assertIn("verbose", logfile.getvalue())
@@ -89,14 +91,16 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         original, wire = httpx.AsyncClient, []
         def handle(request):
             wire.append(json.loads(request.content))
-            return httpx.Response(200, text='data: [DONE]\n\n')
+            return httpx.Response(200, text=(
+                'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'
+                'data: [DONE]\n\n'))
         with patch("httpx.AsyncClient", side_effect=lambda **kw: original(
                 transport=httpx.MockTransport(handle), **kw)):
             provider = deepseek_reply(api_key="test-secret-not-a-real-key", system="完整人设")
             try:
                 with trace.prompt_scope(output_id="test"):
                     self.assertEqual([s async for s in provider(
-                        "当前问题", "干净记忆", [{"role": "assistant", "content": "历史"}])], [])
+                        "当前问题", "干净记忆", [{"role": "assistant", "content": "历史"}])], ["ok"])
             finally:
                 await provider.aclose()
         rows = self.rows()[0]

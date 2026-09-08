@@ -20,6 +20,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "web")]
 from echo_guard import UtteranceGuard, is_echo
+from harness.reply_modes import DIRECT, MEMORY
+from harness.turn_taking import Backchannel, TurnTakingStateMachine
 from voicemem import gate
 from voicemem.stream import VoiceStream, StreamState
 from web.harness import PauseGate, backchannel_policy, is_unfinished
@@ -95,6 +97,8 @@ def anticipate_namespace():
              "_is_explicit_interrupt", "_has_barge_content", "_has_strong_final_barge"}
     ns = dict(asyncio=asyncio, base64=base64, json=json, time=time,
               PauseGate=PauseGate, backchannel_policy=backchannel_policy, is_unfinished=is_unfinished,
+              Backchannel=Backchannel, TurnTakingStateMachine=TurnTakingStateMachine,
+              DIRECT=DIRECT, MEMORY=MEMORY,
               dataclass=dataclasses.dataclass, gate=gate, UtteranceGuard=UtteranceGuard,
               BACKCHANNEL_ON=True, ECHO_WINDOW=300, ECHO_RATIO=.6, ECHO_FUZZY_MIN=4,
               _bc_norm=gate.norm, _FILLER_PREFIX=re.compile(r"^[嗯呃啊哦噢喔欸诶唉哈哼]+"),
@@ -121,7 +125,7 @@ def state(text="", *, final=False):
 
 
 class AnticipateTests(unittest.IsolatedAsyncioTestCase):
-    async def run_frames(self, frames, on_early=None):
+    async def run_frames(self, frames, on_early=None, on_early_cancel=None):
         ns, sent, yielded, interrupted = anticipate_namespace(), [], [], []
         playback = {"busy": False, "text": ""}
         frames = iter(frames)
@@ -151,7 +155,8 @@ class AnticipateTests(unittest.IsolatedAsyncioTestCase):
              patch("harness.turn_taking.backchannel.Backchannel.offer", return_value=None):
             async for pending in ns["anticipate"](
                     Sock(), is_busy=lambda: playback["busy"],
-                    said=lambda: playback["text"], on_speech=stop, on_early=on_early):
+                    said=lambda: playback["text"], on_speech=stop,
+                    on_early=on_early, on_early_cancel=on_early_cancel):
                 yielded.append(pending)
         return sent, yielded, interrupted
 
@@ -227,22 +232,33 @@ class AnticipateTests(unittest.IsolatedAsyncioTestCase):
         await self.run_frames([(False, "", partial)], on_early=early)
         self.assertEqual(calls, [("今天天气怎么样", "今天天气怎么样")])
 
-    async def test_eot_commit_is_not_invalidated_by_later_transcript_growth(self):
-        calls = []
+    async def test_eot_bet_is_cancelled_when_speech_resumes_after_pause(self):
+        calls, cancellations = [], []
 
         async def early(partial, _, refined):
             calls.append((partial, await refined))
 
+        async def cancel(reason):
+            cancellations.append(reason)
+
         partial = state("我喜欢安静的地方")
         partial.eot_score = .99
+        paused = state("我喜欢安静的地方")
+        paused.state = "<silence>"
+        paused.silence = .1
+        resumed = state("我喜欢安静的地方但是")
         _, turns, _ = await self.run_frames([
             (False, "", partial),
+            (False, "", paused),
+            (False, "", resumed),
             (False, "", state("我喜欢安静的地方但是图书馆很吵", final=True)),
-        ], on_early=early)
+        ], on_early=early, on_early_cancel=cancel)
 
         self.assertEqual(calls, [("我喜欢安静的地方", "我喜欢安静的地方")])
+        self.assertEqual(cancellations, ["用户停顿后继续说"])
         self.assertEqual(len(turns), 1)
-        self.assertTrue(turns[0].early_ok)
+        self.assertFalse(turns[0].early_ok)
+        self.assertEqual(turns[0].text, "我喜欢安静的地方但是图书馆很吵")
 
 
 class GuardTests(unittest.TestCase):
