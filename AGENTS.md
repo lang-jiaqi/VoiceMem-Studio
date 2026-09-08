@@ -1,115 +1,145 @@
-# VoiceMem Repository Instructions
+# VoiceMem Studio Repository Instructions
 
 This file applies to the entire repository. Follow explicit user instructions
-first. Use this document for operating rules; use `ARCHITECTURE.md` for system
-design and ownership boundaries.
+first. Use this document for operating rules and `ARCHITECTURE.md` for system
+design, state ownership, and pipeline boundaries.
 
 ## Required context
 
-Before changing a public contract, data flow, state owner, concurrency model,
-provider interface, persistence behavior, or more than one top-level subsystem:
+Before changing a public contract, latency-critical flow, state owner,
+concurrency model, prompt protocol, provider interface, persistence behavior,
+or more than one top-level subsystem:
 
 1. Read `ARCHITECTURE.md`.
 2. Identify the layer that owns the behavior.
-3. List the direct and asynchronous consumers of the changed contract.
+3. Trace direct, background, and browser-side consumers.
 4. Update `ARCHITECTURE.md` in the same patch if the design changes.
 
-For a localized fix, read the surrounding implementation and its direct caller
-and tests. Do not load unrelated files merely to gather context.
+For a localized fix, read the implementation, its caller, and focused
+regressions. Avoid loading unrelated files or sensitive runtime traces.
 
 ## Repository map
 
-- `voicemem/core.py`: public `VoiceMem` facade.
-- `voicemem/orchestrator.py`: cross-component search and ingest workflows.
-- `voicemem/stream.py`: streaming ASR/VAD state and speculative retrieval.
-- `voicemem/leftbrain/`: factual memory and retrieval.
-- `voicemem/rightbrain/`: affective and behavioral memory.
-- `voicemem/utils/`: replaceable capabilities and shared infrastructure.
-- `voicemem/config.py`: declarative provider configuration.
-- `voicemem/reply.py`, `voicemem/tts.py`: reply and speech output providers.
-- `web/`: demo application, WebSocket transport, session state, and playback.
-- `examples/`, `evaluation/`, `finetune/`: examples, benchmarks, and training.
+- `voicemem/`: memory framework plus Studio providers, routing, prompt support,
+  and local inference utilities.
+- `voicemem/leftbrain/`, `voicemem/rightbrain/`: factual and affective memory.
+- `voicemem/stream.py`: ASR/VAD/EOT state, turn routing, and speculative search.
+- `voicemem/gate.py`: `backchannel`, `shallow`, and `deep` turn routes.
+- `voicemem/local_llm.py`, `voicemem/tts.py`, `voicemem/breeze_tts.py`: local
+  and remote reply/speech providers.
+- `voicemem/utils/gpu_loop.py`, `voicemem/utils/torch_lock.py`: process-level
+  accelerator scheduling.
+- `web/run.py`: Studio composition root and both reply modes.
+- `web/harness.py`, `harness/`: dialogue policy, pause handling, tone tags, and
+  spoken backchannels.
+- `web/mic-capture-worklet.js`, `web/echo_guard.py`: capture-time echo defense.
+- `web/audio_timeline.py`, `web/pcm-player-worklet.js`: output timing and PCM
+  playback.
+- `prompt/`: editable prompt and TTS configuration; `prompt/logs/` contains
+  sensitive runtime traces.
+- `evals/`: Studio latency and behavioral regressions.
+- `tests/`: core regressions; new local tests are ignored by default.
+- `evaluation/`, `finetune/`: benchmark and training workflows.
+- `voice/`: reviewed speech assets and local voice-reference material.
 
 ## Standard workflow
 
-### 1. Inspect
+### Inspect
 
 - Start with `git status --short --branch`.
-- Treat existing modifications and untracked files as user-owned.
-- Reproduce or locate evidence before proposing a fix.
+- Treat existing changes and untracked files as user-owned.
+- Reproduce or locate concrete evidence before proposing a fix.
 - A request to diagnose, explain, review, or report does not authorize code
   changes.
 
-### 2. Scope
+### Scope
 
-- Define the requested outcome and the smallest owning layer.
-- Separate root cause from adjacent cleanup opportunities.
-- Do not bundle unrelated refactors, formatting, dependency changes, or comment
-  cleanup into a functional patch.
+- Define the requested outcome and smallest owning layer.
+- Separate the root cause from adjacent cleanup opportunities.
+- Do not combine behavior changes with unrelated refactors, formatting,
+  dependency updates, prompt rewrites, or comment cleanup.
 - Ask before making a choice that materially changes product behavior, public
-  APIs, persistence, deployment, cost, or external systems.
+  APIs, stored data, deployment, cost, or external systems.
 
-### 3. Implement
+### Implement
 
-- Make the smallest coherent change that solves the problem.
-- Preserve backward compatibility and existing injection points unless the task
-  explicitly permits a breaking change.
+- Make the smallest coherent change that solves the requested problem.
+- Preserve existing provider and injection contracts unless a breaking change
+  is explicitly accepted.
 - Prefer the standard library and existing dependencies.
-- Keep application policy out of the memory core and vendor payloads behind
-  adapters.
-- Preserve cancellation, ordering, state ownership, and exception visibility
-  when moving work into background tasks.
+- Keep memory behavior in `voicemem`, Studio interaction policy in the harness,
+  and browser/transport behavior in `web`.
+- Preserve ordering, cancellation, exception visibility, and state ownership
+  when introducing concurrency.
 
-### 4. Verify
+### Verify
 
-- Run focused checks while iterating and broader checks for shared contracts.
-- Test both synchronous and asynchronous failure paths when relevant.
-- Review the final diff for accidental files, secrets, generated data, and scope
+- Use focused regressions while iterating and broaden checks for shared
+  contracts.
+- Test partial success, cancellation, disconnect, stale event, and fallback
+  paths when relevant.
+- Review the final diff for secrets, runtime data, generated files, and scope
   expansion.
-- State exactly which live, GPU, network, paid-API, benchmark, or training paths
-  were not exercised.
+- Distinguish static checks, deterministic regressions, and live audio/model
+  tests in the handoff.
 
-### 5. Handoff
+### Handoff
 
-- Lead with the result, then summarize behavior and verification.
+- Lead with the result and summarize verification and remaining limitations.
 - Do not claim a path was tested when it was only inspected or syntax-checked.
-- Do not commit, push, rewrite history, publish, or modify an external service
+- Do not commit, push, rewrite history, publish, or change an external service
   unless the user explicitly requests that action.
 - When asked for Git commands, provide exact commands with an explicit file
   list. Do not use `git add .` in a dirty worktree.
 
 ## Authorization and side effects
 
-Use one general rule: do not expand the task's scope or create unnecessary side
+Use one general rule: do not expand the task or create unnecessary side
 effects.
 
-Obtain explicit approval before actions that are destructive, difficult to
-reverse, costly, affect external systems or people, or are not a necessary part
-of the requested implementation. This includes changes to persistent data,
-remote repositories, deployed services, credentials, large dependency/model
-downloads, long-running compute, and training or full benchmark runs.
+Obtain explicit approval before an action that is destructive, difficult to
+reverse, costly, affects external systems or people, or is not necessary for
+the requested implementation. Prefer read-only checks, reversible operations,
+and exact targets.
 
-Read-only inspection and narrowly scoped local verification are allowed when
-they directly support the task. Prefer reversible operations and exact targets.
+## Studio architecture rules
 
-## Architecture rules
-
-- The dependency direction is from applications toward `voicemem`; the core
-  package must not depend on browser or transport code.
-- Keep model and service providers replaceable. Shared memory behavior consumes
-  normalized contracts, not vendor-specific payloads.
-- Core memory modes and Web reply modes are separate axes. A shared behavior
-  change must be checked in every affected mode.
-- Do not block the asyncio/WebSocket event loop with synchronous inference,
-  network calls, model loading, or slow storage work.
-- Capture turn, session, user, language, and Memory Space ownership before
-  scheduling background work.
+- `VoiceMem` memory semantics are independent from reply, TTS, UI, and
+  transport providers. Vendor-specific payloads stay at adapter boundaries.
+- Core memory modes and Studio reply modes are separate axes. Shared behavior
+  changes must be checked in every affected path.
+- The asyncio/WebSocket loop must not perform synchronous model inference,
+  blocking I/O, or slow persistence.
+- All MLX generation uses the process-level `GpuLoop`. Do not submit local MLX
+  LLM or TTS work from an independent thread or stream.
+- Torch/MPS work that shares a model or device follows the existing lock and
+  executor boundaries. Do not hold a cross-thread lock while waiting for work
+  that needs the same lock.
+- ASR streaming, final-ASR refinement, EOT, Turn Gate routing, and early reply
+  generation are distinct stages. Preserve their cancellation and stale-result
+  guards.
+- Early reply output remains private to `ReplySink` until the final turn
+  confirms that the speculative input is reusable.
 - Generated, sent, buffered, rendered, and heard output are distinct states.
-  Interruption context uses only the heard prefix.
-- Keep `import voicemem` lightweight; preserve lazy loading of heavy components.
+  Interrupted context uses only the heard prefix.
+- Capture session, language, turn, output ID, and Memory Space ownership before
+  scheduling background work.
+- Keep `import voicemem` lightweight and preserve lazy loading.
 
-See `ARCHITECTURE.md` for the full layer map, flows, contracts, and state
-lifetime.
+## Prompt and dialogue policy
+
+- `web/harness.py` owns the Studio Web system prompt, dialogue controls,
+  unfinished-utterance policy, and Web context directives.
+- `harness/backchannel.py` owns whether and how Studio emits spoken
+  backchannels. `harness/speak_tag.py` owns the tone-label protocol.
+- `prompt/llm_*.md` and `prompt/llm_context.json` are package/default prompt
+  inputs; they do not replace the Web system prompt.
+- `prompt/tts.json` owns shared TTS tone instructions and backchannel synthesis
+  styles.
+- Prompt/config changes require parser validation and the corresponding prompt
+  regressions. Do not silently fall back on malformed configuration.
+- Prompt changes are behavior changes. Keep them separate from unrelated Python
+  refactors and report them explicitly.
 
 ## Source code language and comments
 
@@ -117,131 +147,131 @@ lifetime.
 
 - Write new or substantially revised production comments and docstrings in
   English.
-- Do not mix Chinese and English prose inside one comment block.
+- Do not mix Chinese and English prose in one comment block.
 - Existing Chinese comments are legacy text. Do not add to them. Translate only
-  comments directly affected by the current code change and only when the
-  technical meaning can be preserved.
-- User-facing UI text, localized documentation, prompts, memory-language
-  examples, and test fixtures may use the language required by their behavior.
+  comments directly affected by the current change and only when meaning is
+  preserved.
+- UI copy, localized prompts, language fixtures, and public bilingual
+  documentation may use the language required by their behavior.
 
-### What comments should contain
+### Appropriate comments
 
-Add a comment only when names, types, and code structure cannot communicate a
-durable constraint. Appropriate subjects are:
+Use comments only for durable information not clear from names, types, or code
+structure:
 
 - public contracts, side effects, and failure modes;
-- ownership and lifecycle boundaries;
-- concurrency, cancellation, ordering, and protocol invariants;
-- the reason for a non-obvious algorithmic decision.
+- state ownership and lifecycle;
+- concurrency, cancellation, ordering, cache, and protocol invariants;
+- the reason for a non-obvious algorithmic choice.
 
-Public APIs should use concise docstrings that describe inputs, outputs, side
-effects, and raised errors. Keep local comments close to the smallest code
-region they govern. Move cross-module explanations to `ARCHITECTURE.md` or a
-focused document under `docs/`.
+Public APIs should have concise docstrings covering inputs, outputs, side
+effects, and raised errors. Keep local comments near the smallest region they
+govern. Move cross-module explanations to `ARCHITECTURE.md` or a focused file in
+`docs/`.
 
-### What comments must not contain
+### Prohibited comment content
 
-Do not put any of the following in source comments or docstrings:
+Do not put these in source comments or docstrings:
 
 - credentials, tokens, private endpoints, internal hostnames, or authorization
   details;
 - personal names, user conversations, memory contents, local usernames,
-  machine-specific paths, or other identifying information;
-- debugging transcripts, incident narratives, failed-attempt history, or notes
-  about how an agent produced the code;
+  machine paths, device identifiers, or other identifying information;
+- prompt-trace excerpts, incident narratives, debugging transcripts,
+  failed-attempt history, or notes about how an agent produced the code;
 - comparisons with unrelated products or frameworks;
-- unverifiable performance claims or measurements without a reproducible setup;
+- measurements without a reproducible fixture, environment, metric, and
+  documented purpose;
 - dead code, commented-out implementations, or ownerless future-work notes;
 - prose that merely restates the next line of code.
 
-Use `TODO(<issue-or-owner>): action` only for an actionable and owned follow-up.
-Do not use TODO comments as a substitute for completing the requested behavior.
+Use `TODO(<issue-or-owner>): action` only for an owned and actionable follow-up.
+Comment-only cleanup is a separate task and must not alter runtime behavior.
 
-Comment-only cleanup should be a separate, reviewable task organized by
-subsystem. It must not change runtime behavior.
+## Sensitive and generated data
 
-## Code and documentation style
-
-- Follow the surrounding structure and naming. Python uses four-space
-  indentation and targets Python 3.10 or newer.
-- Use type hints at public and cross-module boundaries. Use dataclasses when
-  they clarify exchanged state.
-- Avoid broad exception handling unless the boundary must degrade gracefully;
-  keep exceptions visible through a result or actionable log.
-- Keep logs concise and structured. Never log secrets or authorization headers.
-  Gate high-frequency diagnostics behind an existing debug setting.
-- Keep Chinese and English README sections aligned when user-visible behavior
-  changes.
-- Public documentation may describe only behavior visible in the repository or
+- Treat Memory Spaces, databases, recordings, `results/`, caches, model
+  directories, environments, and local backups as user data.
+- Treat `prompt/logs/` as sensitive: entries may contain full prompts,
+  conversation history, and retrieved memory. Do not inspect, quote, modify, or
+  stage them unless the task explicitly requires that trace.
+- Treat voice-reference and recorded-audio files as identity-bearing media. Do
+  not replace, copy, publish, or derive new assets without authorization.
+- Public documentation may include only repository-visible behavior or
   information explicitly approved for publication. Exclude private roadmaps,
   internal operations, incident details, and unreleased plans.
-- Do not add generated artifacts or machine-specific setup instructions to
-  source control.
-
-## Environment and data safety
-
-- Use Python 3.10 or newer and prefer an existing working environment.
-- Do not replace an environment solely because an isolated agent sandbox cannot
-  execute an interpreter outside the repository. Inspect the user's logs and
-  active interpreter first.
-- Treat configured memory roots, `voicemem_memoryspace/`, databases, recordings,
-  `results/`, model directories, caches, virtual environments, and local backups
-  as user data.
-- Tests and reproductions must use temporary or dedicated memory roots. Never
-  write fixtures into the user's default Memory Space.
 - Read credentials from environment variables or ignored local configuration.
-  Never write real values into code, docs, examples, tests, or committed logs.
+  Never write real values into source, docs, prompts, examples, tests, or logs
+  intended for Git.
+- Tests and reproductions use temporary or dedicated Memory Spaces, never the
+  user's active space.
 
-## Commands and verification
+## Environment and commands
 
-Common setup and run commands:
+The package metadata supports Python 3.10 or newer, but use Python 3.12 for
+Studio development and its current eval suite. Studio's local MLX path also
+requires a compatible native Apple Silicon environment; a sandboxed Linux or
+non-Metal run is not equivalent. Inspect the active interpreter and installed
+versions before changing an environment.
+
+Common entry points:
 
 ```bash
 python -m pip install -e .
-python -m pip install -e ".[slm]"
-bash scripts/download_models.sh
-python web/run.py --mode realtime --host 0.0.0.0 --port 8787
-python web/run.py --mode llm_tts --host 0.0.0.0 --port 8787
+python web/run.py --mode llm_tts --llm deepseek --space demo-zh --lang zh --confirm_ms 200
+python web/run.py --mode llm_tts --llm local --space demo-zh --lang zh --confirm_ms 200
+python web/run.py --mode realtime --space demo-zh --lang zh
 ```
 
-These are references, not instructions to run every command. Select only what
-the task requires.
+These are references, not commands to run for every task.
 
-Focused checks:
+## Verification
+
+Select checks that cover the changed ownership boundary.
 
 ```bash
 python -m py_compile path/to/changed_file.py
 python -m unittest tests.test_offline_engine tests.test_session_context
-node --check web/pcm-player-worklet.js
+python -m unittest evals.test_dialogue_harness evals.test_prompt_config
+python -m unittest evals.test_prompt_logging evals.test_prewarm_scheduling
+node evals/test_mic_capture.cjs
+node evals/test_transcript_ui.cjs
 git diff --check
 ```
 
-New files under `tests/` are intentionally ignored. Keep local regression tests
-there; do not force-add them unless the user explicitly asks to publish tests.
-Existing tracked tests may be updated when their covered behavior changes.
+Additional `evals/` scripts may require models, credentials, platform-specific
+hardware, or benchmark fixtures. Inspect them before running. A latency script
+is not a unit test, and synthetic timing does not establish live perceived
+latency.
 
-For audio or streaming changes, verify the applicable start, partial update,
-pause, resume, underflow, drain, interruption, cancellation, disconnect, and
-stale-event paths. Prefer synthetic data and fake providers for unit tests.
+New files under `tests/` are ignored by default. Keep local regressions there;
+do not force-add them unless the user explicitly asks to publish tests.
+
+For streaming or audio changes, cover the applicable capture, partial ASR,
+final ASR, EOT, gate route, early-speculation commit/reject, backchannel, echo,
+pause/resume, underflow, drain, interruption, disconnect, and stale-output
+paths.
 
 ## Git hygiene
 
-- Preserve user changes during pull, rebase, and conflict resolution.
-- Never use destructive reset or checkout commands as a shortcut.
+- Preserve existing work during pull, rebase, and conflict resolution.
+- Never use destructive reset or checkout as a shortcut.
 - Stage only reviewed files and inspect the staged diff before committing.
-- Never stage environments, model weights, caches, logs, memory databases,
-  recordings, generated results, or local experiment directories.
+- Never stage runtime traces, user memory, recordings, environments, caches,
+  model weights, generated results, or local experiments.
 - Before a requested commit or push, verify author name, author email, target
   branch, and remote URL.
 
 ## Final review checklist
 
-- The change belongs to the correct architecture layer.
-- Public and provider contracts remain compatible or are explicitly migrated.
-- No event-loop blocking, orphaned task, stale state, or cross-session ownership
-  issue was introduced.
-- Both affected modes and error paths were considered.
+- The change belongs to the correct Studio layer.
+- Memory, dialogue policy, prompt, provider, and browser responsibilities remain
+  separated.
+- Shared behavior is consistent across affected reply/provider paths.
+- No event-loop blocking, GPU-stream violation, lock inversion, orphaned task,
+  stale result, or cross-session ownership issue was introduced.
 - Comments follow the English and information-safety rules.
-- No private information, credentials, user data, or machine-specific details
-  entered the diff.
-- Tests and documentation match the behavior, and untested paths are disclosed.
+- Sensitive traces, user data, credentials, local paths, and generated files are
+  absent from the diff.
+- Focused regressions and documentation match the behavior; untested live paths
+  are disclosed.
