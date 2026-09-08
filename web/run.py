@@ -2273,23 +2273,6 @@ def _has_strong_final_barge(text: str) -> bool:
     return cjk >= 3 or latin >= 5
 
 
-def _lcs_len(a: str, b: str) -> int:
-    """最长公共**子串**（连续）长度。滚动一行的 DP，串都很短，开销可忽略。"""
-    if not a or not b:
-        return 0
-    prev = [0] * (len(b) + 1)
-    best = 0
-    for ch in a:
-        cur = [0] * (len(b) + 1)
-        for j, cj in enumerate(b, 1):
-            if ch == cj:
-                cur[j] = prev[j - 1] + 1
-                if cur[j] > best:
-                    best = cur[j]
-        prev = cur
-    return best
-
-
 # ── 附和（backchannel）─────────────────────────────────────────────────────
 # 用户说到一半停 100ms 时"嗯"一声。什么时候出声由 harness/backchannel.py 的概率
 # 模型定（句式/内容/情绪/韵律/不应期六个因子），这里只负责把声音送出去。
@@ -2434,8 +2417,6 @@ def _eot():
 #: 而说完时是 0.42~0.73。所以 0.35 既够得着又不会在句中误触。原来的 0.75 是照
 #: 模型文档定的，那个数在这批语音上一次都没达到过——等于提前生成从没生效。
 EARLY_EOT = float(os.environ.get("VOICEMEM_EARLY_EOT", "0.5"))
-#: 下注之后这段时间内说的话不算数（EOT 常在最后一个字的尾音里就触发）。
-EARLY_GRACE_S = float(os.environ.get("VOICEMEM_EARLY_GRACE", "0.2"))
 #: 附和播出去多久之内，转写里出现同样的词就当回声丢掉。
 BC_ECHO_WINDOW_S = float(os.environ.get("VOICEMEM_BC_ECHO_WINDOW", "3.0"))
 #: 助手说话时，要连续听到这么久的人声才暂停播放（挡自己的回声）。
@@ -2450,26 +2431,6 @@ BC_QUIET_RATIO = float(os.environ.get("VOICEMEM_BC_QUIET_RATIO", "0.25"))
 BC_AFTER_EARLY_S = float(os.environ.get("VOICEMEM_BC_AFTER_EARLY", "1.0"))
 #: 给回复模型看多少轮对话历史（滑窗，跟入没入库无关）。
 HISTORY_TURNS = int(os.environ.get("VOICEMEM_HISTORY_TURNS", "6"))
-#: 过了宽限期还说这么久，就判定「他还没说完」，那份提前生成作废。
-#:
-#: 放宽的代价要清楚：这段时间里说的话**没进那份生成**。所以 1.5s 意味着"你多说
-#: 一句半，我仍然用之前那份回复"——赌的是那一句半没改变你的意思（补充、重复、
-#: 语气词多半如此）。真改了意思就答非所问。想更保守就调小。
-EARLY_MAX_SPEECH_S = float(os.environ.get("VOICEMEM_EARLY_MAX_SPEECH", "2.0"))
-#: 下注时那句话，要覆盖最终文本的多大比例（按**内容重合**算，不是长度比）。
-#:
-#: EOT 判的是**音频**，而回复是拿**当时的流式文本**生成的——音频语义齐了，文本却
-#: 常常还是残的。实测两种翻车，都得挡：
-#:
-#:   长了：下注 'o you have any recom' → 最终 'Do you have any recommendations
-#:         of where should I study on weekends.' → 回复变成 "I didn't catch that."
-#:   歪了：下注 'looking for a please' → 复核成 'Please.' → 回复答的是另一件事
-#:
-#: 所以不能用长度比（第二种的比值是 285%，照样通过），要看**最终文本有多少是
-#: 下注时就已经说出来的**——用最长公共子串。
-EARLY_MIN_COVER = float(os.environ.get("VOICEMEM_EARLY_MIN_COVER", "0.7"))
-
-
 async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=None,
                      said=None, on_candidate=None, on_candidate_reject=None,
                      on_playback_checkpoint=None, on_early=None,
@@ -2637,24 +2598,23 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
             if on_speech_start(st.memory, st.text):
                 prewarm_mem = st.memory
 
-        # 提前起跑：EOT 说这句已经齐了（哪怕人还在说），就先把回复生成出来存着。
-        # 生成和合成加起来 1.4 秒，只有藏在用户还在说话的这段时间里，说完才可能
-        # 立刻出声。赌错了取消重来——花的是钱，不是用户的等待。
+        # EOT freezes an audio snapshot for the background reply path.  The UI
+        # keeps receiving streaming ASR, while final ASR reviews only the frozen
+        # audio before the LLM sees this turn.
         if st.eot_score > eot_peak:
             eot_peak = st.eot_score
-        # **一轮只赌一次**：第一次 EOT 过线就下注，之后无论你还说多久都不再管，
-        # 说完直接用那一份。
-        #
-        # 代价明说：那份回复是针对**下注那一刻为止**的话生成的。你后面补的内容
-        # 它没听见——"我喜欢安静的地方"下注了，你接着说"但学校图书馆很吵"，
-        # 回答就只针对前半句。换来的是延迟最低、逻辑最简单，赌错也不重来。
+        # The first accepted EOT is the commit point for this LLM turn.  Later
+        # speech remains visible in the live transcript but does not revise the
+        # already committed prompt.
         if (on_early and not busy and not input_echo and st.spoke and cur
                 and not is_unfinished(cur) and not pause_gate.hold_until
                 and not (utterance.started_busy and _is_backchannel(cur))
                 and st.eot_score >= EARLY_EOT and not early_at):
             early_text, early_at = cur, time.monotonic()
-            await on_early(cur, st)
-            # 提前生成不代表用户说完了；快接话仍由当前 EOT + 静音确认。
+            refined_text = stream.refine_current_snapshot()
+            await on_early(cur, st, refined_text)
+            # Generation is buffered; normal turn confirmation still owns when
+            # assistant audio may be released.
 
         # 附和用**能量**判停顿，不用 VAD 的静音计时。
         #
@@ -2908,16 +2868,10 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                           f"{st.turn.text!r}", flush=True)
                 _reset_early()
                 continue
-            _norm = lambda x: "".join(c for c in (x or "") if c.isalnum()).casefold()
-            # 跟**同一个模型**的输出比：下注时是流式文本，这里也用流式文本
-            # （st.turn.raw_text，复核前那份）。拿它比复核后的，比出来的是两个
-            # ASR 的用词分歧，不是"他又说了话"——实测同一句话只能对上 57%。
-            _f, _b = _norm(st.turn.raw_text or st.turn.text), _norm(early_text)
-            _cover = (_lcs_len(_b, _f) / len(_f)) if _f else 0.0
-            _early_ok = bool(early_at) and _cover >= EARLY_MIN_COVER and not is_unfinished(st.turn.text)
-            if BARGE_DEBUG and early_at and not _early_ok:
-                print(f"[early] 下注那句只覆盖了最终文本的 {_cover:.0%}"
-                      f"（{early_text!r} vs {st.turn.text!r}）→ 作废重来", flush=True)
+            # EOT is an irreversible prompt commit for the early path.  Later
+            # streaming/final text is retained for display and recording, but it
+            # must not invalidate or rewrite the LLM request already in flight.
+            _early_ok = bool(early_at)
             early_at, early_speech, early_text = 0.0, 0.0, ""
             # 开口时刻也要归零，而且**这条成功路径最容易漏**——它不走
             # _reset_early()，自己就地清 early_at。漏了的后果不是"少一次下注"，
@@ -3108,18 +3062,20 @@ async def llm_tts_session(sock):
         if why and BARGE_DEBUG:
             print(f"[early] 丢弃提前生成：{why}", flush=True)
 
-    async def start_early(text, st):
-        """EOT 说这句齐了（人可能还在说）→ 先把回复生成出来存进 sink。"""
+    async def start_early(text, st, refined_text=None):
+        """Run final ASR on the EOT snapshot, then buffer the early reply."""
         stop_prewarm()
         await drop_early("换了新的赌注")
         stop_prewarm()
-        # 记忆可能没有——闸门判成浅内容时压根没检索（st.memory 是 None）。
-        # 那不该妨碍提前生成：浅内容本来就不注入记忆，用空结果照样能生成。
-        # 原来这里 return 掉了，等于浅问题永远享受不到提前生成。
+        if refined_text is None:
+            refined_text = asyncio.create_task(asyncio.sleep(0, result=text))
+        # Capture turn-owned context before scheduling work.  Later streaming
+        # frames may update VoiceStream state but cannot revise this LLM request.
         from voicemem.stream import empty_result
         result = st.memory if st.memory is not None else empty_result()
-        pending = Pending(text, build_memory_context(result), result, spoken=True,
-                          emotion=owner.get("emotion", ""), route=st.route)
+        emotion = owner.get("emotion", "")
+        route = st.route
+        context_space = ACTIVE_SPACE
         sink = ReplySink(sock.send_json, send_audio)
         timeline = AudioTimeline(prebuffer_seconds=0.16, rate_estimator=speech_rate)
         # 这一份要**留着**：提交之后它就是 turn["reply"]，防回声那套读的就是它。
@@ -3127,17 +3083,24 @@ async def llm_tts_session(sock):
         # 它说 "Are you looking for a place to"，麦克风听回去转成 "looking for a
         # please"，被当成用户新说的一轮，还照着它下了注。
         said_state = {"text": ""}
-        early.update(text=text, sink=sink, timeline=timeline, pending=pending,
+        early.update(text=text, sink=sink, timeline=timeline, pending=None,
                      said=said_state)
-        if BARGE_DEBUG:
-            print(f"[early] 提前起跑（EOT {st.eot_score:.2f}）：{text[-20:]!r}", flush=True)
 
         async def run():
             try:
+                committed_text = (await refined_text).strip() or text
+                pending = Pending(
+                    committed_text, build_memory_context(result), result, spoken=True,
+                    emotion=emotion, route=route)
+                early["text"] = committed_text
+                early["pending"] = pending
+                if BARGE_DEBUG:
+                    print(f"[early] EOT {st.eot_score:.2f} · offline ASR committed: "
+                          f"{committed_text[-20:]!r}", flush=True)
                 await voicemem_llm_tts(pending, sink.send, sink.send_audio, owner,
                                        timeline, said=said_state,
                                        context_session=context_session,
-                                       context_space=ACTIVE_SPACE, memory_vm=vm)
+                                       context_space=context_space, memory_vm=vm)
             except asyncio.CancelledError:
                 raise
             except Exception as e:

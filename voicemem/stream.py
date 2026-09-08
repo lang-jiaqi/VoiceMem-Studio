@@ -696,6 +696,22 @@ class VoiceStream:
 
         return await asyncio.get_running_loop().run_in_executor(_FINAL_ASR_EXECUTOR, work)
 
+    def refine_current_snapshot(self) -> "asyncio.Task[str]":
+        """Freeze current audio and return a background final-ASR transcript task.
+
+        The snapshot is immutable: audio and streaming text received after this
+        call cannot change the returned transcript.  If final ASR is unavailable
+        or produces no text, the frozen streaming transcript is returned.
+        """
+        fallback = self._text.strip()
+        pcm = np.concatenate(self._pcm).copy() if self._pcm else None
+
+        async def resolve() -> str:
+            refined = await self._final_text_async(pcm)
+            return (refined or fallback).strip()
+
+        return asyncio.create_task(resolve())
+
     async def _finish_asr(self, pcm):
         """完整音频复核与流式收尾并行；复核有效就不等落后的 partial 队列。"""
         started = time.monotonic()

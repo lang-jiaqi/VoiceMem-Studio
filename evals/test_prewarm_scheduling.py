@@ -86,14 +86,19 @@ class SchedulingTests(unittest.IsolatedAsyncioTestCase):
         warm_task = self.ns["prewarm"]["task"]
         cancelled = self.ns["prewarm"]["cancelled"]
         entered = asyncio.Event()
+        pending_text = []
+        self.ns["Pending"] = lambda text, *a, **kw: (
+            pending_text.append(text) or types.SimpleNamespace())
         async def reply(*a, **kw):
             entered.set()
             await asyncio.Event().wait()
         self.ns["voicemem_llm_tts"] = reply
+        refined = asyncio.create_task(asyncio.sleep(0, result="离线复核文本"))
         try:
             await self.ns["start_early"]("你好", types.SimpleNamespace(
-                memory=object(), route="deep", eot_score=.99))
+                memory=object(), route="deep", eot_score=.99), refined)
             await asyncio.wait_for(entered.wait(), 1)
+            self.assertEqual(pending_text, ["离线复核文本"])
             self.assertTrue(cancelled.is_set())
             self.assertTrue(warm_task.cancelled())
             self.assertFalse(self.ns["prewarm_local"]())

@@ -92,7 +92,7 @@ class ShortSpeechTests(unittest.IsolatedAsyncioTestCase):
 def anticipate_namespace():
     tree = ast.parse((ROOT / "web/run.py").read_text())
     names = {"anticipate", "Pending", "_is_echo", "_is_backchannel", "_barge_text",
-             "_is_explicit_interrupt", "_has_barge_content", "_has_strong_final_barge", "_lcs_len"}
+             "_is_explicit_interrupt", "_has_barge_content", "_has_strong_final_barge"}
     ns = dict(asyncio=asyncio, base64=base64, json=json, time=time,
               PauseGate=PauseGate, backchannel_policy=backchannel_policy, is_unfinished=is_unfinished,
               dataclass=dataclasses.dataclass, gate=gate, UtteranceGuard=UtteranceGuard,
@@ -101,7 +101,7 @@ def anticipate_namespace():
               _INTERRUPT_PREFIXES=("停", "等一下", "stop", "wait"), BARGE_MIN_CHARS=2,
               SPEC_MIN_CHARS=6, GAMBLE_S=.2, CONFIRM_S=.2, MIC_RATE=24000,
               BC_ECHO_WINDOW_S=3, BC_QUIET_RATIO=.25, BC_AFTER_EARLY_S=1,
-              EARLY_EOT=.5, CONFIRM_READY_S=.1, EARLY_MIN_COVER=.7,
+              EARLY_EOT=.5, CONFIRM_READY_S=.1,
               CANDIDATE_MIN_SPEECH_S=.04, BARGE_STABLE_UPDATES=2,
               BARGE_REJECT_SILENCE_MS=200, BARGE_CANDIDATE_TIMEOUT_MS=1200,
               BARGE_DEBUG=False, SPEAKER_GATE=False, SPEAKER_DEBUG=False,
@@ -142,7 +142,10 @@ class AnticipateTests(unittest.IsolatedAsyncioTestCase):
             return current[2]
         async def stop():
             interrupted.append(True)
-        stream = types.SimpleNamespace(feed=feed, confirm_s=.2)
+        def refine_current_snapshot():
+            return asyncio.create_task(asyncio.sleep(0, result=current[2].text))
+        stream = types.SimpleNamespace(feed=feed, confirm_s=.2,
+                                       refine_current_snapshot=refine_current_snapshot)
         ns["vm"] = types.SimpleNamespace(stream=lambda **kw: stream)
         with patch("harness.backchannel.emitting", return_value=False), \
              patch("harness.backchannel.Backchannel.offer", return_value=None):
@@ -217,12 +220,29 @@ class AnticipateTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_new_idle_speech_can_still_start_early_generation(self):
         calls = []
-        async def early(*args):
-            calls.append(args)
+        async def early(partial, _, refined):
+            calls.append((partial, await refined))
         partial = state("今天天气怎么样")
         partial.eot_score = .99
         await self.run_frames([(False, "", partial)], on_early=early)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls, [("今天天气怎么样", "今天天气怎么样")])
+
+    async def test_eot_commit_is_not_invalidated_by_later_transcript_growth(self):
+        calls = []
+
+        async def early(partial, _, refined):
+            calls.append((partial, await refined))
+
+        partial = state("我喜欢安静的地方")
+        partial.eot_score = .99
+        _, turns, _ = await self.run_frames([
+            (False, "", partial),
+            (False, "", state("我喜欢安静的地方但是图书馆很吵", final=True)),
+        ], on_early=early)
+
+        self.assertEqual(calls, [("我喜欢安静的地方", "我喜欢安静的地方")])
+        self.assertEqual(len(turns), 1)
+        self.assertTrue(turns[0].early_ok)
 
 
 class GuardTests(unittest.TestCase):

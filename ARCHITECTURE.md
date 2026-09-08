@@ -266,7 +266,9 @@ show that the speculative input still covers the final utterance.
 
 ```text
 high EOT score
-  -> start speculative reply and TTS
+  -> freeze an immutable audio snapshot
+  -> run final ASR for that snapshot in the background
+  -> start speculative reply and TTS from the refined snapshot text
   -> buffer output in ReplySink
   -> finalize transcript and route
   -> compatible: commit buffered timeline and continue live
@@ -275,6 +277,11 @@ high EOT score
 
 Cancellation removes stale reply, TTS, display, and GPU work before a new
 response becomes authoritative.
+
+`VoiceStream` owns snapshot capture and final-ASR refinement. `web/run.py`
+selects the EOT threshold and starts application-level reply work. Streaming
+ASR remains visible while this work runs, but later transcript revisions cannot
+mutate the frozen provider prompt.
 
 ## 9. Reply, prompt, and speech flow
 

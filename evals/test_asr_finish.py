@@ -150,6 +150,35 @@ class FinishTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stream._text, "new turn")
         self.assertTrue(self.flushed.cancelled())
 
+    async def test_eot_refinement_uses_immutable_audio_and_text_snapshot(self):
+        release = threading.Event()
+        received = []
+
+        def transcribe(audio):
+            received.append(audio.copy())
+            release.wait(2)
+            return "offline snapshot"
+
+        stream = self.make_stream(transcribe)
+        stream._pcm = [np.arange(160, dtype=np.float32)]
+        task = stream.refine_current_snapshot()
+        stream._pcm[0][:] = -1
+        stream._pcm.append(np.ones(160, dtype=np.float32))
+        stream._text = "later streaming text"
+        release.set()
+
+        self.assertEqual(await task, "offline snapshot")
+        np.testing.assert_array_equal(received[0], np.arange(160, dtype=np.float32))
+
+    async def test_eot_refinement_falls_back_to_frozen_streaming_text(self):
+        stream = self.make_stream(lambda _: "")
+        stream._text = "frozen partial"
+        stream._pcm = [np.ones(160, dtype=np.float32)]
+        task = stream.refine_current_snapshot()
+        stream._text = "later text"
+
+        self.assertEqual(await task, "frozen partial")
+
     async def test_audio_feed_returns_turn_before_stalled_worker_finishes(self):
         stream = self.make_stream(lambda _: "完整句子")
         stream.confirm_s, stream.spec_min_chars = .02, 999
