@@ -167,6 +167,19 @@ class PromptConfigTests(unittest.TestCase):
                                      capture_output=True, text=True)
             self.assertEqual(ignored.returncode, 1, name)
 
+    def test_default_persona_additions_preserve_the_existing_core(self):
+        zh = (ROOT / 'prompt/llm_system_zh.md').read_text(encoding='utf-8')
+        for addition in ('超级智能', '不好为人师', '全心全意', '最可惜', '默默支持'):
+            self.assertIn(addition, zh)
+        for existing in ('【接住眼前这句话】', '【说得像聊天】', '【让记忆改变回应】',
+                         '【清楚自己的存在方式】'):
+            self.assertIn(existing, zh)
+
+        en = (ROOT / 'prompt/llm_system_en.md').read_text(encoding='utf-8')
+        for addition in ('superintelligent', 'not inclined to lecture',
+                         'wholeheartedly', 'most regrettable', 'quiet support'):
+            self.assertIn(addition, en)
+
 
 if __name__ == '__main__':
     unittest.main()
