@@ -19,6 +19,7 @@ from harness.turn_taking import (
     generate_filler,
     run_overlapped_handoff,
     short_ack_plan,
+    wait_for_filler_and_output,
 )
 from voicemem.stream import VoiceStream
 from web.harness import (
@@ -302,8 +303,8 @@ class TurnTakingTimingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([curve.probability(i) for i in range(8)],
                          [.5, .5, .5, .1, .1, .1, .3, .3])
 
-    def test_short_ack_uses_actual_clip_length_and_100ms_lead(self):
-        self.assertAlmostEqual(short_ack_plan(.72).main_start_seconds, .62)
+    def test_short_ack_uses_actual_clip_length_without_cutting_its_tail(self):
+        self.assertAlmostEqual(short_ack_plan(.72).main_start_seconds, .72)
 
     async def test_main_work_starts_before_filler_finishes(self):
         events = []
@@ -319,6 +320,43 @@ class TurnTakingTimingTests(unittest.IsolatedAsyncioTestCase):
         await run_overlapped_handoff(
             filler, main, FillerPlan(.03, .01, "test"))
         self.assertEqual(events, ["filler-start", "main-start", "filler-end"])
+
+    async def test_zero_lead_plan_finishes_filler_before_main(self):
+        events = []
+
+        async def filler():
+            events.append("filler-start")
+            await asyncio.sleep(0)
+            events.append("filler-end")
+
+        async def main():
+            events.append("main-start")
+
+        await run_overlapped_handoff(
+            filler, main, FillerPlan(.03, 0, "test"))
+        self.assertEqual(events, ["filler-start", "filler-end", "main-start"])
+
+    async def test_spoken_filler_and_main_output_must_both_finish_before_release(self):
+        filler_done = asyncio.Event()
+        output_ready = asyncio.Event()
+        handoff = asyncio.create_task(wait_for_filler_and_output(
+            filler_done.wait(), output_ready.wait()))
+
+        output_ready.set()
+        await asyncio.sleep(0)
+        self.assertFalse(handoff.done())
+        filler_done.set()
+        await handoff
+
+        filler_done.clear()
+        output_ready.clear()
+        handoff = asyncio.create_task(wait_for_filler_and_output(
+            filler_done.wait(), output_ready.wait()))
+        filler_done.set()
+        await asyncio.sleep(0)
+        self.assertFalse(handoff.done())
+        output_ready.set()
+        await handoff
 
     async def test_reply_model_generates_only_one_short_filler(self):
         calls = []

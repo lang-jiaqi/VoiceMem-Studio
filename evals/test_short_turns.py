@@ -160,6 +160,26 @@ class AnticipateTests(unittest.IsolatedAsyncioTestCase):
                 yielded.append(pending)
         return sent, yielded, interrupted
 
+    async def test_filler_completion_is_forwarded_without_creating_a_turn(self):
+        ns = anticipate_namespace()
+        ns["vm"] = types.SimpleNamespace(
+            stream=lambda **kw: types.SimpleNamespace(confirm_s=.2))
+        messages = iter((
+            {"text": json.dumps({"type": "filler_done", "filler_id": "fill-1"})},
+            {"type": "websocket.disconnect"},
+        ))
+        completed = []
+
+        class Sock:
+            async def receive(self):
+                return next(messages)
+
+        with patch("harness.turn_taking.backchannel.emitting", return_value=False):
+            turns = [turn async for turn in ns["anticipate"](
+                Sock(), on_filler_done=completed.append)]
+        self.assertEqual(turns, [])
+        self.assertEqual(completed, ["fill-1"])
+
     async def test_late_ok_is_display_only_even_when_playback_drains_during_final(self):
         sent, turns, interrupted = await self.run_frames([
             (True, "我是语音助手", state()),

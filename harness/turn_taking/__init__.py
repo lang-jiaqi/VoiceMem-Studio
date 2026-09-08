@@ -9,6 +9,7 @@ from .filler import (
     generate_filler,
     run_overlapped_handoff,
     short_ack_plan,
+    wait_for_filler_and_output,
 )
 from .frequency import SessionFrequencyCurve
 from .state_machine import (
@@ -33,5 +34,6 @@ __all__ = [
     "generate_filler",
     "run_overlapped_handoff",
     "short_ack_plan",
+    "wait_for_filler_and_output",
     "backchannel",
 ]

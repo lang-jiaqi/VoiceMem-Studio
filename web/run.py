@@ -60,10 +60,9 @@ from harness.reply_modes import (
 from harness.turn_taking import (
     Backchannel,
     HandoffKind,
-    LONG_WORK_FILLER,
     TurnTakingStateMachine,
     generate_filler,
-    short_ack_plan,
+    wait_for_filler_and_output,
 )
 from voicemem.prompt_config import tts_prompts
 os.environ.setdefault("VOICEMEM_MODELS_DIR", str(_ROOT / "models"))
@@ -1570,9 +1569,12 @@ class ReplySink:
         self.live = False
         self._lock = asyncio.Lock()
         self._audio_ready = asyncio.Event()
+        self._output_resolved = asyncio.Event()
         self.first_audio_at = 0.0
 
     async def send(self, msg):
+        if isinstance(msg, dict) and msg.get("type") in {"answer_done", "error"}:
+            self._output_resolved.set()
         async with self._lock:
             if self.live:
                 await self._send(msg)
@@ -1597,6 +1599,20 @@ class ReplySink:
 
     async def wait_for_audio(self) -> None:
         await self._audio_ready.wait()
+
+    async def wait_for_output(self) -> None:
+        """Wait until main audio exists or generation resolves without audio."""
+        if self._audio_ready.is_set() or self._output_resolved.is_set():
+            return
+        audio = asyncio.create_task(self._audio_ready.wait())
+        resolved = asyncio.create_task(self._output_resolved.wait())
+        try:
+            await asyncio.wait((audio, resolved), return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in (audio, resolved):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(audio, resolved, return_exceptions=True)
 
     async def commit(self) -> None:
         """赌对了：把攒下的按原顺序放出去，之后转直发。"""
@@ -2561,7 +2577,7 @@ BC_AFTER_EARLY_S = float(os.environ.get("VOICEMEM_BC_AFTER_EARLY", "1.0"))
 HISTORY_TURNS = int(os.environ.get("VOICEMEM_HISTORY_TURNS", "6"))
 async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=None,
                      said=None, on_candidate=None, on_candidate_reject=None,
-                     on_playback_checkpoint=None, on_early=None,
+                     on_playback_checkpoint=None, on_filler_done=None, on_early=None,
                      on_early_cancel=None,
                      on_speech_start=None, textless_confirm_s=None,
                      turn_taking=None):
@@ -2572,7 +2588,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
     照样会走 partial_transcript——用户就看见自己的输入框里冒出助手刚说的话。
     每轮保留开口时的播放状态和回声文本；非回声插话稳定后显示，纯附和只显示不回复。
     on_candidate()/on_candidate_reject()：疑似插话时可恢复地暂停/恢复播放；只有
-    on_speech() 才是确认打断。"""
+    on_speech() 才是确认打断。on_filler_done() 接收浏览器的垫话播放完成回报。"""
     pause_gate = PauseGate()
     stream = vm.stream(spec_min_chars=SPEC_MIN_CHARS, gamble_s=GAMBLE_S,
                        confirm_s=CONFIRM_S, eot=_eot(), textless_confirm_s=textless_confirm_s,
@@ -2666,6 +2682,10 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
             if data.get("type") == "playback_checkpoint":
                 if on_playback_checkpoint:
                     await on_playback_checkpoint(data)
+                continue
+            if data.get("type") == "filler_done":
+                if on_filler_done:
+                    on_filler_done(str(data.get("filler_id") or ""))
                 continue
             if data.get("type") == "user_text" and data.get("text", "").strip():
                 turn_taking.begin_user_turn()
@@ -3097,6 +3117,12 @@ async def llm_tts_session(sock):
     context_session = uuid.uuid4().hex
     candidate_paused = False
     candidate_paused_at = 0.0
+    filler_waiters: dict[str, asyncio.Event] = {}
+
+    def filler_done(filler_id: str) -> None:
+        event = filler_waiters.get(filler_id)
+        if event is not None:
+            event.set()
 
     async def pause_candidate():
         nonlocal candidate_paused, candidate_paused_at
@@ -3231,20 +3257,36 @@ async def llm_tts_session(sock):
         pcm = voice.get(token, turn_taking.backchannel.rng) if token else None
         return (token, pcm) if pcm else None
 
-    async def emit_filler(token: str, pcm: bytes) -> float:
+    async def emit_filler(token: str, pcm: bytes, *, filler_id: str = "") -> float:
         """Send interruptible filler audio and return its PCM duration."""
         duration = len(pcm) / (MIC_RATE * 2)
-        await sock.send_json({
+        message = {
             "type": "backchannel",
             "token": token,
             "sample_rate": MIC_RATE,
             "pcm": base64.b64encode(pcm).decode(),
             "interruptible": True,
-        })
+        }
+        if filler_id:
+            message["filler_id"] = filler_id
+        await sock.send_json(message)
         turn_taking.record_emission(token, committed=True)
         turn["until"] = max(turn["until"], time.monotonic() + duration)
         turn["echo_until"] = max(turn["echo_until"], turn["until"] + 2.0)
         return duration
+
+    async def wait_for_filler_end(filler_id: str, duration: float) -> None:
+        """Wait for browser playback completion, with a bounded legacy fallback."""
+        event = filler_waiters[filler_id]
+        try:
+            await asyncio.wait_for(event.wait(), timeout=max(1.0, duration + 1.0))
+        except asyncio.TimeoutError:
+            print(f"[handoff] 垫话播放完成回报超时（{duration:.2f}s），继续正文",
+                  flush=True)
+        else:
+            print("[handoff] 浏览器确认垫话播放完成，放行正文", flush=True)
+        finally:
+            filler_waiters.pop(filler_id, None)
 
     async def synthesize_work_filler(pending, memory_vm, context_space):
         """Generate and synthesize a bridge without delaying the main work."""
@@ -3277,12 +3319,21 @@ async def llm_tts_session(sock):
         ready_task = None
         try:
             if decision.kind is HandoffKind.CACHED_ACK and ack:
-                duration = await emit_filler(*ack)
-                await asyncio.sleep(short_ack_plan(duration).main_start_seconds)
+                filler_id = uuid.uuid4().hex
+                filler_waiters[filler_id] = asyncio.Event()
+                try:
+                    duration = await emit_filler(*ack, filler_id=filler_id)
+                except BaseException:
+                    filler_waiters.pop(filler_id, None)
+                    raise
+                await wait_for_filler_and_output(
+                    wait_for_filler_end(filler_id, duration),
+                    sink.wait_for_output(),
+                )
             elif decision.kind is HandoffKind.LLM_FILLER:
                 filler_task = asyncio.create_task(
                     synthesize_work_filler(pending, memory_vm, context_space))
-                ready_task = asyncio.create_task(sink.wait_for_audio())
+                ready_task = asyncio.create_task(sink.wait_for_output())
                 done, _ = await asyncio.wait(
                     (filler_task, ready_task), return_when=asyncio.FIRST_COMPLETED)
                 if ready_task in done or sink.buffered_ms > 0:
@@ -3295,9 +3346,19 @@ async def llm_tts_session(sock):
                               f"{type(e).__name__}: {e}", flush=True)
                         text, pcm = "", b""
                     if text and pcm and sink.buffered_ms <= 0:
-                        duration = await emit_filler(text, pcm)
-                        await asyncio.sleep(max(
-                            0.0, duration - LONG_WORK_FILLER.lead_seconds))
+                        filler_id = uuid.uuid4().hex
+                        filler_waiters[filler_id] = asyncio.Event()
+                        try:
+                            duration = await emit_filler(
+                                text, pcm, filler_id=filler_id)
+                        except BaseException:
+                            filler_waiters.pop(filler_id, None)
+                            raise
+                        # Main generation and synthesis continue in ReplySink,
+                        # but no answer_start or PCM is released until both the
+                        # spoken bridge has ended and main output is available.
+                        await wait_for_filler_and_output(
+                            wait_for_filler_end(filler_id, duration), ready_task)
             turn["until"] = 0.0
             turn_taking.start_reply()
             if sink.first_audio_at and turn["measure_started"]:
@@ -3464,7 +3525,8 @@ async def llm_tts_session(sock):
             is_busy=hearing, said=lambda: (turn["reply"]["text"]
                 if hearing() or time.monotonic() < turn["echo_until"] else ""),
             on_candidate=pause_candidate, on_candidate_reject=resume_candidate,
-            on_playback_checkpoint=playback_checkpoint, on_close=close_session,
+            on_playback_checkpoint=playback_checkpoint,
+            on_filler_done=filler_done, on_close=close_session,
             on_early=start_early, on_early_cancel=drop_early,
             on_speech_start=prewarm_local,
             textless_confirm_s=0.2, turn_taking=turn_taking):

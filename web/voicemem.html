@@ -1681,7 +1681,13 @@ function playBackchannel(m){
   src.connect(g); g.connect(playBus);
   if(m.interruptible){
     activeTurnFillers.add(src);
-    src.onended=()=>activeTurnFillers.delete(src);
+    src.onended=()=>{
+      activeTurnFillers.delete(src);
+      if(m.filler_id&&ws&&ws.readyState===WebSocket.OPEN){
+        try{ ws.send(JSON.stringify({type:'filler_done',filler_id:m.filler_id})); }
+        catch(e){}
+      }
+    };
   }
   src.start();
 }

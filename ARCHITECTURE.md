@@ -326,9 +326,11 @@ One session-scoped `TurnTakingStateMachine` then chooses the handoff. Ready
 audio is released directly. An ordinary predicted wait may use a cached
 acknowledgement, while only `memory_cot` may request an LLM-generated work
 filler. First audio observations update the session estimate used by later
-decisions. Main reply work runs into a `ReplySink` while either filler plays;
-releasing that sink shortly before the filler ends overlaps work without
-interleaving output.
+decisions. Main reply work runs into a `ReplySink` while either filler plays.
+For every emitted end-of-turn filler, the browser reports actual playback
+completion before that sink releases `answer_start` or main PCM. Generation
+remains concurrent, but spoken filler and main audio never overlap or hard-cut
+each other.
 
 ## 9. Reply, prompt, and speech flow
 
@@ -434,7 +436,8 @@ raising the browser prebuffer or delaying audible playback.
 
 Turn fillers use the browser's independent backchannel path so they do not
 become main-output timeline content. End-of-turn fillers are interruptible:
-`answer_start`, barge-in, and reset stop them before main PCM begins. In-speech
+barge-in and reset may stop them, but an ordinary handoff waits for the browser's
+playback-complete event before releasing main PCM. In-speech
 backchannels remain independent and do not mutate the main reply state.
 
 Generated, sent, buffered, rendered, and heard output are distinct states.

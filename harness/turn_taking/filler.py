@@ -21,15 +21,15 @@ class FillerPlan:
         return max(0.0, self.target_seconds - self.lead_seconds)
 
 
-SHORT_ACK = FillerPlan(target_seconds=0.35, lead_seconds=0.10, purpose="acknowledgement")
-LONG_WORK_FILLER = FillerPlan(target_seconds=4.0, lead_seconds=0.20, purpose="tool_or_reasoning")
+SHORT_ACK = FillerPlan(target_seconds=0.35, lead_seconds=0.0, purpose="acknowledgement")
+LONG_WORK_FILLER = FillerPlan(target_seconds=4.0, lead_seconds=0.0, purpose="tool_or_reasoning")
 
 
 def short_ack_plan(clip_seconds: float) -> FillerPlan:
-    """Start main work 100 ms before this acknowledgement clip ends."""
+    """Start main speech only after this acknowledgement clip ends."""
     return FillerPlan(
         target_seconds=max(0.0, float(clip_seconds)),
-        lead_seconds=0.10,
+        lead_seconds=0.0,
         purpose="acknowledgement",
     )
 
@@ -90,9 +90,13 @@ async def run_overlapped_handoff(
     start_main: Callable[[], Awaitable[None]],
     plan: FillerPlan,
 ) -> None:
-    """Play filler now and start main work shortly before its expected end."""
+    """Run filler handoff, overlapping only when the plan has a positive lead."""
     filler = asyncio.create_task(play_filler())
     try:
+        if plan.lead_seconds <= 0:
+            await filler
+            await start_main()
+            return
         await asyncio.sleep(plan.main_start_seconds)
         await start_main()
         await filler
@@ -101,3 +105,11 @@ async def run_overlapped_handoff(
             filler.cancel()
         await asyncio.gather(filler, return_exceptions=True)
         raise
+
+
+async def wait_for_filler_and_output(
+    filler_done: Awaitable[None],
+    output_ready: Awaitable[None],
+) -> None:
+    """Release speech only after the filler ends and main output is available."""
+    await asyncio.gather(filler_done, output_ready)
