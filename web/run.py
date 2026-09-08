@@ -43,7 +43,8 @@ _ROOT = HERE.parent
 sys.path.insert(0, str(HERE))                       # 让 `import utils` 找到同目录管道层
 sys.path.insert(0, str(_ROOT))
 from echo_guard import UtteranceGuard
-from voicemem.prompt_config import context_prompts, tts_prompts
+from web.harness import CONTEXT, PauseGate, backchannel_policy, is_unfinished, system_prompt
+from voicemem.prompt_config import tts_prompts
 os.environ.setdefault("VOICEMEM_MODELS_DIR", str(_ROOT / "models"))
 # 记忆空间锚在**仓库根**，不跟当前目录走。否则 `cd web && python run.py` 会在
 # web/ 底下另建一个空的 voicemem_memoryspace/demo，用户对着空库说半天话，
@@ -326,7 +327,7 @@ def set_lang(lang: str) -> str:
 
 
 def _lang_note() -> str:
-    return persona.lang_note(SPACE_LANG)
+    return _by_lang(CONTEXT["language"])
 
 
 
@@ -864,12 +865,12 @@ def _turn_detection() -> dict:
 
 #: 要回放时追加的一句。不加的话模型会去"描述"那段音频（"你说那是一首很轻快的
 #: 钢琴曲…"）——它根本没听过那段音频，描述全是编的；而且用户马上就要亲耳听到。
-_REPLAY_NOTE = context_prompts()["replay"]
+_REPLAY_NOTE = CONTEXT["replay"]
 
 #: 他在找一段声音、但那个时间段确实没有存档时追加的一句。
 #: 不加的话模型会顺口答"当然，马上播放"——然后什么都不放。说要播却没播，
 #: 比直接说没找到糟得多。
-_NO_REPLAY_NOTE = context_prompts()["no_replay"]
+_NO_REPLAY_NOTE = CONTEXT["no_replay"]
 
 
 def _wants_sound(text: str) -> bool:
@@ -884,7 +885,7 @@ def _wants_sound(text: str) -> bool:
 _TONE = tts_prompts()["fallback_by_user_emotion"]
 
 
-_STATE_LABEL = context_prompts()["state_label"]
+_STATE_LABEL = CONTEXT["state_label"]
 
 
 def _tone_note(emotion: str) -> str:
@@ -930,7 +931,7 @@ def _by_lang(d: dict, lang: str = "") -> str:
 
 
 def _rt_persona(lang: str = "") -> str:
-    """库里的人设 + 语气标注规则（**只在 llm_tts 那条路上加**）。
+    """web/harness.py 的人设 + 语气标注规则（**只在 llm_tts 那条路上加**）。
 
     语气标注是这套本地 TTS 管线特有的：模型在第一个 token 标 ``温和|``，
     harness/speak_tag.py 拿它挑发声指示、再把标签剥掉才送去合成。所以拼在这里
@@ -943,10 +944,7 @@ def _rt_persona(lang: str = "") -> str:
     这是 system 里**唯一稳定的前缀**，每轮都一样，所以拼接顺序不能变：
     变的东西（记忆、历史）一律排在它后面，见 core.py:248。"""
     lang = lang or SPACE_LANG
-    base = persona.system_prompt(lang)
-    if MODE == "realtime":
-        return base
-    return f"{base}\n\n{speak_tag.prompt_rule(lang)}"
+    return system_prompt(lang, tagged=MODE != "realtime")
 
 
 def _history_block(session_id: str, space: str) -> str:
@@ -978,13 +976,13 @@ def _realtime_instructions(memory_context: str, stranger: bool = False,
     ``text``：用户这一轮说的话。只用来判断"他是不是在找一段录音而我们没找到"——
     那种情况要明说没找到，否则模型会顺口答"马上播放"然后什么都不放。"""
     if stranger:
-        out = f"{_rt_persona()}\n\n{persona.stranger_note(SPACE_LANG)}"
+        out = f"{_rt_persona()}\n\n{_by_lang(CONTEXT['stranger'])}"
         return f"{out}\n\n{_lang_note()}" if _lang_note() else out
     parts = [_rt_persona()]
     if memory_context:
         parts.append(memory_context)
     else:
-        parts.append(persona.no_memory_note(SPACE_LANG))   # 一条都没检索到：别编
+        parts.append(_by_lang(CONTEXT["no_memory"]))   # 一条都没检索到：别编
     session_context = _history_block(
         context_session, context_space or ACTIVE_SPACE)
     if session_context:
@@ -1507,9 +1505,9 @@ def build_reply_context(memory_context: str, *, stranger: bool = False,
     预热那边照着抄一份，抄漏了 note 和语言提示——尾巴里多出五十多个 token，
     每轮多等一百多毫秒。
     """
-    ctx = persona.stranger_note(SPACE_LANG) if stranger else (memory_context or "")
+    ctx = _by_lang(CONTEXT["stranger"]) if stranger else (memory_context or "")
     if not stranger and gate.needs_memory(route) and not ctx.strip():
-        ctx = persona.no_memory_note(SPACE_LANG)    # 该检索却一条都没有：别编
+        ctx = _by_lang(CONTEXT["no_memory"])    # 该检索却一条都没有：别编
     note = (_by_lang(_REPLAY_NOTE) if replay
             else (_by_lang(_NO_REPLAY_NOTE) if _wants_sound(text) else ""))
     if note:
@@ -2401,14 +2399,12 @@ def _print_backchannel_status() -> None:
     print(f"[backchannel] 音色={getattr(tts, 'voice', '?')}（跟正文同一个）· {p}",
           flush=True)
     print("[backchannel] 想看每次判定：VOICEMEM_BC_DEBUG=1；"
-          "先验通不通：VOICEMEM_BC_P0=0.9 VOICEMEM_BC_MAX_GAP=0.6 "
-          "VOICEMEM_BC_REFRACTORY=0", flush=True)
+          "控制参数和 system prompt：web/harness.py（3秒内不重复附和）", flush=True)
 
 
 def BackchannelPolicy_summary() -> str:
-    from harness.backchannel import BackchannelPolicy
-    p = BackchannelPolicy()
-    return (f"基础概率={p.p0} 停顿窗口={p.gap_s*1000:.0f}~{p.max_gap_s*1000:.0f}ms "
+    p = backchannel_policy()
+    return (f"开头概率={p.opening_p} 长句概率={p.long_p} 停顿窗口={p.gap_s*1000:.0f}~{p.max_gap_s*1000:.0f}ms "
             f"冷却={p.refractory_s}s")
 
 
@@ -2486,8 +2482,10 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
     每轮保留开口时的播放状态和回声文本；非回声插话稳定后显示，纯附和只显示不回复。
     on_candidate()/on_candidate_reject()：疑似插话时可恢复地暂停/恢复播放；只有
     on_speech() 才是确认打断。"""
+    pause_gate = PauseGate()
     stream = vm.stream(spec_min_chars=SPEC_MIN_CHARS, gamble_s=GAMBLE_S,
-                       confirm_s=CONFIRM_S, eot=_eot(), textless_confirm_s=textless_confirm_s)
+                       confirm_s=CONFIRM_S, eot=_eot(), textless_confirm_s=textless_confirm_s,
+                       turn_end_guard=pause_gate.allow_end)
     utterance = UtteranceGuard()
     turn_finished = False
     last_partial = ""
@@ -2495,7 +2493,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         owner = {"id": "", "last": "", "miss": 0}   # 主人的声纹 / 上一轮是谁 / 连续认错几轮
     from harness.backchannel import Backchannel
     from harness import backchannel as _bc_mod
-    bc = Backchannel()                    # 一路会话一个：它要记住上次什么时候附和过
+    bc = Backchannel(policy=backchannel_policy())  # 冷却跨轮保留，开头只增加概率
     bc_speech_t0 = 0.0                    # 这一轮用户什么时候开的口
     prewarm_idle = True                   # 该趁空闲把「人设+历史」热一遍了
     prewarm_mem = None                    # 已经拿去续热过的那份投机记忆
@@ -2540,6 +2538,8 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         bc_speech_t0 = 0.0
         prewarm_idle = True
         prewarm_mem = None
+        bc.reset_turn()
+        pause_gate.reset()
 
     def live_agent_text():
         """助手这一路已经出过声的文本：正文 + 附和词。
@@ -2590,6 +2590,9 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         raw = msg["bytes"]
         if turn_finished:
             utterance = UtteranceGuard()
+            pause_gate.reset()
+            bc.reset_turn()
+            bc_gap = bc_rms_fast = bc_rms_slow = 0.0
             turn_finished = False
             barge_base = 0
             barged = candidate = discard_candidate_turn = False
@@ -2646,6 +2649,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         # 它没听见——"我喜欢安静的地方"下注了，你接着说"但学校图书馆很吵"，
         # 回答就只针对前半句。换来的是延迟最低、逻辑最简单，赌错也不重来。
         if (on_early and not busy and not input_echo and st.spoke and cur
+                and not is_unfinished(cur) and not pause_gate.hold_until
                 and not (utterance.started_busy and _is_backchannel(cur))
                 and st.eot_score >= EARLY_EOT and not early_at):
             early_text, early_at = cur, time.monotonic()
@@ -2677,17 +2681,19 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
         # 意义了。
         # 刚下注不附和（那声"嗯"会正好落在回复出声前一秒，像自言自语）；但下注后
         # 又说了一秒还没停、字也多了，就是还在说——该应一声。
-        bc_ok = (not early_at
+        unfinished = is_unfinished(cur)
+        bc_ok = (unfinished or not early_at
                  or (time.monotonic() - early_at >= BC_AFTER_EARLY_S
                      and cur != early_text and st.state == "<speak>"))
-        if not busy and not input_echo and not utterance.started_busy and bc_speech_t0 and bc_ok:
+        if not st.turn and not busy and not input_echo and not utterance.started_busy and bc_speech_t0 and bc_ok:
             voice = _backchannel_voice() if _bc_mod.emitting() else None
             token = bc.offer(text=cur, silence=bc_gap, spoke=st.spoke,
                              speech_s=time.monotonic() - bc_speech_t0,
                              emotion=owner.get("emotion", ""),
                              tail_rms=bc_rms_fast, prev_rms=bc_rms_slow,
                              lang=space_language(ACTIVE_SPACE),
-                             available=voice.available if voice else set())
+                             available=voice.available if voice else set(),
+                             unfinished=unfinished)
             if token:
                 voice = _backchannel_voice()
                 pcm = voice.get(token, bc.rng) if voice else None
@@ -2698,6 +2704,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                         "type": "backchannel", "token": token,
                         "sample_rate": 24000,
                         "pcm": base64.b64encode(pcm).decode()})
+                    pause_gate.emitted(len(pcm) / (24000 * 2))
                     bc_recent.append((time.monotonic(), token))  # 见 heard_from_agent()
                     if BARGE_DEBUG:
                         print(f"[backchannel] {token!r}", flush=True)
@@ -2907,7 +2914,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
             # ASR 的用词分歧，不是"他又说了话"——实测同一句话只能对上 57%。
             _f, _b = _norm(st.turn.raw_text or st.turn.text), _norm(early_text)
             _cover = (_lcs_len(_b, _f) / len(_f)) if _f else 0.0
-            _early_ok = bool(early_at) and _cover >= EARLY_MIN_COVER
+            _early_ok = bool(early_at) and _cover >= EARLY_MIN_COVER and not is_unfinished(st.turn.text)
             if BARGE_DEBUG and early_at and not _early_ok:
                 print(f"[early] 下注那句只覆盖了最终文本的 {_cover:.0%}"
                       f"（{early_text!r} vs {st.turn.text!r}）→ 作废重来", flush=True)
@@ -4234,9 +4241,9 @@ if __name__ == "__main__":
             # live turns only read it, never wait behind background synthesis.
             from harness.backchannel import BackchannelVoice
             _bc_voice = BackchannelVoice(_tts, lang=space_language(ACTIVE_SPACE))
-            # 中文这 11 个词是逐条试听定下来的；Noctelle 音色直接从仓库 WAV 装入
-            # 缓存，换成别的参考音色才会首次启动现合成。
-            _bc_tokens = (["嗯", "嗯嗯", "对", "对啊", "是啊", "哦", "哦哦", "这样啊",
+            # 先准备未完成句的短音，再装入已试听的附和库。
+            # 缺少对应 WAV 的新词或自定义音色在启动时合成，热路径只播放。
+            _bc_tokens = (["嗯", "嗯哼", "嗯？", "嗯嗯", "对", "对啊", "是啊", "哦", "哦哦", "这样啊",
                            "不错", "我知道了", "挺好的"]
                           if _bc_voice.lang == "zh" else ["mm-hmm", "yeah", "right", "oh", "okay"])
             asyncio.run(_bc_voice.prime(tokens=_bc_tokens, variants=1))

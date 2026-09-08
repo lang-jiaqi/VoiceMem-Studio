@@ -1,7 +1,13 @@
 # 生效的 Prompt 配置
 
-**直接修改本目录里的文件，重启 demo 后生效。这里就是运行时读取的原始配置，不是副本。**
-不需要再到 Python 源码中修改人设或语气提示。当前内容是从原实现原样迁移的。
+Web demo 的完整对话 system prompt、标签协议、场景指令与接话控制现集中在
+[`web/harness.py`](../web/harness.py)，修改后重启 demo 生效。
+两个环境变量：`VOICEMEM_DIALOGUE_CONTROLS`（控制参数 JSON）、
+`VOICEMEM_SYSTEM_PROMPT`（完整人设正文）。未完成句先附和，短音结束后再留 300ms
+静音；用户续说就取消等待。附和冷却跨轮至少 3 秒，开头概率较高，长句逐渐下降。
+
+本目录的 `llm_*.md` 和 `llm_context.json` 继续作为独立 Python 库的默认配置，
+不再覆盖 Web 的对话提示词。`tts.json` 仍控制 Web 和库的 TTS 发声参数。
 
 | 文件 | 修改内容 |
 | --- | --- |

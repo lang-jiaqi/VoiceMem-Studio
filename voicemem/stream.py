@@ -442,6 +442,7 @@ class VoiceStream:
     def __init__(self, vm, *, on_partial=None, spec_min_chars=6,
                  gamble_s=0.2, confirm_s=0.3, src_rate=24000, vad_threshold=None,
                  emotion=None, gate=_gate_mod.route, eot=None, textless_confirm_s=None,
+                 turn_end_guard=None,
                  eot_min_s=float(os.environ.get("VOICEMEM_EOT_MIN_SILENCE", "0")),
                  eot_ends_turn=os.environ.get("VOICEMEM_EOT_ENDS_TURN", "1") != "0"):
         self.vm = vm
@@ -501,6 +502,9 @@ class VoiceStream:
         # Dialogue can probe short voiced input before streaming ASR emits a word.
         # Opt-in: library/music-only callers retain the original sound-only path.
         self.textless_confirm_s = textless_confirm_s
+        # Optional application turn-taking policy. Applies to both EOT and timeout.
+        self.turn_end_guard = turn_end_guard
+        self._held_final_text = ""
         self._vad_silence = self._voiced_s = 0.0
         self._textless_probed = False
         self.src_rate = src_rate
@@ -768,6 +772,7 @@ class VoiceStream:
         self._vad_silence = self._voiced_s = 0.0
         self._textless_probed = False
         self._speech_end = 0.0
+        self._held_final_text = ""
         self._spec, self._spec_text, self._last_memory = None, "", None
         self._spec_started, self._gate_pre, self._gate_pre_text = 0.0, None, ""
         self._route = _gate_mod.DEEP
@@ -815,6 +820,10 @@ class VoiceStream:
                          src=self.src_rate)
         self._text = self.asr_worker.push(frame)     # 入队即返回，识别在 asr-worker 线程
         speaking = self.vad.is_speech(frame)
+        if speaking:
+            self._held_final_text = ""
+        elif self._held_final_text:
+            self._text = self._held_final_text
         if speaking:
             self._speech_end = received_at
             self._voiced_s += len(frame) / 16000.0
@@ -946,8 +955,13 @@ class VoiceStream:
                     print(f"[asr-final] 无流式字短句快速复核 · VAD静音 {self._vad_silence*1000:.0f}ms", flush=True)
             # Empty/failed recognition is not a user turn; keep the sound-only
             # buffer intact and do not repeatedly probe the same silence.
-        if fast_final or (self._spoke and (semantic_done or self._silence >= need_silence)
-                          and (self._text.strip() or sound_only)):
+        allow_end = (self.turn_end_guard is None or self.turn_end_guard(
+            self._text, self._silence, speaking, len(frame) / 16000.0,
+            float(np.sqrt(np.mean(frame * frame))) if len(frame) else 0.0))
+        if fast_final and not allow_end:
+            self._held_final_text = self._text
+        if allow_end and (fast_final or (self._spoke and (semantic_done or self._silence >= need_silence)
+                          and (self._text.strip() or sound_only))):
             if EOT_DEBUG and self.eot is not None:
                 print(f"[eot] 回合结束：{'短句快速复核' if fast_final else '语义判定' if semantic_done else f'兜底掐表 {need_silence*1000:.0f}ms'}"
                       f"（静音 {self._silence*1000:.0f}ms）", flush=True)
@@ -960,8 +974,18 @@ class VoiceStream:
             # 流式那份是为低延迟牺牲了准确率的，只配用来判打断/EOT/闸门。
             # 见 utils/audio/asr.py 的 OfflineASR：实测同一批录音，流式把
             # "Everything is good." 转成 "Everything is going"，离线一字不差，37ms。
-            if not fast_final:
+            if not fast_final and not self._held_final_text:
                 await self._finish_asr(pcm)
+                # Final ASR may reveal a dangling clause absent from the partial.
+                # Retain that decode while the app leaves room for continuation.
+                if self.turn_end_guard is not None and not self.turn_end_guard(
+                        self._text, self._silence, speaking, 0.0,
+                        float(np.sqrt(np.mean(frame * frame))) if len(frame) else 0.0):
+                    self._held_final_text = self._text
+                    return StreamState("<silence>", self._text, self._ready_memory(),
+                                       None, self.vm, silence=self._silence,
+                                       spoke=self._spoke, eot_score=0.0,
+                                       speech_end=self._speech_end)
             _refined = time.monotonic()
             turn = await self._confirm()                   # VAD 确认说完 → 交出预算记忆
             if ASR_DEBUG:

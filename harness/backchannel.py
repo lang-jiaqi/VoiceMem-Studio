@@ -101,7 +101,7 @@ class BackchannelPolicy:
 
         VOICEMEM_BC_P0=0.9        # 基础概率拉满，先确认链路通不通
         VOICEMEM_BC_MAX_GAP=0.6   # 放宽停顿窗口（默认只认 100~200ms）
-        VOICEMEM_BC_REFRACTORY=0  # 去掉冷却
+        VOICEMEM_BC_REFRACTORY=5  # 冷却延长到 5 秒；最少 3 秒
     """
     #: 一次「合格停顿」上的基础概率。其余因子都是在它上面乘。
     #:
@@ -119,7 +119,7 @@ class BackchannelPolicy:
     #: 说够这么多字才考虑附和。刚开口两个字就"嗯"像在敷衍，但 6 个字对短句太苛刻。
     min_chars: int = field(default_factory=lambda: int(_envf("VOICEMEM_BC_MIN_CHARS", 4)))
     #: 距上次附和的硬冷却：这段时间内概率恒为 0。
-    refractory_s: float = field(default_factory=lambda: _envf("VOICEMEM_BC_REFRACTORY", 0.7))
+    refractory_s: float = field(default_factory=lambda: max(3.0, _envf("VOICEMEM_BC_REFRACTORY", 3.0)))
     #: 硬冷却之后再用这么长时间把概率从 0 线性升回 1。
     ramp_s: float = 3.0
     #: L 因子的时间常数：连续说了 τ 秒左右，"该点个头了"的压力升到约 63%。
@@ -129,6 +129,11 @@ class BackchannelPolicy:
     #: 概率上限。再怎么该附和也不能**每次**停顿都出声，那样同样机械——留下的
     #: 随机性正是它像人的原因。0.75 意味着最该附和的时候大约四次里应三次。
     p_max: float = field(default_factory=lambda: _envf("VOICEMEM_BC_PMAX", 0.9))
+    # Web harness 可开启开场较活跃、长讲述逐渐安静的概率曲线。
+    opening_s: float = 3.0
+    opening_p: float | None = None
+    long_p: float = 0.18
+    decay_s: float = 6.0
 
 
 def f_length(speech_s: float, tau_s: float) -> float:
@@ -184,9 +189,10 @@ def f_prosody(tail_rms: float, prev_rms: float) -> float:
 
 def f_refractory(since_s: float, policy: BackchannelPolicy) -> float:
     """R —— 不应期。连着"嗯嗯嗯"比一次都不嗯更假。"""
-    if since_s < policy.refractory_s:
+    cooldown = max(3.0, policy.refractory_s)
+    if since_s < cooldown:
         return 0.0
-    return min(1.0, (since_s - policy.refractory_s) / max(0.1, policy.ramp_s))
+    return min(1.0, (since_s - cooldown) / max(0.1, policy.ramp_s))
 
 
 # ── 说哪个词 ──────────────────────────────────────────────────────────────────
@@ -198,6 +204,7 @@ def f_refractory(since_s: float, policy: BackchannelPolicy) -> float:
 #: 信号明确时才用，拿不准就退回 support/neutral。
 _TOKENS = {
     "zh": {
+        "continuer":  ["嗯", "嗯哼", "嗯？"],
         "support":    ["嗯", "嗯嗯", "嗯…", "哦", "哦哦", "我知道了", "唔"],   # 共情/接住
         "agree":      ["对", "对啊", "对对", "是啊", "嗯嗯", "对的", "没错"],   # 赞同
         "surprise":   ["这样啊", "哦哦", "是吗", "真的", "真的吗"],
@@ -206,6 +213,7 @@ _TOKENS = {
         "neutral":    ["嗯", "嗯嗯", "哦", "对", "我知道了", "唔", "嗯对"],
     },
     "en": {
+        "continuer":  ["mm-hmm", "mmm", "uh-huh"],
         "support":    ["mm-hmm", "mmm", "oh", "i see", "okay"],
         "agree":      ["yeah", "right", "uh-huh", "exactly", "for sure"],
         "surprise":   ["really", "oh wow", "no way", "oh really", "huh"],
@@ -286,7 +294,7 @@ class Backchannel:
     """一路会话一个实例：它要记住上次什么时候附和过、说的哪个词。"""
     policy: BackchannelPolicy = field(default_factory=BackchannelPolicy)
     rng: random.Random = field(default_factory=random.Random)
-    _last_at: float = 0.0
+    _last_at: float | None = None
     _last_token: str = ""
     #: 最近说过的几个词，挑新词时全部避开。只避开上一个的话，"嗯嗯/哦/嗯嗯/哦"
     #: 交替出现，两三次就听出是在轮播。
@@ -310,16 +318,22 @@ class Backchannel:
             "M": f_content(text),
             "E": f_emotion(emotion),
             "P": f_prosody(tail_rms, prev_rms),
-            "R": f_refractory(now - self._last_at if self._last_at else 1e9, p),
+            "R": f_refractory(now - self._last_at if self._last_at is not None else 1e9, p),
         }
         val = p.p0
+        if p.opening_p is not None:
+            # 说得越长越少打扰；每轮开头提升机会，但仍受会话级硬冷却限制。
+            val = p.long_p + (p.opening_p - p.long_p) * math.exp(
+                -max(0.0, speech_s - p.opening_s) / max(0.1, p.decay_s))
+            parts["L"] = 1.0
         for v in parts.values():
             val *= v
         return min(p.p_max, val), parts
 
     def offer(self, *, text: str, silence: float, spoke: bool, speech_s: float,
               emotion: str = "", tail_rms: float = 0.0, prev_rms: float = 0.0,
-              lang: str = "zh", now: float | None = None, available=None) -> str | None:
+              lang: str = "zh", now: float | None = None, available=None,
+              unfinished: bool = False) -> str | None:
         """这一帧要不要附和。返回要说的词，或 None。
 
         一次停顿只掷一次骰子（``_armed``）：不然 100ms 到 200ms 之间每帧都判一次，
@@ -333,11 +347,13 @@ class Backchannel:
             return None
         if not (emitting() and spoke and self._armed):
             return None
-        if not (self.policy.gap_s <= silence < self.policy.max_gap_s):
+        if silence < self.policy.gap_s or (not unfinished and silence >= self.policy.max_gap_s):
             return None                        # 不在窗口里：太短，或已经是"说完了"
-        if len((text or "").strip()) < self.policy.min_chars:
+        if not (text or "").strip() or (not unfinished and len(text.strip()) < self.policy.min_chars):
             return None
         self._armed = False                    # 这次停顿判过了，不再判
+        if self._last_at is not None and now - self._last_at < max(3.0, self.policy.refractory_s):
+            return None
         speech = speech_s or (now - self._speech_started if self._speech_started else 0.0)
         p, parts = self.probability(text=text, speech_s=speech, emotion=emotion,
                                     tail_rms=tail_rms, prev_rms=prev_rms, now=now)
@@ -349,9 +365,14 @@ class Backchannel:
             print(f"[backchannel] 机会 p={p:.0%} 掷={roll:.2f} "
                   f"{'中' if roll < p else '不中'}  {f}  说了{speech:.1f}s  "
                   f"{text[-12:]!r}", flush=True)
-        if roll >= p:
+        if not unfinished and roll >= p:
             return None
-        token = pick_token(text, emotion, lang, self.rng, self._recent, available)
+        if unfinished:
+            pool = (_TOKENS.get(lang) or _TOKENS["en"])["continuer"]
+            pool = [t for t in pool if available is None or t in available]
+            token = self.rng.choice([t for t in pool if t not in self._recent] or pool) if pool else ""
+        else:
+            token = pick_token(text, emotion, lang, self.rng, self._recent, available)
         if not token:
             return None
         self._last_at, self._last_token = now, token

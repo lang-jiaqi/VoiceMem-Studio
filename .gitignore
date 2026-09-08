@@ -59,20 +59,4 @@ voicemem_memoryspace/myvoicemem/*
 !voicemem_memoryspace/myvoicemem/.gitkeep
 cache/
 
-# Actual prompts contain conversation history and private memories.
-/prompt/*
-!/prompt/README.md
-!/prompt/llm_system_zh.md
-!/prompt/llm_system_en.md
-!/prompt/llm_tone_rule_zh.md
-!/prompt/llm_tone_rule_en.md
-!/prompt/llm_context.json
-!/prompt/tts.json
 
-# Only the selected demo voice and its hand-picked backchannel clips are shipped.
-# Other local reference voices and generated voice tests stay private.
-/voice/*
-!/voice/noctelle_ref_short.wav
-!/voice/noctelle_ref_short.txt
-!/voice/backchannel/
-!/voice/backchannel/OK_*.wav

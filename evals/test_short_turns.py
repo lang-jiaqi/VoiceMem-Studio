@@ -22,6 +22,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "web")]
 from echo_guard import UtteranceGuard, is_echo
 from voicemem import gate
 from voicemem.stream import VoiceStream, StreamState
+from web.harness import PauseGate, backchannel_policy, is_unfinished
 
 
 class ShortSpeechTests(unittest.IsolatedAsyncioTestCase):
@@ -93,6 +94,7 @@ def anticipate_namespace():
     names = {"anticipate", "Pending", "_is_echo", "_is_backchannel", "_barge_text",
              "_is_explicit_interrupt", "_has_barge_content", "_has_strong_final_barge", "_lcs_len"}
     ns = dict(asyncio=asyncio, base64=base64, json=json, time=time,
+              PauseGate=PauseGate, backchannel_policy=backchannel_policy, is_unfinished=is_unfinished,
               dataclass=dataclasses.dataclass, gate=gate, UtteranceGuard=UtteranceGuard,
               BACKCHANNEL_ON=True, ECHO_WINDOW=300, ECHO_RATIO=.6, ECHO_FUZZY_MIN=4,
               _bc_norm=gate.norm, _FILLER_PREFIX=re.compile(r"^[嗯呃啊哦噢喔欸诶唉哈哼]+"),

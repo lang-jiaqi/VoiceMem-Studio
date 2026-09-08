@@ -20,11 +20,13 @@ from voicemem.prompt_config import tts_prompts, context_prompts
 from voicemem.reply import deepseek_reply
 from voicemem.breeze_tts import BreezeMLXTTS
 from harness import speak_tag, backchannel
+from web.harness import system_prompt
 
 # Actual web prompt assembly, without loading ASR/TTS models or memory DBs.
 tree = ast.parse((Path(os.environ['TEST_REPO']) / 'web/run.py').read_text())
 names = {'_rt_persona', '_by_lang', '_speak_instruction', '_tone_note'}
 ns = dict(persona=persona, speak_tag=speak_tag, SPACE_LANG='zh', MODE='llm_tts',
+          system_prompt=system_prompt,
           _SPEAK_BASE=tts_prompts()['base'], _TONE=tts_prompts()['fallback_by_user_emotion'],
           _speak_base_env='')
 exec(compile(ast.Module(body=[n for n in tree.body if getattr(n,'name','') in names],
@@ -72,7 +74,8 @@ class PromptConfigTests(unittest.TestCase):
         self.env = {**os.environ, 'VOICEMEM_PROMPT_DIR': str(self.directory),
                     'TEST_REPO': str(ROOT), 'PYTHONPATH': str(ROOT)}
         for key in ('VOICEMEM_BREEZE_REF_AUDIO', 'VOICEMEM_BREEZE_REF_TEXT',
-                    'VOICEMEM_BREEZE_INSTRUCTION', 'VOICEMEM_SPEAK_BASE'):
+                    'VOICEMEM_BREEZE_INSTRUCTION', 'VOICEMEM_SPEAK_BASE',
+                    'VOICEMEM_SYSTEM_PROMPT', 'VOICEMEM_DIALOGUE_CONTROLS'):
             self.env.pop(key, None)
 
     def tearDown(self):
@@ -98,12 +101,22 @@ class PromptConfigTests(unittest.TestCase):
         result = self.run_probe()
         self.assertEqual(result.returncode, 0, result.stderr)
         out = json.loads(result.stdout)
-        self.assertEqual(out['system'], '学长修改的人设\n\n学长修改的标签协议\n')
+        self.assertIn('你是 VoiceMem Studio', out['system'])
+        self.assertIn('语音控制协议', out['system'])
+        self.assertNotIn('学长修改的人设', out['system'])
         self.assertEqual(out['user'], '自定义无记忆提示。\n\n问题')
         self.assertEqual(out['tts']['instruct'], '自定义基调。自定义认真语气。')
         self.assertEqual(out['default'], '自定义默认音色指令。')
         self.assertEqual(out['fallback'], '自定义基调。自定义焦虑回应。')
         self.assertEqual(out['styles']['zh'][0], '自定义附和语气。')
+
+    def test_harness_environment_prompt_reaches_actual_provider(self):
+        self.env['VOICEMEM_SYSTEM_PROMPT'] = '用简短、温暖、通俗的对话陪伴人类。'
+        result = self.run_probe()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        self.assertTrue(out['system'].startswith(self.env['VOICEMEM_SYSTEM_PROMPT']))
+        self.assertIn('语音控制协议', out['system'])
 
     def test_invalid_json_fails_with_filename_instead_of_using_old_defaults(self):
         (self.directory / 'tts.json').write_text('{invalid', encoding='utf-8')
