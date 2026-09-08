@@ -147,8 +147,8 @@ class AnticipateTests(unittest.IsolatedAsyncioTestCase):
         stream = types.SimpleNamespace(feed=feed, confirm_s=.2,
                                        refine_current_snapshot=refine_current_snapshot)
         ns["vm"] = types.SimpleNamespace(stream=lambda **kw: stream)
-        with patch("harness.backchannel.emitting", return_value=False), \
-             patch("harness.backchannel.Backchannel.offer", return_value=None):
+        with patch("harness.turn_taking.backchannel.emitting", return_value=False), \
+             patch("harness.turn_taking.backchannel.Backchannel.offer", return_value=None):
             async for pending in ns["anticipate"](
                     Sock(), is_busy=lambda: playback["busy"],
                     said=lambda: playback["text"], on_speech=stop, on_early=on_early):

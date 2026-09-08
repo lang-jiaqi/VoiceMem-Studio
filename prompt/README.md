@@ -1,10 +1,17 @@
 # 生效的 Prompt 配置
 
-Web demo 的完整对话 system prompt、标签协议、场景指令与接话控制现集中在
-[`web/harness.py`](../web/harness.py)，修改后重启 demo 生效。
+Web demo 的基础人设、标签协议与场景指令仍在
+[`web/harness.py`](../web/harness.py)。根据上下文选择回复深度、让情绪进入文字内容的
+生效规则在 [`harness/speaking_style/`](../harness/speaking_style/)；session 接话概率、
+短接话和长垫话的交接时序在 [`harness/turn_taking/`](../harness/turn_taking/)。
+修改后重启 demo 生效。
 两个环境变量：`VOICEMEM_DIALOGUE_CONTROLS`（控制参数 JSON）、
-`VOICEMEM_SYSTEM_PROMPT`（完整人设正文）。未完成句先附和，短音结束后再留 300ms
-静音；用户续说就取消等待。附和冷却跨轮至少 3 秒，开头概率较高，长句逐渐下降。
+`VOICEMEM_SYSTEM_PROMPT`（完整基础人设正文）。用户说话过程中的附和冷却跨轮至少
+3 秒；session 前 3 轮基准概率 50%，第 4–6 轮 10%，之后 30%。
+
+[`harness/reply_modes/`](../harness/reply_modes/) 与
+[`harness/persona/`](../harness/persona/) 目前只建立了目录和接口约定，尚未接入运行时；
+修改其中占位文件不会改变当前 demo。
 
 本目录的 `llm_*.md` 和 `llm_context.json` 继续作为独立 Python 库的默认配置，
 不再覆盖 Web 的对话提示词。`tts.json` 仍控制 Web 和库的 TTS 发声参数。
@@ -29,6 +36,8 @@ Web demo 的完整对话 system prompt、标签协议、场景指令与接话控
 
 请保留 `tones` 的八个键（温和／共情／轻快／认真／鼓励／俏皮／抱歉／平静）和
 `标签|正文` 协议，只改指令内容。增加标签需要同时修改解析器，不是纯 prompt 调整。
+标签剥离、相邻轮次平滑以及标签到 TTS instruction 的映射实现在
+[`voicemem/tts_control.py`](../voicemem/tts_control.py)，属于 TTS 输出控制层。
 JSON 格式错误或必填键缺失会明确报错，不会悄悄退回旧提示词。
 
 `VOICEMEM_SPEAK_BASE` 会覆盖 `base`；`VOICEMEM_BREEZE_INSTRUCTION` 会覆盖 Breeze

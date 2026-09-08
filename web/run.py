@@ -43,7 +43,14 @@ _ROOT = HERE.parent
 sys.path.insert(0, str(HERE))                       # 让 `import utils` 找到同目录管道层
 sys.path.insert(0, str(_ROOT))
 from echo_guard import UtteranceGuard
-from web.harness import CONTEXT, PauseGate, backchannel_policy, is_unfinished, system_prompt
+from web.harness import (
+    CONTEXT,
+    PauseGate,
+    backchannel_policy,
+    backchannel_policy_summary,
+    is_unfinished,
+    system_prompt,
+)
 from voicemem.prompt_config import tts_prompts
 os.environ.setdefault("VOICEMEM_MODELS_DIR", str(_ROOT / "models"))
 # 记忆空间锚在**仓库根**，不跟当前目录走。否则 `cd web && python run.py` 会在
@@ -90,7 +97,7 @@ def _parse(argv):
     p.add_argument("--backchannel", action=argparse.BooleanOptionalAction, default=True,
                    help="用户说到一半停顿时'嗯'一声（附和）。demo 里默认开，"
                         "--no-backchannel 关掉。"
-                        "（库那侧默认仍是关的，见 harness/backchannel.py）")
+                        "（库那侧默认仍是关的，见 harness/turn_taking/backchannel.py）")
     p.add_argument("--lang", choices=["en", "zh"],
                    default=os.environ.get("VOICEMEM_MEMORY_LANGUAGE", "en"),
                    help="新建 Memory Space 时用的语言：en（默认）/ zh。"
@@ -143,7 +150,8 @@ from voicemem import VoiceMem                        # noqa: E402
 from voicemem.audio_timing import TimedAudioChunk    # noqa: E402
 from voicemem import gate                            # noqa: E402  轮次闸门（三路判定）
 from voicemem import persona                         # noqa: E402  人设（双语，库和 demo 共用）
-from harness import speak_tag                        # noqa: E402  回复模型自标语气
+from voicemem import tts_control                     # noqa: E402  回复模型语气 → TTS 指令
+from harness.speaking_style import content_emotion_note  # noqa: E402
 from voicemem.memory_api import build_memory_context # noqa: E402  提前生成时自己拼一份
 
 BARGE_DEBUG = os.environ.get("BARGE_DEBUG", "1") != "0"
@@ -182,7 +190,7 @@ SPEAKER_DEBUG = os.environ.get("SPEAKER_DEBUG", "0") != "0"
 MODE = ARGS.mode                                     # llm_tts | realtime
 # 附和：demo 里默认开（--no-backchannel 关）。**库那侧默认仍是关的**——
 # 让别人的产品在不知情时突然开始出声是另一回事。
-# 必须在 import harness.backchannel **之前**设：那边的 ON 是模块级读的。
+# Keep this process setting explicit; the turn-taking layer reads it at each decision.
 os.environ["VOICEMEM_BACKCHANNEL_EMIT"] = "1" if ARGS.backchannel else "0"
 SPEC_MIN_CHARS = ARGS.spec_min_chars                 # partial 起投机
 GAMBLE_S  = ARGS.gamble_ms / 1000                    # 赌说完
@@ -895,7 +903,7 @@ def _tone_note(emotion: str) -> str:
 #: 说话的基调，每一轮都带。跟 _TONE 拼起来就是这一轮给 TTS 的完整指示。
 _SPEAK_BASE = tts_prompts()["base"]
 _speak_base_env = os.environ.get("VOICEMEM_SPEAK_BASE", "")
-#: 上一轮实际用的语气，给 speak_tag.smooth() 当锚点。进程级就够——它只是让相邻
+#: 上一轮实际用的语气，给 tts_control.smooth() 当锚点。进程级就够——它只是让相邻
 #: 两轮听着接得上，跨会话不需要连续。
 _LAST_TONE = {"tag": ""}
 
@@ -934,7 +942,7 @@ def _rt_persona(lang: str = "") -> str:
     """web/harness.py 的人设 + 语气标注规则（**只在 llm_tts 那条路上加**）。
 
     语气标注是这套本地 TTS 管线特有的：模型在第一个 token 标 ``温和|``，
-    harness/speak_tag.py 拿它挑发声指示、再把标签剥掉才送去合成。所以拼在这里
+    voicemem/tts_control.py 拿它挑发声指示、再把标签剥掉才送去合成。所以拼在这里
     而不是塞进库。
 
     realtime 那条路**不能加**：出声的是 OpenAI 自己，没有"剥掉标签再念"这一步，
@@ -992,6 +1000,9 @@ def _realtime_instructions(memory_context: str, stranger: bool = False,
     tone = _tone_note(emotion)
     if tone:
         parts.append(_by_lang(_STATE_LABEL) + tone)
+    content_emotion = content_emotion_note(emotion, SPACE_LANG)
+    if content_emotion:
+        parts.append(content_emotion)
     if replay:
         parts.append(_by_lang(_REPLAY_NOTE))
     elif _wants_sound(text):
@@ -1496,7 +1507,8 @@ class ReplySink:
 
 
 def build_reply_context(memory_context: str, *, stranger: bool = False,
-                        route=None, replay: str = "", text: str = "") -> str:
+                        route=None, replay: str = "", text: str = "",
+                        emotion: str = "") -> str:
     """记忆 + 各种附加说明 → 交给回复模型的那段 context。
 
     **本地模型预热要跟它逐字一致**，所以只能有这一份实现。预热在用户还在说话时
@@ -1514,6 +1526,9 @@ def build_reply_context(memory_context: str, *, stranger: bool = False,
         ctx = f"{ctx}\n\n{note}" if ctx else note
     if _lang_note():
         ctx = f"{ctx}\n\n{_lang_note()}" if ctx else _lang_note()
+    emotion_note = content_emotion_note(emotion, SPACE_LANG)
+    if emotion_note:
+        ctx = f"{ctx}\n\n{emotion_note}" if ctx else emotion_note
     return ctx
 
 
@@ -1648,7 +1663,7 @@ async def _voicemem_llm_tts(pending, send, send_audio, owner, timeline,
     # VoiceMem(tts=lambda: MyTTS()) 传自己的实现，都在这儿生效；没配就是内置默认。
     tts = memory_vm.utils.get("tts")
     # 这一轮怎么念。默认按上一轮感知到的情绪；回复模型自己标了标签就用它的
-    # （见 harness/speak_tag.py：它知道自己要说什么，比"上一轮用户什么心情"准）。
+    # （见 voicemem/tts_control.py：它知道自己要说什么，比"上一轮用户什么心情"准）。
     # 标签是第一个 token，而 TTS 要等攒够第一段才开始，所以永远先到，不拖慢。
     speak_as = _speak_instruction(pending.emotion)
     tone = {"tag": "", "head": True, "buf": ""}   # head：还没剥过标签
@@ -1798,7 +1813,8 @@ async def _voicemem_llm_tts(pending, send, send_audio, owner, timeline,
         # 参数就是收这个的，该搬过去。搬之前 pending.emotion 这一路暂时没有出口。
         ctx = build_reply_context(
             pending.memory_context, stranger=pending.stranger,
-            route=pending.route, replay=pending.replay, text=pending.text)
+            route=pending.route, replay=pending.replay, text=pending.text,
+            emotion=pending.emotion)
         # 历史单独走消息数组，不再拼进 ctx（ctx 最终落在 system 里）。
         # 为的是 prompt 缓存：它复用最长公共前缀，而记忆每轮都变——记忆和历史
         # 挤在一起时，前缀从人设之后就断了，历史再长也一个 token 复用不上。
@@ -1813,11 +1829,11 @@ async def _voicemem_llm_tts(pending, send, send_audio, owner, timeline,
                 # 攒分句的，混用会把标签当成正文切出去）。攒到 12 个字符还没等到
                 # 就放弃——一直攒着不发字会让首字延迟白白多几十毫秒。
                 tone["buf"] += d
-                tag, rest = speak_tag.split(tone["buf"])
+                tag, rest = tts_control.split(tone["buf"])
                 if tag:
                     # 跟上一轮拉平一下再用：模型每轮独立挑，日志里出现过
                     # 轻快→平静→抱歉 三连跳，单看每句都对、连起来像换了个人。
-                    tag = speak_tag.smooth(_LAST_TONE["tag"], tag)
+                    tag = tts_control.smooth(_LAST_TONE["tag"], tag)
                     tone["tag"], tone["head"] = tag, False
                     _LAST_TONE["tag"] = tag
                     # **第二个参数要的是字符串，不是那个双语 dict。** 传 dict 进去
@@ -1825,7 +1841,7 @@ async def _voicemem_llm_tts(pending, send, send_audio, owner, timeline,
                     # 而这只发生在"认出标签"的那些轮——没认出标签的轮走
                     # _speak_instruction()，拼的是正常基调。同一段对话里两种指示
                     # 混着来，听感就是上一句下一句像两个人。
-                    speak_as = speak_tag.instruction(
+                    speak_as = tts_control.instruction(
                         tag, _speak_base_env or _by_lang(_SPEAK_BASE))
                     d = rest
                     if BARGE_DEBUG:
@@ -2215,7 +2231,7 @@ ECHO_FUZZY_MIN = int(os.environ.get("VOICEMEM_ECHO_FUZZY_MIN", "4"))
 #: 判据是**新增的这一段整个都是附和词**：说"对，不过我想说的是…"时，新增里
 #: 除了"对"还有别的，照样打断。代价只是纯附和的那次不打断，本来也不该打断。
 #: **听**：用户说"嗯嗯"时不算一轮、不打断助手。助手自己**说**附和是另一个开关
-#: （VOICEMEM_BACKCHANNEL_EMIT，见 harness/backchannel.py），两者互不相干。
+#: （VOICEMEM_BACKCHANNEL_EMIT，见 harness/turn_taking/backchannel.py），两者互不相干。
 BACKCHANNEL_ON = os.environ.get("VOICEMEM_BACKCHANNEL", "1") != "0"
 # 附和词表搬进核心（voicemem/gate.py）：打断判定和"要不要检索"用的是同一张表，
 # demo 和核心各留一份的话，改一处漏一处。这里只保留 demo 自己的开关。
@@ -2274,8 +2290,8 @@ def _has_strong_final_barge(text: str) -> bool:
 
 
 # ── 附和（backchannel）─────────────────────────────────────────────────────
-# 用户说到一半停 100ms 时"嗯"一声。什么时候出声由 harness/backchannel.py 的概率
-# 模型定（句式/内容/情绪/韵律/不应期六个因子），这里只负责把声音送出去。
+# 用户说到一半停 100ms 时"嗯"一声。什么时候出声由
+# harness/turn_taking/backchannel.py 的概率模型定，这里只负责把声音送出去。
 #
 # 预合成放进程级：全部会话共用同一批音频，起服务后合成一次（有落盘缓存时更快）。
 _BC_VOICE = {"obj": None, "task": None}
@@ -2321,7 +2337,7 @@ def _backchannel_tts():
 
 def _backchannel_voice():
     """拿预合成好的那份；第一次调用时在后台起合成，没好之前返回 None。"""
-    from harness.backchannel import BackchannelVoice
+    from harness.turn_taking import BackchannelVoice
     if _BC_VOICE["obj"] is None:
         try:
             tts = _backchannel_tts()
@@ -2363,7 +2379,7 @@ def _print_backchannel_status() -> None:
     这东西不出声的原因有五六种（没开、音色对不上、还没合成、语言不是你以为的、
     概率没中），每一种的表现都是"没反应"。不在启动时讲明白，就只能靠猜。
     """
-    from harness import backchannel as _bc
+    from harness.turn_taking import backchannel as _bc
     if not _bc.emitting():
         print("[backchannel] 关闭。打开：VOICEMEM_BACKCHANNEL_EMIT=1", flush=True)
         return
@@ -2376,20 +2392,13 @@ def _print_backchannel_status() -> None:
         print(f"[backchannel] 拿不到 TTS：{type(e).__name__}: {e}", flush=True)
     if tts is None:
         return                      # _backchannel_tts 自己已经说明了原因
-    p = BackchannelPolicy_summary()
+    p = backchannel_policy_summary()
     print(f"[backchannel] 开启 · 空间「{ACTIVE_SPACE}」语言={lang} → 会说：{words} …",
           flush=True)
     print(f"[backchannel] 音色={getattr(tts, 'voice', '?')}（跟正文同一个）· {p}",
           flush=True)
     print("[backchannel] 想看每次判定：VOICEMEM_BC_DEBUG=1；"
           "控制参数和 system prompt：web/harness.py（3秒内不重复附和）", flush=True)
-
-
-def BackchannelPolicy_summary() -> str:
-    p = backchannel_policy()
-    return (f"开头概率={p.opening_p} 长句概率={p.long_p} 停顿窗口={p.gap_s*1000:.0f}~{p.max_gap_s*1000:.0f}ms "
-            f"冷却={p.refractory_s}s")
-
 
 _EOT = {"obj": None, "tried": False}
 
@@ -2452,8 +2461,8 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
     last_partial = ""
     if owner is None:
         owner = {"id": "", "last": "", "miss": 0}   # 主人的声纹 / 上一轮是谁 / 连续认错几轮
-    from harness.backchannel import Backchannel
-    from harness import backchannel as _bc_mod
+    from harness.turn_taking import Backchannel
+    from harness.turn_taking import backchannel as _bc_mod
     bc = Backchannel(policy=backchannel_policy())  # 冷却跨轮保留，开头只增加概率
     bc_speech_t0 = 0.0                    # 这一轮用户什么时候开的口
     prewarm_idle = True                   # 该趁空闲把「人设+历史」热一遍了
@@ -2541,6 +2550,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
             if data.get("type") == "user_text" and data.get("text", "").strip():
                 stream.emotion = owner.get("emotion") or None
                 turn = await stream.feed_text(data["text"])
+                bc.complete_turn()
                 yield Pending(turn.text, turn.memory_context, turn.result, spoken=False,
                               replay=_replay_id(turn.text, turn.result),
                               emotion=owner.get("emotion", ""),
@@ -2894,6 +2904,7 @@ async def anticipate(sock, on_frame=None, on_speech=None, owner=None, is_busy=No
                 # person_* 时就会这样：记忆被清空，指令换成"就当第一次见面"。
                 print(f"[speaker] owner={owner['id'] or '-'} last={owner['last'] or '-'}"
                       f" miss={owner.get('miss', 0)} stranger={stranger}", flush=True)
+            bc.complete_turn()
             yield Pending(st.turn.text,
                           "" if stranger else st.turn.memory_context,
                           st.turn.result, spoken=True,
@@ -3145,7 +3156,8 @@ async def llm_tts_session(sock):
         ctx = ("" if result is None else
                build_reply_context(build_memory_context(result),
                                    route=gate.DEEP,
-                                   replay=_replay_id(text, result), text=text))
+                                   replay=_replay_id(text, result), text=text,
+                                   emotion=owner.get("emotion", "")))
         cancelled = threading.Event()
         prewarm["cancelled"] = cancelled
         model = _LOCAL_LLM
@@ -4202,7 +4214,7 @@ if __name__ == "__main__":
         if ARGS.backchannel and MODE == "llm_tts" and type(_tts).__name__ == "BreezeMLXTTS":
             # Prepare a small useful bank before accepting microphone sessions;
             # live turns only read it, never wait behind background synthesis.
-            from harness.backchannel import BackchannelVoice
+            from harness.turn_taking import BackchannelVoice
             _bc_voice = BackchannelVoice(_tts, lang=space_language(ACTIVE_SPACE))
             # 先准备未完成句的短音，再装入已试听的附和库。
             # 缺少对应 WAV 的新词或自定义音色在启动时合成，热路径只播放。

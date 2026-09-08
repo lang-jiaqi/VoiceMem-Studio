@@ -3,7 +3,7 @@
 1. VOICEMEM_DIALOGUE_CONTROLS：JSON 对象，覆盖 CONTROLS 中的控制参数。
 2. VOICEMEM_SYSTEM_PROMPT：完整的对话 system prompt，覆盖下面的默认正文。
 
-例如：VOICEMEM_DIALOGUE_CONTROLS='{"opening_probability":0.8}' python web/run.py
+例如：VOICEMEM_DIALOGUE_CONTROLS='{"backchannel_opening_probability":0.6}' python web/run.py
 正文、语音标签协议和场景指令集中在本文件；记忆和历史仍按轮动态注入。
 """
 from __future__ import annotations
@@ -14,15 +14,19 @@ import os
 import re
 from dataclasses import dataclass
 
+from harness.speaking_style import prompt_rule as speaking_style_prompt
+from harness.turn_taking import SessionFrequencyCurve
+
 
 CONTROLS = {
     "pause_ms": 100,
     "unfinished_wait_ms": 300,
     "backchannel_cooldown_ms": 3000,
-    "opening_seconds": 3.0,
-    "opening_probability": 0.8,
-    "long_probability": 0.18,
-    "long_decay_seconds": 6.0,
+    "backchannel_opening_turns": 3,
+    "backchannel_recovery_turn": 6,
+    "backchannel_opening_probability": 0.50,
+    "backchannel_middle_probability": 0.10,
+    "backchannel_steady_probability": 0.30,
 }
 _overrides = json.loads(os.environ.get("VOICEMEM_DIALOGUE_CONTROLS", "{}"))
 if not isinstance(_overrides, dict) or set(_overrides) - CONTROLS.keys():
@@ -33,7 +37,7 @@ for _key, _value in CONTROLS.items():
         raise ValueError(f"VOICEMEM_DIALOGUE_CONTROLS.{_key} 必须是有限非负数")
     if _key.endswith("probability") and _value > 1:
         raise ValueError(f"VOICEMEM_DIALOGUE_CONTROLS.{_key} 必须在 0 到 1 之间")
-# 跨轮硬约束；开场无需等三秒，但不会因下一轮开头而绕过冷却。
+# Cross-turn hard limit: a new turn never bypasses the three-second cooldown.
 CONTROLS["backchannel_cooldown_ms"] = max(3000, CONTROLS["backchannel_cooldown_ms"])
 
 SYSTEM_PROMPT = os.environ.get("VOICEMEM_SYSTEM_PROMPT", "").strip() or """
@@ -104,7 +108,8 @@ CONTEXT = {
 
 
 def system_prompt(lang="zh", *, tagged=False):
-    parts = [SYSTEM_PROMPT, CONTEXT["language"].get(lang, CONTEXT["language"]["en"])]
+    parts = [SYSTEM_PROMPT, speaking_style_prompt(lang),
+             CONTEXT["language"].get(lang, CONTEXT["language"]["en"])]
     if tagged:
         parts.append(TONE_RULE)
     return "\n\n".join(parts)
@@ -166,12 +171,27 @@ class PauseGate:
 
 
 def backchannel_policy():
-    from harness.backchannel import BackchannelPolicy
+    from harness.turn_taking import BackchannelPolicy
     return BackchannelPolicy(
         gap_s=CONTROLS["pause_ms"] / 1000,
         refractory_s=CONTROLS["backchannel_cooldown_ms"] / 1000,
-        opening_s=CONTROLS["opening_seconds"],
-        opening_p=CONTROLS["opening_probability"],
-        long_p=CONTROLS["long_probability"],
-        decay_s=CONTROLS["long_decay_seconds"],
+        session_curve=SessionFrequencyCurve(
+            opening_turns=int(CONTROLS["backchannel_opening_turns"]),
+            recovery_turn=int(CONTROLS["backchannel_recovery_turn"]),
+            opening_probability=CONTROLS["backchannel_opening_probability"],
+            middle_probability=CONTROLS["backchannel_middle_probability"],
+            steady_probability=CONTROLS["backchannel_steady_probability"],
+        ),
+    )
+
+
+def backchannel_policy_summary() -> str:
+    """Return the concise startup description for the active session curve."""
+    policy = backchannel_policy()
+    curve = policy.session_curve
+    return (
+        f"session概率={curve.opening_probability:.0%}/"
+        f"{curve.middle_probability:.0%}/{curve.steady_probability:.0%} "
+        f"停顿窗口={policy.gap_s * 1000:.0f}~{policy.max_gap_s * 1000:.0f}ms "
+        f"冷却={policy.refractory_s}s"
     )

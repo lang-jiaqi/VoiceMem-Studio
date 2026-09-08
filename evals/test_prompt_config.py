@@ -19,13 +19,14 @@ from voicemem import persona
 from voicemem.prompt_config import tts_prompts, context_prompts
 from voicemem.reply import deepseek_reply
 from voicemem.breeze_tts import BreezeMLXTTS
-from harness import speak_tag, backchannel
+from harness.turn_taking import backchannel
+from voicemem import tts_control
 from web.harness import system_prompt
 
 # Actual web prompt assembly, without loading ASR/TTS models or memory DBs.
 tree = ast.parse((Path(os.environ['TEST_REPO']) / 'web/run.py').read_text())
 names = {'_rt_persona', '_by_lang', '_speak_instruction', '_tone_note'}
-ns = dict(persona=persona, speak_tag=speak_tag, SPACE_LANG='zh', MODE='llm_tts',
+ns = dict(persona=persona, tts_control=tts_control, SPACE_LANG='zh', MODE='llm_tts',
           system_prompt=system_prompt,
           _SPEAK_BASE=tts_prompts()['base'], _TONE=tts_prompts()['fallback_by_user_emotion'],
           _speak_base_env='')
@@ -49,7 +50,7 @@ async def main():
     tts = BreezeMLXTTS(model='test-only')  # constructor does not load MLX
     q = queue.Queue(); q.put(None)
     job = types.SimpleNamespace(out=q, cancel=lambda: None)
-    instruction = speak_tag.instruction('认真', ns['_SPEAK_BASE']['zh'])
+    instruction = tts_control.instruction('认真', ns['_SPEAK_BASE']['zh'])
     with patch('voicemem.utils.gpu_loop.gpu_loop', return_value=types.SimpleNamespace(
             iter=lambda *a,**kw: job)), patch('voicemem.prompt_trace.record_request') as record:
         async for _ in tts.stream('测试正文', instruction):

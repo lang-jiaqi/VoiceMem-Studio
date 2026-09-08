@@ -8,9 +8,23 @@ from unittest.mock import patch
 
 import numpy as np
 
-from harness.backchannel import Backchannel
+from harness.speaking_style import content_emotion_note, prompt_rule
+from harness.turn_taking import (
+    Backchannel,
+    FillerPlan,
+    SessionFrequencyCurve,
+    generate_filler,
+    run_overlapped_handoff,
+    short_ack_plan,
+)
 from voicemem.stream import VoiceStream
-from web.harness import PauseGate, backchannel_policy, is_unfinished, system_prompt
+from web.harness import (
+    PauseGate,
+    backchannel_policy,
+    backchannel_policy_summary,
+    is_unfinished,
+    system_prompt,
+)
 from evals.test_short_turns import anticipate_namespace
 
 
@@ -22,11 +36,12 @@ class BackchannelTests(unittest.TestCase):
 
     @patch.dict(os.environ, {"VOICEMEM_BACKCHANNEL_EMIT": "1"})
     def test_first_opportunity_and_cross_turn_three_second_cooldown(self):
-        bc = Backchannel(policy=backchannel_policy(), rng=random.Random(2))
-        self.assertIn(self.offer(bc, 0), {"嗯", "嗯哼", "嗯？"})
-        bc.reset_turn()
-        self.assertIsNone(self.offer(bc, 2.999))
-        self.assertIn(self.offer(bc, 3), {"嗯", "嗯哼", "嗯？"})
+        bc = Backchannel(policy=backchannel_policy(), rng=random.Random(1))
+        with patch('random.Random.random', return_value=0):
+            self.assertIn(self.offer(bc, 0), {"嗯", "嗯哼", "嗯？"})
+            bc.reset_turn()
+            self.assertIsNone(self.offer(bc, 2.999))
+            self.assertIn(self.offer(bc, 3), {"嗯", "嗯哼", "嗯？"})
 
     @patch.dict(os.environ, {"VOICEMEM_BACKCHANNEL_EMIT": "1"})
     def test_one_offer_per_pause_and_only_playable_continuers(self):
@@ -36,13 +51,19 @@ class BackchannelTests(unittest.TestCase):
                                   speech_s=1, now=5, unfinished=True))
         self.assertIsNone(self.offer(bc, 6, available={"太好了", "对"}))
 
-    def test_opening_probability_is_high_and_long_speech_is_quieter(self):
+    def test_session_probability_is_50_then_10_then_30_percent(self):
         bc = Backchannel(policy=backchannel_policy())
-        probabilities = [bc.probability(text="今天我们聊了不少东西", speech_s=s, now=0)[0]
-                         for s in (1, 3, 10, 30)]
-        self.assertAlmostEqual(probabilities[0], .8)
-        self.assertEqual(probabilities, sorted(probabilities, reverse=True))
-        self.assertLess(probabilities[-1], .2)
+        probabilities = [bc.probability(text="今天路上有点堵车", speech_s=1, now=0)[0]]
+        for _ in range(3):
+            bc.complete_turn()
+        probabilities.append(bc.probability(
+            text="今天路上有点堵车", speech_s=1, now=0)[0])
+        for _ in range(3):
+            bc.complete_turn()
+        probabilities.append(bc.probability(
+            text="今天路上有点堵车", speech_s=1, now=0)[0])
+        self.assertEqual(probabilities, [.5, .1, .3])
+        self.assertIn("session概率=50%/10%/30%", backchannel_policy_summary())
 
     def test_unfinished_detection_tolerates_asr_punctuation(self):
         for text in ("我经常就", "我就是觉得。", "我就是觉得这种", "因为，", "I feel..."):
@@ -162,7 +183,8 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
                 sent.append((captured, message))
         async def on_early(*args):
             early.append(args)
-        with patch.dict(os.environ, {'VOICEMEM_BACKCHANNEL_EMIT': '1'}):
+        with patch.dict(os.environ, {'VOICEMEM_BACKCHANNEL_EMIT': '1'}), \
+             patch('random.Random.random', return_value=.39):
             async for turn in ns['anticipate'](Sock(), is_busy=lambda: False, on_early=on_early):
                 turns.append((captured, turn))
         clips = [(frame, msg) for frame, msg in sent if msg['type'] == 'backchannel']
@@ -171,6 +193,56 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
         # One 200ms clip followed by 300ms silence, measured in captured audio.
         self.assertGreaterEqual((turns[0][0] - clips[0][0]) * .02, .5)
         self.assertEqual(early, [])
+
+
+class SpeakingStyleTests(unittest.TestCase):
+    def test_prompt_selects_depth_from_context_and_places_emotion_in_content(self):
+        rule = prompt_rule("zh")
+        self.assertIn("根据上下文决定", rule)
+        self.assertIn("情绪不是只交给 TTS", rule)
+        note = content_emotion_note("委屈", "zh")
+        self.assertIn("委屈", note)
+        self.assertIn("弱信号", note)
+        self.assertIn("绝不说出这个标签", note)
+
+
+class TurnTakingTimingTests(unittest.IsolatedAsyncioTestCase):
+    def test_frequency_curve_boundaries(self):
+        curve = SessionFrequencyCurve()
+        self.assertEqual([curve.probability(i) for i in range(8)],
+                         [.5, .5, .5, .1, .1, .1, .3, .3])
+
+    def test_short_ack_uses_actual_clip_length_and_100ms_lead(self):
+        self.assertAlmostEqual(short_ack_plan(.72).main_start_seconds, .62)
+
+    async def test_main_work_starts_before_filler_finishes(self):
+        events = []
+
+        async def filler():
+            events.append("filler-start")
+            await asyncio.sleep(.03)
+            events.append("filler-end")
+
+        async def main():
+            events.append("main-start")
+
+        await run_overlapped_handoff(
+            filler, main, FillerPlan(.03, .01, "test"))
+        self.assertEqual(events, ["filler-start", "main-start", "filler-end"])
+
+    async def test_reply_model_generates_only_one_short_filler(self):
+        calls = []
+
+        async def reply_stream(text, context, history):
+            calls.append((text, context, history))
+            for chunk in ("温和|稍等呀，", "我帮你看一下。", "这句不该出现"):
+                yield chunk
+
+        filler = await generate_filler(
+            reply_stream, "查询今天的天气", history=[{"role": "user", "content": "你好"}])
+        self.assertEqual(filler, "稍等呀，我帮你看一下。")
+        self.assertIn("约四秒", calls[0][0])
+        self.assertIn("查询今天的天气", calls[0][0])
 
 
 if __name__ == "__main__":

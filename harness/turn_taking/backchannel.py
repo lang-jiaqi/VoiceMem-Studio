@@ -7,7 +7,7 @@
 都是（词间、塞音前、换气），照字面每次都"嗯"会变成灾难。所以这里给一个概率，
 而概率由六个因子相乘决定——它们都是会话分析里反复验证过的附和触发条件：
 
-    p = p0 · L(说了多久) · S(句式) · M(内容) · E(情绪) · P(韵律) · R(不应期)
+    p = session 基准概率 · S(句式) · M(内容) · E(情绪) · P(韵律) · R(不应期)
 
 每个因子的取值和理由见下面各自的函数。``probability()`` 会把分解一起返回，
 调的时候能看见是哪一项把概率拉高/压低的——凭耳朵调一个黑盒数字是调不动的。
@@ -25,12 +25,13 @@
 """
 from __future__ import annotations
 
-import math
 import os
 import random
 import re
 import time
 from dataclasses import dataclass, field
+
+from .frequency import SessionFrequencyCurve
 
 #: 打开助手**说**附和。默认关——它改变的是产品的说话方式，不该在别人不知情时
 #: 突然开始出声。
@@ -38,11 +39,8 @@ from dataclasses import dataclass, field
 #: 注意跟 ``VOICEMEM_BACKCHANNEL`` 区分，那个管的是**听**（用户说"嗯嗯"时不算一轮、
 #: 不打断助手）。一个是听见附和怎么办，一个是要不要自己发出附和，方向相反。
 #:
-#: **每次调用都重读环境变量，不要缓存成模块级常量。** 缓存过一次，代价是几十场
-#: 全程没出声：``harness/__init__.py`` 第一行就 import 这个模块，而 run.py 是先
-#: `from harness import speak_tag`（第 129 行）、后设这个 env（第 165 行）——
-#: 常量在 env 写进去之前就已经定成 False 了，`--backchannel` 默认开却永远不生效，
-#: 启动日志里那句「附和 关闭」就是这么来的。
+#: Read the environment at decision time instead of import time so command-line
+#: setup and test overrides remain reliable regardless of module import order.
 def emitting() -> bool:
     return os.environ.get("VOICEMEM_BACKCHANNEL_EMIT", "0") != "0"
 #: 打印每次机会的概率和因子分解。调这套东西全靠它。
@@ -99,16 +97,9 @@ class BackchannelPolicy:
 
     全部可以用 env 覆盖，方便边听边调::
 
-        VOICEMEM_BC_P0=0.9        # 基础概率拉满，先确认链路通不通
         VOICEMEM_BC_MAX_GAP=0.6   # 放宽停顿窗口（默认只认 100~200ms）
         VOICEMEM_BC_REFRACTORY=5  # 冷却延长到 5 秒；最少 3 秒
     """
-    #: 一次「合格停顿」上的基础概率。其余因子都是在它上面乘。
-    #:
-    #: 定这个值要看**乘完之后**的分布，不能凭感觉：六个因子叠满大约是 3 倍，
-    #: p0 取 0.30 时一半的典型句子都会顶到 p_max，那等于把这些句子压成同一个
-    #: 概率——因子白算了。0.18 让常见情形落在 5%~55% 之间，差异才体现得出来。
-    p0: float = field(default_factory=lambda: _envf("VOICEMEM_BC_P0", 0.7))
     #: VAD 停多久算一次机会。太短会踩到词间停顿，太长就赶不上——100ms 是人耳
     #: 觉得"他停了一下"的下限，也正好在 gamble_s(200ms) 之前，不会跟回复撞车。
     gap_s: float = field(default_factory=lambda: _envf("VOICEMEM_BC_GAP", 0.10))
@@ -120,30 +111,11 @@ class BackchannelPolicy:
     min_chars: int = field(default_factory=lambda: int(_envf("VOICEMEM_BC_MIN_CHARS", 4)))
     #: 距上次附和的硬冷却：这段时间内概率恒为 0。
     refractory_s: float = field(default_factory=lambda: max(3.0, _envf("VOICEMEM_BC_REFRACTORY", 3.0)))
-    #: 硬冷却之后再用这么长时间把概率从 0 线性升回 1。
-    ramp_s: float = 3.0
-    #: L 因子的时间常数：连续说了 τ 秒左右，"该点个头了"的压力升到约 63%。
-    #: 原来 4 秒，说一句短话（2 秒）时 L 只有 0.39，概率被压到 10% 以下——短句
-    #: 几乎永远等不到附和。改成 2 秒：说 2 秒 L 就有 0.63，一句话说完就够得着。
-    tau_s: float = field(default_factory=lambda: _envf("VOICEMEM_BC_TAU", 1.2))
     #: 概率上限。再怎么该附和也不能**每次**停顿都出声，那样同样机械——留下的
     #: 随机性正是它像人的原因。0.75 意味着最该附和的时候大约四次里应三次。
     p_max: float = field(default_factory=lambda: _envf("VOICEMEM_BC_PMAX", 0.9))
-    # Web harness 可开启开场较活跃、长讲述逐渐安静的概率曲线。
-    opening_s: float = 3.0
-    opening_p: float | None = None
-    long_p: float = 0.18
-    decay_s: float = 6.0
-
-
-def f_length(speech_s: float, tau_s: float) -> float:
-    """L —— 这一段已经说了多久没被回应过。
-
-    人独白越久，越需要听到一声回应；刚开口时不需要。用饱和指数而不是线性：
-    说到 10 秒和说到 30 秒，"该点头"的程度差不多，都是"很该"。
-    """
-    return 1.0 - math.exp(-max(0.0, speech_s) / max(0.1, tau_s))
-
+    #: Session-level baseline: turns 1–3 use 50%, 4–6 use 10%, then 30%.
+    session_curve: SessionFrequencyCurve = field(default_factory=SessionFrequencyCurve)
 
 def f_sentence(text: str) -> float:
     """S —— 句式。问句要答案不要点头；邀请式和未完成句最该点头。"""
@@ -190,9 +162,7 @@ def f_prosody(tail_rms: float, prev_rms: float) -> float:
 def f_refractory(since_s: float, policy: BackchannelPolicy) -> float:
     """R —— 不应期。连着"嗯嗯嗯"比一次都不嗯更假。"""
     cooldown = max(3.0, policy.refractory_s)
-    if since_s < cooldown:
-        return 0.0
-    return min(1.0, (since_s - cooldown) / max(0.1, policy.ramp_s))
+    return 0.0 if since_s < cooldown else 1.0
 
 
 # ── 说哪个词 ──────────────────────────────────────────────────────────────────
@@ -301,10 +271,16 @@ class Backchannel:
     _recent: list = field(default_factory=list)
     _armed: bool = True          # 这次停顿还没判过（一次停顿只判一次）
     _speech_started: float = 0.0
+    _completed_turns: int = 0
 
     def reset_turn(self) -> None:
         self._speech_started = 0.0
         self._armed = True
+
+    def complete_turn(self) -> None:
+        """Advance the session frequency curve after one accepted user turn."""
+        self._completed_turns += 1
+        self.reset_turn()
 
     def probability(self, *, text: str, speech_s: float, emotion: str = "",
                     tail_rms: float = 0.0, prev_rms: float = 0.0,
@@ -313,19 +289,15 @@ class Backchannel:
         p = self.policy
         now = now if now is not None else time.monotonic()
         parts = {
-            "L": f_length(speech_s, p.tau_s),
+            # The session curve now owns baseline frequency. Eligible pauses no
+            # longer decay merely because they happen early in an utterance.
             "S": f_sentence(text),
             "M": f_content(text),
             "E": f_emotion(emotion),
             "P": f_prosody(tail_rms, prev_rms),
             "R": f_refractory(now - self._last_at if self._last_at is not None else 1e9, p),
         }
-        val = p.p0
-        if p.opening_p is not None:
-            # 说得越长越少打扰；每轮开头提升机会，但仍受会话级硬冷却限制。
-            val = p.long_p + (p.opening_p - p.long_p) * math.exp(
-                -max(0.0, speech_s - p.opening_s) / max(0.1, p.decay_s))
-            parts["L"] = 1.0
+        val = p.session_curve.probability(self._completed_turns)
         for v in parts.values():
             val *= v
         return min(p.p_max, val), parts
@@ -362,10 +334,10 @@ class Backchannel:
             # 每一次「合格停顿」都打一行。不打的话，没出声到底是没轮到机会、
             # 还是掷骰子没中，外面完全看不出来——这正是最难调的地方。
             f = " ".join(f"{k}={v:.2f}" for k, v in parts.items())
-            print(f"[backchannel] 机会 p={p:.0%} 掷={roll:.2f} "
+            print(f"[backchannel] turn={self._completed_turns + 1} 机会 p={p:.0%} 掷={roll:.2f} "
                   f"{'中' if roll < p else '不中'}  {f}  说了{speech:.1f}s  "
                   f"{text[-12:]!r}", flush=True)
-        if not unfinished and roll >= p:
+        if roll >= p:
             return None
         if unfinished:
             pool = (_TOKENS.get(lang) or _TOKENS["en"])["continuer"]

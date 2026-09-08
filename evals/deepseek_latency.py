@@ -23,11 +23,11 @@ async def main(args):
     os.environ.setdefault("VOICEMEM_TTS_FIRST_MIN", "2")
     os.environ.setdefault("VOICEMEM_TTS_FIRST_SOFT", "1")
     from voicemem import persona
-    from harness import speak_tag
+    from voicemem import tts_control
     from voicemem.reply import deepseek_reply
     from voicemem.tts import cut_point
     provider = deepseek_reply(
-        system=persona.system_prompt("zh") + "\n\n" + speak_tag.prompt_rule("zh"))
+        system=persona.system_prompt("zh") + "\n\n" + tts_control.prompt_rule("zh"))
     examples = [
         ("今天工作有点累。", "", []),
         ("你还记得我喜欢什么饮料吗？", "可信记忆：用户喜欢无糖拿铁。", []),
@@ -49,7 +49,7 @@ async def main(args):
                         first = (time.perf_counter() - started) * 1000
                     buf += delta
                     if not tone_done:
-                        tone, rest = speak_tag.split(buf)
+                        tone, rest = tts_control.split(buf)
                         if tone:
                             buf, tone_done = rest, True
                         elif len(buf) >= 26 or any(c in buf for c in "]】"):

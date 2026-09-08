@@ -292,7 +292,7 @@ class QwenTTS(BaseTTS):
         if self.ref_audio and not (model or os.environ.get("VOICEMEM_QWEN_TTS_MODEL")):
             self.model_name = self.BASE_MODEL          # 克隆只有 Base 走得到
         if self.ref_audio:
-            # 附和的预合成缓存按 voice 名做键（harness/backchannel.py 的 _path）。
+            # 附和预合成缓存按 voice 名做键（harness/turn_taking/backchannel.py）。
             # 换了参考音频还叫 Serena 的话，"嗯"会命中旧 CustomVoice 的缓存——
             # 正文一个音色、附和另一个，比不附和还突兀。
             self.voice = "ref:" + os.path.splitext(os.path.basename(self.ref_audio))[0]
@@ -387,7 +387,7 @@ class KokoroTTS(BaseTTS):
         self.speed = float(speed or os.environ.get("VOICEMEM_KOKORO_SPEED", "1.0"))
         #: 段内再切的正则。库默认只按换行切，上游已经按句送过来了，一般不用动。
         self.split_pattern = split_pattern or r"\n+"
-        #: 附和的预合成缓存按 voice 名做键（harness/backchannel.py）。
+        #: 附和预合成缓存按 voice 名做键（harness/turn_taking/backchannel.py）。
         self.voice = self.voice_en
         self._m = None
 

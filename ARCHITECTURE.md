@@ -62,6 +62,16 @@ Owned primarily by `web/run.py`, `web/harness.py`, and `harness/`:
 This plane may use memory results but does not define factual or affective
 storage semantics.
 
+The repository-only `harness/` layer separates four dialogue policy areas:
+
+- `reply_modes/` reserves `memory_cot`, `memory`, and `direct` contracts;
+- `persona/` reserves stable agent identity prompts;
+- `speaking_style/` owns context-dependent response depth and textual emotion;
+- `turn_taking/` owns backchannels and filler handoff timing.
+
+Reply modes and persona are scaffolds. Studio currently consumes speaking-style
+and turn-taking policy from the Web composition root.
+
 ### Memory plane
 
 Owned by the reusable `voicemem` package:
@@ -420,7 +430,7 @@ scheduled. A later UI space change cannot redirect an existing write.
 | `VoiceMem` capability cache | `VoiceMem` instance | Instance |
 | Factual and affective memory | Memory Space stores | Persistent |
 | Streaming ASR/VAD/EOT/gate state | `VoiceStream` | Input turn/session |
-| Backchannel policy and cooldown | Conversation harness | Session |
+| Turn-taking phase, latency estimate, and backchannel policy | Conversation harness | Session |
 | Early output buffer | `ReplySink` | Speculative assistant output |
 | Short-term dialogue | `SessionBuffer` | WebSocket session + Memory Space |
 | Text/media alignment | `AudioTimeline` | Assistant output ID |
@@ -458,8 +468,8 @@ network-provider performance require the corresponding native environment.
 | ASR, VAD, EOT, speaker, scene, emotion | `voicemem/utils/audio/` and config |
 | Turn routing | `voicemem/gate.py` and streaming regressions |
 | Studio persona or pause policy | `web/harness.py` |
-| Spoken backchannel behavior | `harness/backchannel.py` and Web playback |
-| Tone-label protocol | `harness/speak_tag.py`, prompts, and TTS wiring |
+| Spoken backchannel behavior | `harness/turn_taking/` and Web playback |
+| Tone-label protocol | `voicemem/tts_control.py`, prompts, and TTS wiring |
 | Reply provider | `voicemem/reply.py` or `local_llm.py`, then config |
 | TTS provider | `voicemem/tts.py` or provider module, then config |
 | GPU scheduling | `voicemem/utils/gpu_loop.py` |

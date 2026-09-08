@@ -9,7 +9,7 @@ import glob, os, sys, wave
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("VOICEMEM_BREEZE_REF_AUDIO", "voice/noctelle_ref_short.wav")
 from voicemem.breeze_tts import BreezeMLXTTS
-from harness.backchannel import BackchannelVoice
+from harness.turn_taking import BackchannelVoice
 
 src = sys.argv[1] if len(sys.argv) > 1 else "voice/backchannel"
 bc = BackchannelVoice(BreezeMLXTTS(), lang="zh")      # 不加载模型，只算指纹
