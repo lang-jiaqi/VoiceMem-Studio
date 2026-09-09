@@ -371,6 +371,11 @@ Provider-neutral request options carry the required reasoning across async reply
 iteration: `direct` and `memory` use non-thinking generation, while `memory_cot`
 uses high effort. Reasoning content remains private and is never spoken.
 
+Auxiliary conversation-title generation follows the configured Studio reply
+provider and model with its own short prompt. In particular, DeepSeek reply
+mode uses DeepSeek credentials and never sends an OpenAI model name to that
+endpoint.
+
 `build_reply_context` is the shared context builder used by actual generation
 and local-model prewarming. Keeping one builder preserves local prefix-cache
 compatibility.

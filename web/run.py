@@ -4692,7 +4692,7 @@ def memory_snapshot(limit: int = 48) -> dict:
 app = utils.build_app(MODE, realtime_session if MODE == "realtime" else llm_tts_session,
                       lambda *a, **k: vm.classify(*a, **k), memory_snapshot, audio_of,
                       spaces=(list_spaces, create_space, use_space, lambda: ACTIVE_SPACE),
-                      set_lang=set_lang)
+                      set_lang=set_lang, title=utils.make_title_generator(REPLY))
 
 
 def _warm_final_asr(memory_vm):

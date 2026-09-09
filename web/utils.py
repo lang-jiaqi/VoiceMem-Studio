@@ -85,6 +85,59 @@ def _reply_seg(reply, name):
     return seg.get("provider"), (seg.get("config") or {})
 
 
+_TITLE_SYSTEM = (
+    "用不超过 12 个字概括这段对话在说什么，做标题用。"
+    "只输出标题本身，不要引号、不要标点、不要「关于」这类开头。"
+    "忽略开头的寒暄、试麦、确认能不能听见这类内容，"
+    "抓真正聊到的事情。整段都只是打招呼时，才叫「随便聊聊」。"
+)
+
+
+def make_title_generator(reply=None):
+    """Build a small title call using the configured Studio reply provider."""
+    if isinstance(reply, dict):
+        segment = reply.get("llm", reply) or {}
+        provider = segment.get("provider")
+        cfg = segment.get("config") or {}
+    else:
+        provider, cfg = None, {}
+
+    deepseek = str(provider or "").lower() == "deepseek"
+    model = (cfg.get("model") or
+             (os.environ.get("VOICEMEM_DEEPSEEK_MODEL", "deepseek-v4-flash")
+              if deepseek else CHAT_MODEL))
+    client = None
+
+    async def generate(text: str) -> str:
+        nonlocal client
+        if client is None:
+            if deepseek:
+                key = cfg.get("api_key") or os.environ.get("DEEPSEEK_API_KEY")
+                if not key:
+                    raise ValueError("生成标题需要 DEEPSEEK_API_KEY")
+                client = AsyncOpenAI(
+                    api_key=key,
+                    base_url=(cfg.get("base_url") or "https://api.deepseek.com").rstrip("/"),
+                )
+            else:
+                client = _openai_client()
+        request = {
+            "model": model,
+            "max_tokens": 16,
+            "temperature": 0,
+            "messages": [
+                {"role": "system", "content": _TITLE_SYSTEM},
+                {"role": "user", "content": text[:600]},
+            ],
+        }
+        if deepseek:
+            request["extra_body"] = {"thinking": {"type": "disabled"}}
+        response = await client.chat.completions.create(**request)
+        return (response.choices[0].message.content or "").strip()
+
+    return generate
+
+
 # ── Realtime 流 ───────────────────────────────────────────────────────────────
 # 原来这里还有一份 llm_stream()——和核心回复层（voicemem/reply.py 的 openai_reply）
 # 是同一件事：流式调 chat.completions，把记忆拼进 system。run.py 现在直接用
@@ -182,12 +235,13 @@ def hits_payload(result, has_audio=None, cluster_of=None):
 
 # ── FastAPI + WS 接线（仅接线，渲染都在 index.html）─────────────────────────────
 def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None,
-              set_lang=None):
+              set_lang=None, title=None):
     """session(sock)：run.py 传入的会话循环（llm_tts / realtime）。classify(query)：给脑图生长用。
     snapshot()：库里已有的记忆，前端打开页面时先把脑图铺满。
     spaces=(list_fn, create_fn, use_fn, active_fn)：Memory Space 的增/查/切换。
     set_lang(lang)：界面切语言时同步给助手（回复语言 + 抽取语言）。"""
     app = FastAPI()
+    title = title or make_title_generator()
     pet, pet_hub = PetSupervisor(), PetHub()
 
     @app.websocket("/ws")
@@ -239,20 +293,7 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
         拖慢对话，也不该花明显的钱。失败就返回空串，前端回落到用户说的第一句。
         """
         try:
-            r = await _openai_client().chat.completions.create(
-                model=CHAT_MODEL, max_tokens=16, temperature=0,
-                messages=[
-                    {"role": "system", "content":
-                     "用不超过 12 个字概括这段对话在说什么，做标题用。"
-                     "只输出标题本身，不要引号、不要标点、不要「关于」这类开头。"
-                     # 开场常是"喂喂喂""测试一下""你好"，照实概括就成了"语音测试"，
-                     # 而这段对话后面聊的可能是完全另一回事。
-                     "忽略开头的寒暄、试麦、确认能不能听见这类内容，"
-                     "抓真正聊到的事情。整段都只是打招呼时，才叫「随便聊聊」。"},
-                    {"role": "user", "content": body.text[:600]},
-                ],
-            )
-            return {"title": (r.choices[0].message.content or "").strip()}
+            return {"title": await title(body.text)}
         except Exception as e:
             print(f"[web] 生成标题失败：{e}", flush=True)
             return {"title": ""}
