@@ -72,10 +72,11 @@ The repository-only `harness/` layer separates four dialogue policy areas:
 - `turn_taking/` owns the session state machine, backchannel curve, backchannel
   voice cache, and short-acknowledgement and long-work filler timing.
 
-The persona folder and reply-path prompts are currently scaffolds. A local
-Qwen3-0.6B router assigns internal `fast`, `medium`, or `slow` labels after
-confirmed ASR and maps them to the three reply modes; stable mode identifiers
-are consumed by the turn-taking state machine.
+The persona folder remains a scaffold. Reply modes are code-owned contracts
+rather than per-mode prompt files. A local Qwen3-0.6B router assigns internal
+`fast`, `medium`, or `slow` labels after confirmed ASR and maps them to the three
+reply modes; stable mode identifiers are consumed by the turn-taking state
+machine.
 The Web composition root injects speaking-style prompts and executes the
 state-machine decisions. Low-level pause detection and browser audio transport
 remain in `web/run.py`.
