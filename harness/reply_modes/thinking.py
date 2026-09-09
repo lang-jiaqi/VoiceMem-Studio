@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,16 @@ FAST = "fast"
 MEDIUM = "medium"
 SLOW = "slow"
 THINKING_LEVELS = (FAST, MEDIUM, SLOW)
+_DEFAULT_ROUTER_REPO = "Qwen/Qwen3-0.6B"
+
+
+def _local_router_ready(path: Path) -> bool:
+    """Return whether a local snapshot has config, tokenizer, and weights."""
+    has_tokenizer = any((path / name).is_file() for name in (
+        "tokenizer.json", "tokenizer.model", "vocab.json"))
+    has_weights = any(path.glob("*.safetensors")) or any(path.glob("*.bin"))
+    return (path / "config.json").is_file() and has_tokenizer and has_weights
+
 
 _ROUTE_LABEL = re.compile(
     r"(即时|记忆|深思|fast|medium|slow)", re.IGNORECASE)
@@ -153,6 +164,24 @@ def parse_level(output: str, fallback: str = FAST) -> ThinkingDecision:
     return ThinkingDecision(level=level, raw=(output or "").strip())
 
 
+def _router_download_progress_class():
+    """Return a lazy tqdm class whose output survives concise Studio logging."""
+    from tqdm.auto import tqdm
+
+    class RouterDownloadProgress(tqdm):
+        def __init__(self, *args, **kwargs):
+            kwargs.update(
+                desc="[status] Router 下载",
+                disable=False,
+                dynamic_ncols=True,
+                file=sys.stdout,
+                unit="文件",
+            )
+            super().__init__(*args, **kwargs)
+
+    return RouterDownloadProgress
+
+
 class QwenThinkingRouter:
     """Lazy Qwen3-0.6B three-way reply router with serialized Torch inference.
 
@@ -165,11 +194,10 @@ class QwenThinkingRouter:
     def __init__(self, model: str | None = None, device: str | None = None) -> None:
         root = Path(__file__).resolve().parents[2]
         local = root / "models" / "reply-router" / "Qwen3-0.6B"
-        self.model_name = (
-            model
-            or os.environ.get("VOICEMEM_THINKING_ROUTER_MODEL")
-            or (str(local) if (local / "config.json").is_file() else "Qwen/Qwen3-0.6B")
-        )
+        configured = model or os.environ.get("VOICEMEM_THINKING_ROUTER_MODEL")
+        self._local_model_dir = local
+        self._download_default = not configured and not _local_router_ready(local)
+        self.model_name = configured or str(local)
         self.device_name = device or os.environ.get("VOICEMEM_THINKING_ROUTER_DEVICE", "")
         self._tokenizer = None
         self._model = None
@@ -181,12 +209,36 @@ class QwenThinkingRouter:
             "VOICEMEM_THINKING_ROUTER_HISTORY_CHARS", "320"))
         self._cache: dict[tuple[str, bool, str], ThinkingDecision] = {}
 
+    def _ensure_model_source(self) -> str:
+        """Download the default router with visible progress when it is absent."""
+        if not self._download_default:
+            return self.model_name
+
+        from huggingface_hub import snapshot_download
+
+        destination = self._local_model_dir
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        print(f"[status] 三级回复路由缺失，开始下载 {_DEFAULT_ROUTER_REPO} "
+              f"→ {destination}", flush=True)
+        snapshot_download(
+            repo_id=_DEFAULT_ROUTER_REPO,
+            local_dir=str(destination),
+            tqdm_class=_router_download_progress_class(),
+        )
+        if not _local_router_ready(destination):
+            raise FileNotFoundError(f"router download incomplete: {destination}")
+        self.model_name = str(destination)
+        self._download_default = False
+        print(f"[status] 三级回复路由下载完成：{destination}", flush=True)
+        return self.model_name
+
     def _load(self):
         if self._model is not None:
             return self._tokenizer, self._model, self._device
         with self._load_lock:
             if self._model is not None:
                 return self._tokenizer, self._model, self._device
+            self._ensure_model_source()
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer
 

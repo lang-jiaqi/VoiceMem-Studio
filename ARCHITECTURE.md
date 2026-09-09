@@ -76,7 +76,9 @@ The persona folder remains a scaffold. Reply modes are code-owned contracts
 rather than per-mode prompt files. A local Qwen3-0.6B router assigns internal
 `fast`, `medium`, or `slow` labels after confirmed ASR and maps them to the three
 reply modes; stable mode identifiers are consumed by the turn-taking state
-machine.
+machine. If the default router is absent, its lazy load downloads the snapshot
+into `models/reply-router/Qwen3-0.6B` and reports visible startup progress;
+explicit `VOICEMEM_THINKING_ROUTER_MODEL` values remain caller-owned.
 The Web composition root injects speaking-style prompts and executes the
 state-machine decisions. Low-level pause detection and browser audio transport
 remain in `web/run.py`.

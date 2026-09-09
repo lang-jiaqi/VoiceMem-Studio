@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from harness.reply_modes import (
     FAST,
@@ -13,6 +16,35 @@ from harness.reply_modes import (
 
 
 class ThinkingRouterTests(unittest.TestCase):
+    def test_missing_default_router_downloads_to_project_model_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "Qwen3-0.6B"
+            router = QwenThinkingRouter.__new__(QwenThinkingRouter)
+            router._local_model_dir = destination
+            router._download_default = True
+            router.model_name = str(destination)
+
+            def download(**kwargs):
+                self.assertEqual(kwargs["repo_id"], "Qwen/Qwen3-0.6B")
+                self.assertEqual(kwargs["local_dir"], str(destination))
+                self.assertTrue(kwargs["tqdm_class"])
+                destination.mkdir(parents=True)
+                (destination / "config.json").write_text("{}", encoding="utf-8")
+                (destination / "tokenizer.json").write_text("{}", encoding="utf-8")
+                (destination / "model.safetensors").write_bytes(b"test")
+
+            with patch("huggingface_hub.snapshot_download", side_effect=download):
+                selected = router._ensure_model_source()
+
+        self.assertEqual(selected, str(destination))
+        self.assertFalse(router._download_default)
+
+    def test_configured_router_never_triggers_default_download(self):
+        router = QwenThinkingRouter(model="/models/custom-router")
+        with patch("huggingface_hub.snapshot_download") as download:
+            self.assertEqual(router._ensure_model_source(), "/models/custom-router")
+        download.assert_not_called()
+
     def test_parses_only_supported_labels(self):
         self.assertEqual(parse_level("fast").level, FAST)
         self.assertEqual(parse_level("The label is MEDIUM.").level, MEDIUM)
