@@ -1985,9 +1985,11 @@ async def _voicemem_llm_tts(pending, send, send_audio, owner, timeline,
                                          window=HISTORY_TURNS)
         _lat["pre"] = (time.monotonic() - _t0) * 1000
         from voicemem.reply import apply_reply_request_options
+        reply_mode = getattr(pending, "reply_mode", "")
         deltas = apply_reply_request_options(
             memory_vm.reply_stream(pending.text, ctx, hist),
-            reasoning_effort=("high" if pending.reply_mode == MEMORY_COT else "none"),
+            reasoning_effort=("high" if reply_mode == globals().get("MEMORY_COT")
+                              else "none"),
         )
         async for d in deltas:
             if not _lat["llm"]:
@@ -3476,7 +3478,7 @@ async def llm_tts_session(sock):
                     committed_text, build_memory_context(result), result, spoken=True,
                     emotion=emotion, route=route,
                     reply_mode=(MEMORY if gate.needs_memory(route) else DIRECT))
-                await route_pending_thinking(pending, memory_vm)
+                await route_pending_thinking(pending, vm)
                 early["text"] = committed_text
                 early["pending"] = pending
                 if BARGE_DEBUG:
