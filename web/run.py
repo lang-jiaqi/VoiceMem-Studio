@@ -1273,15 +1273,17 @@ async def _ensure_pending_memory(pending: Pending, memory_vm) -> None:
     pending.replay = _replay_id(pending.text, pending.result)
 
 
-async def route_pending_thinking(pending: Pending, memory_vm=None) -> Pending:
+async def route_pending_thinking(pending: Pending, memory_vm=None,
+                                 history=None) -> Pending:
     """Select the authoritative instant, mem, or mem+cot route off-loop."""
     if not _THINKING_ROUTER_ON:
         return pending
     started = time.monotonic()
     memory_vm = memory_vm or vm
+    memory_prefetch_hint = gate.needs_memory(pending.route)
     try:
         decision = await thinking_router().classify_async(
-            pending.text, gate.needs_memory(pending.route))
+            pending.text, memory_prefetch_hint, history)
     except Exception as exc:
         print(f"[thinking] router failed; using fast: {type(exc).__name__}: {exc}",
               flush=True)
@@ -3467,6 +3469,8 @@ async def llm_tts_session(sock):
         emotion = owner.get("emotion", "")
         route = st.route
         context_space = ACTIVE_SPACE
+        routing_history = _SESSION_CONTEXT.messages(
+            context_session, context_space, window=HISTORY_TURNS)
         sink = ReplySink(sock.send_json, send_audio)
         timeline = AudioTimeline(prebuffer_seconds=0.16, rate_estimator=speech_rate)
         # 这一份要**留着**：提交之后它就是 turn["reply"]，防回声那套读的就是它。
@@ -3484,7 +3488,8 @@ async def llm_tts_session(sock):
                     committed_text, build_memory_context(result), result, spoken=True,
                     emotion=emotion, route=route,
                     reply_mode=(MEMORY if gate.needs_memory(route) else DIRECT))
-                await route_pending_thinking(pending, vm)
+                await route_pending_thinking(
+                    pending, vm, history=routing_history)
                 early["text"] = committed_text
                 early["pending"] = pending
                 if BARGE_DEBUG:
@@ -3686,7 +3691,10 @@ async def llm_tts_session(sock):
         if (early["task"] is not None and pending.early_ok
                 and not _early_reply_compatible(early["text"], pending.text)):
             await drop_early("EOT 快照后还有实质续话，改用完整文本回复")
-        thinking_task = asyncio.create_task(route_pending_thinking(pending, vm))
+        routing_history = _SESSION_CONTEXT.messages(
+            context_session, ACTIVE_SPACE, window=HISTORY_TURNS)
+        thinking_task = asyncio.create_task(route_pending_thinking(
+            pending, vm, history=routing_history))
         stop_prewarm()
         if early["task"] is not None and pending.early_ok:
             await thinking_task

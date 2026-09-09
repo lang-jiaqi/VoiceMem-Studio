@@ -11,8 +11,10 @@
 
 `thinking.py` 在最终 ASR 后输出内部标签 `fast`、`medium` 或 `slow`，分别对应
 上面的三条路径。它先应用少量高置信产品规则：明确求解／证明走 mem+cot，寒暄／
-助手自我介绍／故事走 instant，Turn Gate 已确认依赖个人历史的走 mem，极短残片走
-instant；剩余模糊句才交给本地 Qwen3-0.6B。中文输入使用全中文分类 Prompt。
+助手自我介绍／故事走 instant，明确引用长期个人历史的走 mem；剩余模糊句才连同
+最近两轮短期对话交给本地 Qwen3-0.6B。Turn Gate 的结果只作为可能出错的预取提示，
+不再强制最终路线。中文输入使用全中文分类 Prompt；历史严格限长，热态模型路由目标
+低于 100ms。
 
 最终分类是权威结果：instant 清除投机检索结果；mem 和 mem+cot 若没有可复用的
 投机结果则补做检索。只有 mem+cot 会向下游 provider 请求长推理，并允许

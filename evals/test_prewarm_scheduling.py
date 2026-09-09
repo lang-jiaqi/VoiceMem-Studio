@@ -24,7 +24,7 @@ def session_namespace():
     names = {"prewarm_local", "stop_prewarm", "hearing", "close_session",
              "start_early", "drop_early"}
     functions = [n for n in session.body if getattr(n, "name", "") in names]
-    async def route_pending(pending, memory_vm=None):
+    async def route_pending(pending, memory_vm=None, history=None):
         return pending
 
     ns = dict(

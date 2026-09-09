@@ -31,6 +31,19 @@ _FAST_FLOOR = re.compile(
     r"|(?:introduce yourself|who are you|tell me .{0,24}(?:story|joke))",
     re.IGNORECASE,
 )
+_MEMORY_FLOOR = re.compile(
+    r"(?:还记得|你记得|我(?:上次|上回|以前|之前)(?:说|提|聊|告诉|答应)过)"
+    r"|(?:上次|上回|以前|之前).{0,20}(?:说过|提过|聊过|喜欢|偏好|计划|决定)"
+    r"|(?:今天|明天|后天|周末|下周|下个月).{0,8}(?:安排|日程|计划|有约)"
+    r"|\b(?:remember|last time|previously|my schedule|my plans)\b",
+    re.IGNORECASE,
+)
+_FOLLOWUP = re.compile(
+    r"(?:这个|那个|那这个|然后|接着|继续|为什么|刚才|前面|上一个|比较一下|相比)"
+    r"|(?:那.{0,12}呢|还有呢|然后呢)"
+    r"|\b(?:this one|that one|continue|go on|why|earlier|previous one|compare)\b",
+    re.IGNORECASE,
+)
 
 _ZH_SYSTEM = """你是中文语音助手的回复路由器。根据用户最后一句话，只输出下列一个标签，
 不要解释：
@@ -41,6 +54,9 @@ _ZH_SYSTEM = """你是中文语音助手的回复路由器。根据用户最后�
 出现“我、自己、你”不代表需要记忆，让助手介绍自己也不需要用户记忆。
 深思：用户明确要求非平凡计算、积分求解、证明或逐步推导，或者要求同时权衡多个约束、
 诊断复杂代码、制定多阶段方案。只有话题听起来专业、出现“为什么/解释/故事”，不能选深思。
+
+最近对话只用于理解“这个、继续、为什么、刚才那个”等指代；如果答案已经在最近对话里，
+不需要长期记忆。预取提示只是一个可能出错的性能提示，不能替你决定标签。
 
 先问：是否明确需要多步推理？否则再问：没有用户的长期记忆能否正确回答？能就选即时，
 不能才选记忆。拿不准时选择即时。"""
@@ -59,6 +75,12 @@ _ZH_EXAMPLES = [
     ("求这个函数的不定积分，并写出推导过程。", "深思"),
     ("证明这个结论并逐步检查推导。", "深思"),
     ("结合我以前说过的预算，比较三个方案的风险和收益。", "深思"),
+    ("最近对话：\n用户：天空为什么是蓝色的？\n助手：因为大气散射。\n"
+     "当前用户：为什么？\n记忆预取提示：否", "即时"),
+    ("最近对话：\n用户：我上次说周末要去哪里？\n助手：你当时还没决定。\n"
+     "当前用户：那这个周末呢？\n记忆预取提示：是", "记忆"),
+    ("最近对话：\n用户：方案A省钱但慢。\n助手：方案B更快但贵。\n"
+     "当前用户：和刚才那个比较一下风险。\n记忆预取提示：否", "深思"),
 ]
 
 _EN_SYSTEM = """Route the user's final utterance. Output exactly one label and
@@ -72,6 +94,10 @@ the user's past sessions. Pronouns alone do not make a request medium.
 slow: the user explicitly requests a non-trivial calculation, integral solution,
 proof, derivation, complex debugging, multi-constraint comparison, or multi-stage
 plan. A professional topic, a why/explain question, or a story is not slow.
+
+Recent conversation is only for resolving references such as this, continue,
+why, or the previous one. If it already contains the answer, long-term memory is
+not needed. The prefetch hint is fallible and must not decide the label.
 
 Use slow only for explicit multi-step work, then medium only when personal memory
 is necessary. When uncertain, choose fast."""
@@ -132,7 +158,8 @@ class QwenThinkingRouter:
 
     Chinese input receives a fully Chinese policy and examples. The model itself
     runs in non-thinking mode and emits one short label. Calls are cached by final
-    ASR text so speculative and confirmed paths can share a decision.
+    ASR text, bounded recent history, and the prefetch hint so speculative and
+    confirmed paths share only context-compatible decisions.
     """
 
     def __init__(self, model: str | None = None, device: str | None = None) -> None:
@@ -148,7 +175,11 @@ class QwenThinkingRouter:
         self._model = None
         self._device = None
         self._load_lock = threading.Lock()
-        self._cache: dict[tuple[str, bool], ThinkingDecision] = {}
+        self.history_messages = int(os.environ.get(
+            "VOICEMEM_THINKING_ROUTER_HISTORY_MESSAGES", "4"))
+        self.history_chars = int(os.environ.get(
+            "VOICEMEM_THINKING_ROUTER_HISTORY_CHARS", "320"))
+        self._cache: dict[tuple[str, bool, str], ThinkingDecision] = {}
 
     def _load(self):
         if self._model is not None:
@@ -204,9 +235,40 @@ class QwenThinkingRouter:
     def _is_chinese(text: str) -> bool:
         return any("\u3400" <= char <= "\u9fff" for char in text)
 
-    def classify(self, text: str, memory_relevant: bool = False) -> ThinkingDecision:
+    def _context_prompt(self, text: str, history, prefetch_hint: bool) -> str:
+        chinese = self._is_chinese(text)
+        role_names = ({"user": "用户", "assistant": "助手"} if chinese
+                      else {"user": "User", "assistant": "Assistant"})
+        remaining = max(0, getattr(self, "history_chars", 320))
+        count = max(0, getattr(self, "history_messages", 4))
+        selected = list(history or [])[-count:] if count else []
+        lines = []
+        for message in reversed(selected):
+            if remaining <= 0:
+                break
+            content = " ".join(str(message.get("content") or "").split())
+            if not content:
+                continue
+            content = content[:remaining]
+            remaining -= len(content)
+            role = role_names.get(str(message.get("role")), "上下文" if chinese else "Context")
+            lines.append(f"{role}: {content}")
+        lines.reverse()
+        if chinese:
+            history_text = "\n".join(lines) if lines else "无"
+            return (f"最近对话：\n{history_text}\n"
+                    f"当前用户：{text.strip()}\n"
+                    f"记忆预取提示：{'是' if prefetch_hint else '否'}")
+        history_text = "\n".join(lines) if lines else "None"
+        return (f"Recent conversation:\n{history_text}\n"
+                f"Current user: {text.strip()}\n"
+                f"Memory prefetch hint: {'yes' if prefetch_hint else 'no'}")
+
+    def classify(self, text: str, memory_prefetch_hint: bool = False,
+                 history=None) -> ThinkingDecision:
         """Classify confirmed ASR text synchronously; callers run this off-loop."""
-        key = (text, memory_relevant)
+        prompt = self._context_prompt(text, history, memory_prefetch_hint)
+        key = (text, memory_prefetch_hint, prompt)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
@@ -224,32 +286,36 @@ class QwenThinkingRouter:
             return remember(ThinkingDecision(SLOW, "policy-floor"))
         if _FAST_FLOOR.search(text):
             return remember(ThinkingDecision(FAST, "policy-floor"))
-        if memory_relevant:
-            return remember(ThinkingDecision(MEDIUM, "memory-gate"))
+        if _MEMORY_FLOOR.search(text):
+            return remember(ThinkingDecision(MEDIUM, "policy-floor"))
         compact = "".join(char for char in text if char.isalnum())
-        if len(compact) <= 4:
+        if len(compact) <= 4 and not (_FOLLOWUP.search(text) and history):
             return remember(ThinkingDecision(FAST, "short-fragment"))
 
         chinese = self._is_chinese(text)
         output = self._predict(
             _ZH_SYSTEM if chinese else _EN_SYSTEM,
             _ZH_EXAMPLES if chinese else _EN_EXAMPLES,
-            text.strip(),
+            prompt,
         )
-        fallback = MEDIUM if memory_relevant else FAST
+        fallback = MEDIUM if memory_prefetch_hint else FAST
         decision = parse_level(output, fallback)
         if not _ROUTE_LABEL.search(output or ""):
             print(f"[thinking] invalid router output {output!r}; fallback={fallback}",
                   flush=True)
         return remember(decision)
 
-    async def classify_async(self, text: str, memory_relevant: bool = False) -> ThinkingDecision:
+    async def classify_async(self, text: str, memory_prefetch_hint: bool = False,
+                             history=None) -> ThinkingDecision:
         """Run model inference outside the asyncio/WebSocket thread."""
-        return await asyncio.to_thread(self.classify, text, memory_relevant)
+        return await asyncio.to_thread(
+            self.classify, text, memory_prefetch_hint, history)
 
     def warmup(self) -> ThinkingDecision:
         """Load weights and compile the short non-thinking generation path."""
-        return self.classify("你好", False)
+        # Use an intentionally ambiguous utterance so policy floors cannot skip
+        # the model load and push a multi-second cold start onto the first user.
+        return self.classify("介绍一下向量数据库", False)
 
 
 _ROUTER: QwenThinkingRouter | None = None

@@ -359,12 +359,14 @@ Studio system prompt
 
 Reply mode is one per-turn signal rather than an independent memory and thinking
 pair. The local router resolves explicit high-confidence policy cases first,
-reuses the Turn Gate's personal-memory decision, and sends only ambiguous turns
-to Qwen3-0.6B outside the WebSocket loop under the process Torch lock. Chinese
-input uses a Chinese routing policy. Provider-neutral request options carry the
-required reasoning across async reply iteration: `direct` and `memory` use
-non-thinking generation, while `memory_cot` uses high effort. Reasoning content
-remains private and is never spoken.
+then sends ambiguous turns with bounded recent Session Context to Qwen3-0.6B
+outside the WebSocket loop under the process Torch lock. The Turn Gate remains a
+speculative retrieval hint and cannot force the final route. Context is included
+in the router cache key, so identical follow-up text in different conversations
+does not reuse a stale decision. Chinese input uses a Chinese routing policy.
+Provider-neutral request options carry the required reasoning across async reply
+iteration: `direct` and `memory` use non-thinking generation, while `memory_cot`
+uses high effort. Reasoning content remains private and is never spoken.
 
 `build_reply_context` is the shared context builder used by actual generation
 and local-model prewarming. Keeping one builder preserves local prefix-cache

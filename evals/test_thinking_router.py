@@ -48,13 +48,20 @@ class ThinkingRouterTests(unittest.TestCase):
         self.assertEqual(classify("求这个函数的积分", "深思").level, SLOW)
         self.assertEqual(classify("我以前喜欢什么", "?", memory=True).level, MEDIUM)
 
-    def test_memory_gate_is_authoritative_after_explicit_instant_rules(self):
+    def test_router_owned_memory_rules_skip_model_inference(self):
         router = QwenThinkingRouter.__new__(QwenThinkingRouter)
         router._cache = {}
-        router._predict = lambda *_: self.fail("the memory gate should skip inference")
+        router._predict = lambda *_: self.fail("the memory rule should skip inference")
         self.assertEqual(router.classify("我上次说最喜欢什么", True).level, MEDIUM)
         self.assertEqual(router.classify("我明天有什么安排", True).level, MEDIUM)
         self.assertEqual(router.classify("请介绍一下你自己", True).level, FAST)
+
+    def test_prefetch_hint_does_not_override_router_output(self):
+        router = QwenThinkingRouter.__new__(QwenThinkingRouter)
+        router._cache = {}
+        router._predict = lambda *_: "即时"
+        decision = router.classify("介绍一下向量数据库", True)
+        self.assertEqual(decision.level, FAST)
 
     def test_short_non_request_fragment_is_instant(self):
         router = QwenThinkingRouter.__new__(QwenThinkingRouter)
@@ -92,8 +99,42 @@ class ThinkingRouterTests(unittest.TestCase):
         router._predict = predict
         self.assertEqual(router.classify("介绍一下向量数据库").level, FAST)
         self.assertIn("中文语音助手", seen["system"])
+        self.assertIn("当前用户：介绍一下向量数据库", seen["prompt"])
+        self.assertIn("记忆预取提示：否", seen["prompt"])
         self.assertTrue(all(label in {"即时", "记忆", "深思"}
                             for _, label in seen["examples"]))
+
+    def test_warmup_cannot_be_satisfied_by_a_policy_floor(self):
+        router = QwenThinkingRouter.__new__(QwenThinkingRouter)
+        router._cache = {}
+        calls = []
+        router._predict = lambda *_: calls.append(True) or "即时"
+        self.assertEqual(router.warmup().level, FAST)
+        self.assertEqual(calls, [True])
+
+    def test_recent_history_resolves_followups_and_is_part_of_cache_key(self):
+        router = QwenThinkingRouter.__new__(QwenThinkingRouter)
+        router._cache = {}
+        prompts = []
+
+        def predict(_system, _examples, prompt):
+            prompts.append(prompt)
+            return "记忆" if "周末安排" in prompt else "即时"
+
+        router._predict = predict
+        first = router.classify("为什么", False, [
+            {"role": "user", "content": "天空为什么是蓝色的？"},
+            {"role": "assistant", "content": "因为大气散射。"},
+        ])
+        second = router.classify("为什么", False, [
+            {"role": "user", "content": "我上次的周末安排是什么？"},
+            {"role": "assistant", "content": "还没有确认。"},
+        ])
+        self.assertEqual(first.level, FAST)
+        self.assertEqual(second.level, MEDIUM)
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("天空为什么是蓝色的", prompts[0])
+        self.assertIn("周末安排", prompts[1])
 
 
 if __name__ == "__main__":
