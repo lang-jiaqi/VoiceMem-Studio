@@ -1,0 +1,20 @@
+{
+  "name": "noctelle-desktop-pet",
+  "productName": "Noctelle",
+  "version": "0.3.1",
+  "description": "Noctelle desktop pet with a PSD2Live generated Cubism model",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "node launch.cjs",
+    "start:linked": "node launch.cjs --expanded --ws=ws://127.0.0.1:8787/ws-pet",
+    "package:mac": "npx --yes @electron/packager . Noctelle --platform=darwin --overwrite --out=dist"
+  },
+  "dependencies": {
+    "@pixi/unsafe-eval": "^6.5.10",
+    "pixi-live2d-display": "^0.4.0",
+    "pixi.js": "^6.5.10"
+  },
+  "devDependencies": {
+    "electron": "^44.2.0"
+  }
+}

@@ -1,0 +1,49 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "noctelle-sit.moc3",
+		"Textures": [
+			"noctelle-sit.2048/texture_00.png"
+		],
+		"DisplayInfo": "noctelle-sit.cdi3.json",
+		"Motions": {
+			"Idle": [
+				{
+					"File": "noctelle-sit.idle.motion3.json"
+				}
+			],
+			"Blink": [
+				{
+					"File": "noctelle-sit.blink.motion3.json"
+				}
+			],
+			"Nod": [
+				{
+					"File": "noctelle-sit.nod.motion3.json"
+				}
+			],
+			"Shake": [
+				{
+					"File": "noctelle-sit.shake.motion3.json"
+				}
+			]
+		}
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": [
+				"ParamEyeLOpen",
+				"ParamEyeROpen"
+			]
+		},
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": [
+				"ParamMouthOpenY"
+			]
+		}
+	]
+}

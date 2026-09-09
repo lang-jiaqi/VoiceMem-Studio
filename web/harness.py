@@ -21,6 +21,7 @@ from harness.turn_taking import SessionFrequencyCurve
 CONTROLS = {
     "pause_ms": 100,
     "unfinished_wait_ms": 1200,
+    "unfinished_followup_s": 4.0,
     "backchannel_resume_ms": 300,
     "backchannel_cooldown_ms": 3000,
     "backchannel_opening_turns": 3,
@@ -104,6 +105,10 @@ CONTEXT = {
                "en": "A recording is ready to play after your reply. Introduce it briefly without inventing what it sounds like."},
     "no_replay": {"zh": "这轮没有找到所需录音，不会播放。如实简短说明，可以接着聊相关内容，不必反问。",
                   "en": "The requested recording was not found and will not play. Say so briefly; you may continue with relevant context without adding a question."},
+    "unfinished_followup": {
+        "zh": "用户上一句话明显没有说完，且已经沉默了几秒。请温和地承接并邀请他补完，不要猜测他想说什么。可以自然地问：‘怎么没声啦？你刚才觉得什么还没说完呢？’只说一两句。",
+        "en": "The user's previous sentence was clearly unfinished and they have been silent for a few seconds. Gently invite them to finish it without guessing what they meant. Ask naturally in one or two sentences.",
+    },
     "state_label": {"zh": "语气参考（不要念出）：", "en": "Tone context (do not read aloud): "},
 }
 
@@ -147,6 +152,11 @@ def is_unfinished(text: str) -> bool:
         return False
     if re.fullmatch(r"(?:那)?你(?:觉得|认为)", tail) and re.search(r"[?？]\s*$", text):
         return False
+    compact = re.sub(r"\s+", "", tail)
+    if (len(compact) == 1 and compact not in {"好", "对", "嗯", "哦", "行", "停", "是"}):
+        return True
+    if re.fullmatch(r"(?:不是|不对|我是说|我的意思是|这个|那个)", compact):
+        return True
     return bool(tail and (
         _UNFINISHED.search(tail) or _UNFINISHED_PREFACE.search(tail)))
 

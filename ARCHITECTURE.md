@@ -298,13 +298,24 @@ high EOT score
 Cancellation removes stale reply, TTS, display, and GPU work before a new
 response becomes authoritative.
 
-The Web demo may use EOT to start speculative reply work. `VoiceStream` owns the
+The Web demo uses EOT both to start speculative reply work and, after acoustic
+silence plus pause-policy approval, to end the Studio user turn. `VoiceStream` owns the
 immutable audio snapshot and final-ASR refinement; `web/run.py` owns the policy
 that starts LLM/TTS generation from the refined snapshot text. Streaming ASR
-continues to update the browser while that work runs. ASR-only revisions during
-silence do not rewrite the frozen prompt, but resumed speech cancels the buffered
-work before any transcript or audio is sent. Generated speech stays buffered
-until normal turn confirmation becomes the commit point for playback.
+continues to update the browser while that work runs. Resumed speech before turn
+commit cancels the buffered work before any transcript or audio is sent. Once EOT
+commits the turn, the final ASR transcript becomes authoritative without requiring
+an exact match to the earlier streaming hypothesis. Minor ASR repairs and spoken
+fillers keep the fast path; material continuation after the frozen EOT text
+cancels the stale reply and starts one reply from the complete turn. `ReplySink`
+replaces its buffered user-transcript event with that final text. Generated speech
+stays buffered until turn confirmation becomes the commit point for playback.
+
+Clearly unfinished voice turns have a separate continuation path. The Web demo
+plays a cached acknowledgement immediately, keeps the turn interruptible, and
+merges resumed speech back into the unfinished text. If silence reaches the
+four-second follow-up deadline, it sends a continuation-specific instruction to
+the reply model so the assistant gently asks the user to finish their thought.
 
 The Web pause gate does not add a second minimum to the configured turn
 confirmation: a complete voice turn remains eligible at the application's EOT
@@ -435,10 +446,12 @@ one-frame codec call and the subsequent wait for a second server chunk without
 raising the browser prebuffer or delaying audible playback.
 
 Turn fillers use the browser's independent backchannel path so they do not
-become main-output timeline content. End-of-turn fillers are interruptible:
-barge-in and reset may stop them, but an ordinary handoff waits for the browser's
-playback-complete event before releasing main PCM. In-speech
-backchannels remain independent and do not mutate the main reply state.
+become main-output timeline content. Once a backchannel starts, interruption,
+reset, and a new `answer_start` never truncate it. Main PCM generation and
+transport may continue in parallel, but browser playback remains paused until
+the active backchannel finishes; this preserves a seamless handoff without
+adding the clip duration to model or TTS work. In-speech backchannels remain
+independent and do not mutate the main reply state.
 
 Generated, sent, buffered, rendered, and heard output are distinct states.
 Browser-rendered source samples determine the interruption cutoff. Text mapping

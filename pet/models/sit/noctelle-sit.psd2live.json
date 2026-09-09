@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "model": "noctelle-sit",
+  "generator": "PSD2Live 0.5.0",
+  "runtimeTarget": "Cubism50",
+  "mocVersion": 5,
+  "canvas": {"width":1122,"height":1402},
+  "config": {"atlasSize":2048,"meshSpacing":26,"headTurnStrength":0.2,"bodyStrength":0.12,"meshOnly":false,"generateDeformers":true,"exportMotions":true},
+  "faceRig": {"algorithm":"perspective-parallelogram-nine-pose-v2","angleX":[-45,0,45],"angleY":[-30,0,30],"initialAngleZ":-6.4314127,"centerX":559.05225,"centerY":200.7989,"radiusX":295.3512,"radiusY":230.33992},
+  "deformerHierarchy": {"head":"DeformHeadContainer","face":"DeformFaceNinePose","frontHair":["DeformHairFrontFollow","DeformHairFrontPhysics"],"backHair":["DeformHairBackFollow","DeformHairBackPhysics"]},
+  "physics": {"enabled":false,"frontHair":false,"backHair":false,"eyeJelly":false,"preset":"hair-and-eye-pendulum"},
+  "summary": {"layers":10,"drawables":10,"deformers":14,"parameters":18,"atlasPages":1},
+  "layers": [
+    {"source":"topwear-r","type":"preset","tag":"topwear","side":"RIGHT","parameter":"","switchId":0,"drawable":"ArtMeshTopwearR"},
+  {"source":"face","type":"preset","tag":"face","side":"NONE","parameter":"","switchId":0,"drawable":"ArtMeshFace"},
+  {"source":"eyewhite-r","type":"preset","tag":"eyewhite","side":"RIGHT","parameter":"","switchId":0,"drawable":"ArtMeshEyewhiteR"},
+  {"source":"eyewhite-l","type":"preset","tag":"eyewhite","side":"LEFT","parameter":"","switchId":0,"drawable":"ArtMeshEyewhiteL"},
+  {"source":"mouth_open","type":"preset","tag":"mouth_open","side":"NONE","parameter":"","switchId":0,"drawable":"ArtMeshMouthOpen"},
+  {"source":"mouth_close","type":"preset","tag":"mouth_close","side":"NONE","parameter":"","switchId":0,"drawable":"ArtMeshMouthClose"},
+  {"source":"eyebrow-r","type":"preset","tag":"eyebrow","side":"RIGHT","parameter":"","switchId":0,"drawable":"ArtMeshEyebrowR"},
+  {"source":"eyebrow-l","type":"preset","tag":"eyebrow","side":"LEFT","parameter":"","switchId":0,"drawable":"ArtMeshEyebrowL"},
+  {"source":"eye_close-r","type":"preset","tag":"eye_close","side":"RIGHT","parameter":"","switchId":0,"drawable":"ArtMeshEyeCloseR"},
+  {"source":"eye_close-l","type":"preset","tag":"eye_close","side":"LEFT","parameter":"","switchId":0,"drawable":"ArtMeshEyeCloseL"}
+  ],
+  "warnings": ["检测到同名图层：eyewhite, eyebrow, eye_close；已通过稳定图层 ID 区分。","生成模型：ArtMeshEyeCloseL 默认姿态与 PSD 有明显偏差；期望=Bounds(left=575.0, top=206.0, right=636.0, bottom=220.0)，实际=Bounds(left=577.2219, top=207.67671, right=633.3787, bottom=219.398)","生成模型：ArtMeshEyeCloseR 默认姿态与 PSD 有明显偏差；期望=Bounds(left=485.0, top=216.0, right=546.0, bottom=230.0)，实际=Bounds(left=488.92004, top=217.31816, right=543.7178, bottom=229.14227)","生成模型：ArtMeshEyebrowL 默认姿态与 PSD 有明显偏差；期望=Bounds(left=582.0, top=176.0, right=630.0, bottom=186.0)，实际=Bounds(left=583.00006, top=175.99997, right=626.0001, bottom=186.0)","生成模型：ArtMeshEyebrowR 默认姿态与 PSD 有明显偏差；期望=Bounds(left=486.0, top=186.0, right=534.0, bottom=196.0)，实际=Bounds(left=490.00003, top=186.00003, right=533.00006, bottom=196.00003)","生成模型：ArtMeshEyewhiteR 默认姿态与 PSD 有明显偏差；期望=Bounds(left=485.0, top=199.0, right=546.0, bottom=230.0)，实际=Bounds(left=487.59647, top=199.09143, right=545.24316, bottom=228.60214)","MOC3 回读：ArtMeshEyewhiteR 默认姿态与 PSD 有明显偏差；期望=Bounds(left=485.0, top=199.0, right=546.0, bottom=230.0)，实际=Bounds(left=487.59613, top=199.09145, right=545.2417, bottom=228.60202)","MOC3 回读：ArtMeshEyebrowR 默认姿态与 PSD 有明显偏差；期望=Bounds(left=486.0, top=186.0, right=534.0, bottom=196.0)，实际=Bounds(left=490.0, top=185.99988, right=532.99927, bottom=195.99997)","MOC3 回读：ArtMeshEyebrowL 默认姿态与 PSD 有明显偏差；期望=Bounds(left=582.0, top=176.0, right=630.0, bottom=186.0)，实际=Bounds(left=583.00195, top=175.99982, right=626.0007, bottom=186.0002)","MOC3 回读：ArtMeshEyeCloseR 默认姿态与 PSD 有明显偏差；期望=Bounds(left=485.0, top=216.0, right=546.0, bottom=230.0)，实际=Bounds(left=488.91968, top=217.3183, right=543.71594, bottom=229.14275)","MOC3 回读：ArtMeshEyeCloseL 默认姿态与 PSD 有明显偏差；期望=Bounds(left=575.0, top=206.0, right=636.0, bottom=220.0)，实际=Bounds(left=577.22314, top=207.67664, right=633.3796, bottom=219.39847)","CMO3：未保留原始 PSD 源图编辑链；已从 1 页贴图重建可编辑图层（模型/Rig 数据仍保留）","CMO3 回读：ArtMeshEyewhiteR 默认姿态与 PSD 有明显偏差；期望=Bounds(left=485.0, top=199.0, right=546.0, bottom=230.0)，实际=Bounds(left=487.59613, top=199.09145, right=545.2417, bottom=228.60202)","CMO3 回读：ArtMeshEyebrowR 默认姿态与 PSD 有明显偏差；期望=Bounds(left=486.0, top=186.0, right=534.0, bottom=196.0)，实际=Bounds(left=490.0, top=185.99988, right=532.99927, bottom=195.99997)","CMO3 回读：ArtMeshEyebrowL 默认姿态与 PSD 有明显偏差；期望=Bounds(left=582.0, top=176.0, right=630.0, bottom=186.0)，实际=Bounds(left=583.00195, top=175.99982, right=626.0007, bottom=186.0002)","CMO3 回读：ArtMeshEyeCloseR 默认姿态与 PSD 有明显偏差；期望=Bounds(left=485.0, top=216.0, right=546.0, bottom=230.0)，实际=Bounds(left=488.91968, top=217.3183, right=543.71594, bottom=229.14275)","CMO3 回读：ArtMeshEyeCloseL 默认姿态与 PSD 有明显偏差；期望=Bounds(left=575.0, top=206.0, right=636.0, bottom=220.0)，实际=Bounds(left=577.22314, top=207.67664, right=633.3796, bottom=219.39847)"]
+}

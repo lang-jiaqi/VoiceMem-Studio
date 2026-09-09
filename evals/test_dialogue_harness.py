@@ -1,13 +1,16 @@
 """CPU-only dialogue timing regressions; no live ASR, TTS or API required."""
 import asyncio
 import os
+from pathlib import Path
 import random
+import tempfile
 import types
 import unittest
 from unittest.mock import patch
 
 import numpy as np
 
+from harness.turn_taking import backchannel as backchannel_module
 from harness.speaking_style import content_emotion_note, prompt_rule
 from harness.turn_taking import (
     Backchannel,
@@ -42,10 +45,10 @@ class BackchannelTests(unittest.TestCase):
     def test_first_opportunity_and_cross_turn_three_second_cooldown(self):
         bc = Backchannel(policy=backchannel_policy(), rng=random.Random(1))
         with patch('random.Random.random', return_value=0):
-            self.assertIn(self.offer(bc, 0), {"嗯", "嗯哼", "嗯？"})
+            self.assertIn(self.offer(bc, 0), {"嗯", "嗯嗯"})
             bc.reset_turn()
             self.assertIsNone(self.offer(bc, 2.999))
-            self.assertIn(self.offer(bc, 3), {"嗯", "嗯哼", "嗯？"})
+            self.assertIn(self.offer(bc, 3), {"嗯", "嗯嗯"})
 
     @patch.dict(os.environ, {"VOICEMEM_BACKCHANNEL_EMIT": "1"})
     def test_one_offer_per_pause_and_only_playable_continuers(self):
@@ -53,7 +56,78 @@ class BackchannelTests(unittest.TestCase):
         self.assertEqual(self.offer(bc, 0, available={"嗯", "对"}), "嗯")
         self.assertIsNone(bc.offer(text="我就是觉得", silence=.15, spoke=True,
                                   speech_s=1, now=5, unfinished=True))
-        self.assertIsNone(self.offer(bc, 6, available={"太好了", "对"}))
+        self.assertIsNone(self.offer(bc, 6, available={"哦？", "对"}))
+
+    def test_chinese_bank_has_only_the_reviewed_nine_tokens(self):
+        affirm = backchannel_module.ZH_AFFIRMATIVE_TOKENS
+        questions = backchannel_module.ZH_QUESTION_TOKENS
+        self.assertEqual(
+            (*affirm, *questions),
+            ("哦", "哦哦", "嗯嗯", "嗯", "对", "明白", "哦？", "嗯？", "是吗？"),
+        )
+        active = {token for group in backchannel_module._TOKENS["zh"].values()
+                  for token in group}
+        self.assertEqual(active, set((*affirm, *questions)))
+
+    def test_clip_trim_preserves_tail_beyond_the_old_700ms_limit(self):
+        audio = np.concatenate((
+            np.full(round(24000 * .9), 4000, dtype=np.int16),
+            np.zeros(round(24000 * .08), dtype=np.int16),
+        ))
+        pcm = backchannel_module.BackchannelVoice._trim(audio.tobytes())
+        self.assertGreater(len(pcm) / 48, 900)
+        tail = np.frombuffer(pcm, np.int16)[-round(24000 * .08):]
+        self.assertLess(np.max(np.abs(tail)), 100)
+
+    def test_clip_trim_rejects_overlong_audio_instead_of_hard_cutting_it(self):
+        audio = np.concatenate((
+            np.full(round(24000 * 3.1), 4000, dtype=np.int16),
+            np.zeros(round(24000 * .08), dtype=np.int16),
+        ))
+        self.assertEqual(backchannel_module.BackchannelVoice._trim(audio.tobytes()), b"")
+
+    def test_chinese_synthesis_adds_natural_sentence_punctuation(self):
+        voice = backchannel_module.BackchannelVoice(object(), lang="zh")
+        self.assertEqual(voice._spoken_text("嗯"), "嗯。")
+        self.assertEqual(voice._spoken_text("哦哦"), "哦哦。")
+        self.assertEqual(voice._spoken_text("是吗？"), "是吗？")
+
+    def test_chinese_bank_has_exactly_fifteen_recorded_variants(self):
+        voice = backchannel_module.BackchannelVoice(object(), lang="zh")
+        tokens = (*backchannel_module.ZH_AFFIRMATIVE_TOKENS,
+                  *backchannel_module.ZH_QUESTION_TOKENS)
+        jobs = [(token, i) for token in tokens
+                for i in voice._style_indices(token, variants=2)]
+        self.assertEqual(len(jobs), 15)
+        self.assertEqual(len({voice._bundled_filename(*job) for job in jobs}), 15)
+
+    def test_clip_trim_rejects_a_loud_hard_boundary(self):
+        tone = np.full(round(24000 * .9), 4000, dtype=np.int16)
+        self.assertEqual(backchannel_module.BackchannelVoice._trim(tone.tobytes()), b"")
+
+    def test_reviewed_wav_selection_ignores_deleted_variant_cache(self):
+        voice = backchannel_module.BackchannelVoice(object(), lang="zh")
+        current = np.concatenate((
+            np.full(4800, 3000, dtype=np.int16),
+            np.zeros(1920, dtype=np.int16),
+        )).tobytes()
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(backchannel_module, "_cache_root", return_value=Path(root)):
+            voice._uses_bundled_voice = lambda: True
+            voice._bundled_pcm = lambda token, i: current if i == 1 else b""
+            voice._path("嗯", 0).write_bytes(b"stale deleted variant")
+            count = asyncio.run(voice.prime(
+                tokens=["嗯"], variants=2, cache_only=True))
+        self.assertEqual(count, 1)
+        self.assertEqual(len(voice._clips["嗯"]), 1)
+
+    def test_bundled_voice_resolves_repository_audio_directory(self):
+        root = Path(backchannel_module.__file__).resolve().parents[2]
+        tts = types.SimpleNamespace(
+            ref_audio=str(root / "voice" / "noctelle_ref_short.wav"))
+        voice = backchannel_module.BackchannelVoice(tts, lang="zh")
+        self.assertTrue(voice._uses_bundled_voice())
+        self.assertTrue(voice._bundled_pcm("哦", 0))
 
     @patch.dict(os.environ, {"VOICEMEM_BACKCHANNEL_EMIT": "1"})
     def test_end_ack_and_in_speech_backchannel_share_cooldown(self):
@@ -82,12 +156,25 @@ class BackchannelTests(unittest.TestCase):
         for text in (
             "我经常就", "我就是觉得。", "我就是觉得这种", "因为，", "I feel...",
             "我想问一下。", "我今天", "好你先跟我", "我想打断一", "我有一个问题",
+            "主", "不", "不是", "我是说", "这个",
         ):
             self.assertTrue(is_unfinished(text), text)
         for text in ("我觉得今天很好。", "为什么？", "我经常就这样结束。", "ok", "我想你了",
                      "我也是这么觉得", "你怎么想？", "你觉得？", "我不想将就",
                      "你还能更快吗？", "今天下雨了"):
             self.assertFalse(is_unfinished(text), text)
+
+    def test_web_eot_can_end_the_turn_immediately(self):
+        source = (Path(__file__).resolve().parents[1] / "web" / "run.py").read_text()
+        self.assertNotIn("eot_ends_turn=False", source)
+
+    def test_unfinished_voice_turn_arms_a_delayed_followup(self):
+        root = Path(__file__).resolve().parents[1]
+        run_source = (root / "web" / "run.py").read_text()
+        harness_source = (root / "web" / "harness.py").read_text()
+        self.assertIn("run_unfinished_followup", run_source)
+        self.assertIn("continuation_prompt", run_source)
+        self.assertIn('"unfinished_followup_s": 4.0', harness_source)
 
     def test_realtime_never_gets_spoken_control_tags(self):
         self.assertNotIn("语音控制协议", system_prompt("zh"))
@@ -139,6 +226,12 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(s.turn for s in states))
         turns = [s.turn for s in await self.feed(stream, .04) if s.turn]
         self.assertEqual([turn.text for turn in turns], ["你还能更快吗"])
+
+    async def test_high_eot_ends_a_complete_turn_without_confirm_timeout(self):
+        stream = self.make_stream(text="今天下雨了", eot_score=.99)
+        await self.feed(stream, .2, speaking=True)
+        turns = [state.turn for state in await self.feed(stream, .04) if state.turn]
+        self.assertEqual([turn.text for turn in turns], ["今天下雨了"])
 
     async def test_question_preface_and_question_remain_one_turn(self):
         stream = self.make_stream(
@@ -207,7 +300,7 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
             return stream
         ns['vm'] = types.SimpleNamespace(stream=stream_factory)
         ns['_backchannel_voice'] = lambda: types.SimpleNamespace(
-            available={'嗯', '嗯哼', '嗯？'}, get=lambda *a: bytes(9600))
+            available={'嗯', '嗯嗯'}, get=lambda *a: bytes(9600))
         test = self
         class Sock:
             async def receive(self):

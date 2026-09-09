@@ -20,7 +20,8 @@ sys.path.insert(0, str(ROOT))
 
 
 def display_namespace():
-    names = {"_send_reply_display", "voicemem_llm_tts", "_voicemem_llm_tts"}
+    names = {"ReplySink", "_early_reply_compatible", "_send_reply_display",
+             "voicemem_llm_tts", "_voicemem_llm_tts"}
     tree = ast.parse((ROOT / "web/run.py").read_text())
     code = ast.Module(body=[n for n in tree.body if getattr(n, "name", "") in names],
                       type_ignores=[])
@@ -29,7 +30,7 @@ def display_namespace():
               gate=types.SimpleNamespace(needs_memory=lambda _: True),
               note_hits=lambda _: None, audio_of=None, hit_cluster=None,
               utils=types.SimpleNamespace(hits_payload=lambda *a, **kw: {}),
-              fill_tags=lambda *a, **kw: {"emotion": "平静"})
+              fill_tags=lambda *a, **kw: {"emotion": "平静"}, MIC_RATE=24000)
     exec(compile(code, str(ROOT / "web/run.py"), "exec"), ns)
     return ns
 
@@ -187,6 +188,30 @@ class DisplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(order.index("answer_start"), order.index("audio"))
         self.assertTrue(timeline.context_saved)
 
+
+class ReplySinkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_commit_replaces_eot_snapshot_with_confirmed_transcript(self):
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+
+        sink = display_namespace()["ReplySink"](send, lambda _: None)
+        await sink.send({"type": "user_transcript", "text": "我想问"})
+        await sink.send({"type": "answer_start", "output_id": "one"})
+        await sink.commit(final_user_text="我想问你一个问题")
+        self.assertEqual(sent[0]["text"], "我想问你一个问题")
+
+    def test_material_continuation_never_reuses_the_eot_reply(self):
+        compatible = display_namespace()["_early_reply_compatible"]
+        self.assertFalse(compatible(
+            "行那就行", "行那就行那明天我有什么安排你帮我查一下"))
+
+    def test_punctuation_fillers_and_small_asr_repairs_keep_the_fast_path(self):
+        compatible = display_namespace()["_early_reply_compatible"]
+        self.assertTrue(compatible("明天我有什么安排", "明天我有什么安排？"))
+        self.assertTrue(compatible("明天我有什么安徘", "明天我有什么安排"))
+        self.assertTrue(compatible("明天我有什么安排", "明天我有什么安排呀"))
 
 class LlmTimingTests(unittest.TestCase):
     def test_instrumentation_keeps_cache_text_and_generation_options(self):

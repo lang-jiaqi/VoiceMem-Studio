@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; media-src 'self' blob:"><title>雾铃 Noctelle</title><link rel="stylesheet" href="style.css"></head>
+<body data-mode="dot">
+  <button id="dot" aria-label="唤醒雾铃" title="点击唤醒 · 拖动移动"></button>
+  <main id="character" hidden>
+    <div id="bubble" hidden></div>
+    <nav aria-label="桌宠操作"><span>雾铃</span><button id="talk" class="word" title="说一句话，同时继续动作">说句话</button><button id="tilt" class="word" title="歪头、闭眼微笑，再慢慢回正">歪头笑</button><button id="collapse" title="收起为小点" aria-label="收起为小点">−</button><button id="quit" title="退出" aria-label="退出">×</button></nav>
+    <div id="stage"><canvas id="live" hidden aria-label="可动的雾铃" title="拖动移动 · 双击收起"></canvas></div>
+    <img id="portrait" src="assets/sit.png" alt="坐姿的雾铃" draggable="false" title="拖动移动 · 双击收起">
+  </main>
+  <script src="vendor/live2dcubismcore.min.js"></script>
+  <script src="node_modules/pixi.js/dist/browser/pixi.min.js"></script>
+  <script src="node_modules/@pixi/unsafe-eval/dist/browser/unsafe-eval.min.js"></script>
+  <script src="node_modules/pixi-live2d-display/dist/cubism4.min.js"></script>
+  <script src="idle.js"></script><script src="tilted-smile.js"></script><script src="nod.js"></script><script src="rig.js"></script><script src="renderer.js"></script>
+  <script src="voicemem-link.js"></script>
+</body></html>

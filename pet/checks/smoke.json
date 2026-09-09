@@ -1,0 +1,60 @@
+[
+  {
+    "mode": "dot",
+    "imageReady": true,
+    "nodeExposed": false
+  },
+  {
+    "ready": true,
+    "pose": "sit",
+    "mouthVertices": 26,
+    "bodyVertices": 2550,
+    "mouthChanges": true,
+    "headUnaffected": true,
+    "bodyUnaffected": true
+  },
+  {
+    "pose": "sit",
+    "concurrentAnimation": true,
+    "alphaHitTest": true
+  },
+  {
+    "tiltedSmileButton": true,
+    "heldSmile": true,
+    "retriggerGuard": true,
+    "smileSpeechIndependent": true
+  },
+  {
+    "mode": "sit",
+    "imageReady": true,
+    "nodeExposed": false
+  },
+  {
+    "ready": true,
+    "pose": "lie",
+    "mouthVertices": 26,
+    "bodyVertices": 2212,
+    "mouthChanges": true,
+    "headUnaffected": true,
+    "bodyUnaffected": true
+  },
+  {
+    "pose": "lie",
+    "concurrentAnimation": true,
+    "alphaHitTest": true
+  },
+  {
+    "mode": "lie",
+    "imageReady": true,
+    "nodeExposed": false
+  },
+  {
+    "mode": "dot",
+    "imageReady": true,
+    "nodeExposed": false
+  },
+  {
+    "wakeClick": true,
+    "collapseClick": true
+  }
+]

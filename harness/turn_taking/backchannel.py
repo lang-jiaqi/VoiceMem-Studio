@@ -167,20 +167,29 @@ def f_refractory(since_s: float, policy: BackchannelPolicy) -> float:
 
 # ── 说哪个词 ──────────────────────────────────────────────────────────────────
 
-#: 按"这句话在向我要什么"分组。难过时说"对对对"是错的，那是赞同不是共情。
-#:
-#: 后三组（惊讶/好评/差评）是**有内容的回应**，比单纯"嗯"参与度高得多，也更容易
-#: 用错——他说"我妈住院了"你回一句"太好了"，比什么都不说糟糕一百倍。所以它们只在
-#: 信号明确时才用，拿不准就退回 support/neutral。
+ZH_AFFIRMATIVE_TOKENS = ("哦", "哦哦", "嗯嗯", "嗯", "对", "明白")
+ZH_QUESTION_TOKENS = ("哦？", "嗯？", "是吗？")
+ZH_SYNTHESIS_TEXT = {
+    token: token if token.endswith("？") else f"{token}。"
+    for token in (*ZH_AFFIRMATIVE_TOKENS, *ZH_QUESTION_TOKENS)
+}
+ZH_VARIANTS = {
+    **{token: 2 for token in ZH_AFFIRMATIVE_TOKENS},
+    **{token: 1 for token in ZH_QUESTION_TOKENS},
+}
+
+# Chinese acknowledgements deliberately stay within two restrained intents:
+# attentive affirmation and mild curiosity. Strong praise, surprise, sympathy,
+# or dismay makes a cached clip sound emotionally wrong when context is noisy.
 _TOKENS = {
     "zh": {
-        "continuer":  ["嗯", "嗯哼", "嗯？"],
-        "support":    ["嗯", "嗯嗯", "嗯…", "哦", "哦哦", "我知道了", "唔"],   # 共情/接住
-        "agree":      ["对", "对啊", "对对", "是啊", "嗯嗯", "对的", "没错"],   # 赞同
-        "surprise":   ["这样啊", "哦哦", "是吗", "真的", "真的吗"],
-        "assess_good":["不错", "挺好的", "太好了", "厉害"],
-        "assess_bad": ["那不容易", "辛苦了", "唉", "那挺难的"],
-        "neutral":    ["嗯", "嗯嗯", "哦", "对", "我知道了", "唔", "嗯对"],
+        "continuer":  ["嗯", "嗯嗯"],
+        "support":    ["嗯", "嗯嗯", "明白"],
+        "agree":      ["嗯", "对", "明白"],
+        "surprise":   list(ZH_QUESTION_TOKENS),
+        "assess_good":["嗯嗯", "对"],
+        "assess_bad": ["嗯", "明白"],
+        "neutral":    ["嗯", "嗯嗯", "哦", "哦哦", "对", "明白"],
     },
     "en": {
         "continuer":  ["mm-hmm", "mmm", "uh-huh"],
@@ -430,9 +439,43 @@ class BackchannelVoice:
 
     def _path(self, token: str, style_idx: int):
         import hashlib
-        key = f"{self.voice_id}|{self.lang}|{token}|{style_idx}|{_STYLES[self.lang][style_idx]}"
+        spoken = self._spoken_text(token)
+        key = (f"{self.voice_id}|{self.lang}|{token}|{spoken}|{style_idx}|"
+               f"{_STYLES[self.lang][style_idx]}")
         h = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
         return _cache_root() / f"{h}.pcm"
+
+    def _spoken_text(self, token: str) -> str:
+        """Return synthesis text with punctuation that supplies natural prosody."""
+        if self.lang == "zh":
+            return ZH_SYNTHESIS_TEXT.get(token, token)
+        return token
+
+    def _style_indices(self, token: str, variants=None) -> range:
+        """Return the configured variants for one token."""
+        count = len(_STYLES[self.lang])
+        if variants is not None:
+            count = min(count, max(0, int(variants)))
+        if self.lang == "zh":
+            count = min(count, ZH_VARIANTS.get(token, 1))
+        return range(count)
+
+    @staticmethod
+    def _bundled_filename(token: str, style_idx: int) -> str:
+        suffix = "" if style_idx == 0 else f"_{style_idx + 1}"
+        return f"OK_{token}{suffix}.wav"
+
+    def _uses_bundled_voice(self) -> bool:
+        if self.lang != "zh":
+            return False
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[2]
+        bundled_ref = root / "voice" / "noctelle_ref_short.wav"
+        ref = getattr(self.tts, "ref_audio", None)
+        try:
+            return bool(ref and Path(ref).read_bytes() == bundled_ref.read_bytes())
+        except OSError:
+            return False
 
     def _bundled_pcm(self, token: str, style_idx: int) -> bytes:
         """Load a reviewed clip when this TTS uses the bundled Noctelle voice.
@@ -441,16 +484,13 @@ class BackchannelVoice:
         bytes prevents a custom voice with the same filename from silently
         playing Noctelle's acknowledgements.
         """
-        if self.lang != "zh" or style_idx != 0 or "/" in token or "\\" in token:
+        if not self._uses_bundled_voice() or "/" in token or "\\" in token:
             return b""
         from pathlib import Path
-        root = Path(__file__).resolve().parents[1]
-        bundled_ref = root / "voice" / "noctelle_ref_short.wav"
-        ref = getattr(self.tts, "ref_audio", None)
+        root = Path(__file__).resolve().parents[2]
         try:
-            if not ref or Path(ref).read_bytes() != bundled_ref.read_bytes():
-                return b""
-            clip = root / "voice" / "backchannel" / f"OK_{token}.wav"
+            clip = (root / "voice" / "backchannel" /
+                    self._bundled_filename(token, style_idx))
             if not clip.is_file():
                 return b""
             import wave
@@ -469,50 +509,50 @@ class BackchannelVoice:
                     seen.add(t); out.append(t)
         return out
 
-    #: 一条附和最长多久。真人"嗯"一声是 200-400ms；TTS 给出来的常常是 1.5-2.5 秒
-    #: （前后垫静音 + 语气指示让它拖长），照原样播会压在用户接下来的话上。
-    #:
-    #: 但**按词长分档**：单音节的"嗯"和三四个字的"那不容易"不是一回事，一刀切
-    #: 700ms 会把后者的尾巴砍掉——实测"太好了""那不容易"三条全顶在 700ms 上。
-    MAX_MS = 700
-    #: 每多一个字多给这么久。
-    PER_CHAR_MS = 220
-    #: 低于满量程这个比例就算静音，用来切头尾。
-    SILENCE = 0.02
+    # Reject pathological generations instead of cutting through a syllable.
+    MAX_MS = 3000
+    # RMS threshold used only to locate leading and trailing silence.
+    SILENCE = 0.006
+    LEADING_MS = 20
+    TRAILING_MS = 120
+    MIN_NATURAL_TAIL_MS = 60
     #: 归一化目标响度（RMS，dBFS）。"很轻""随口"这类指示会让模型把音量也压下去，
     #: 实测合出来只有 -35 dBFS，扬声器里根本听不见。响度归一，轻重靠指示词管语气。
-    TARGET_DB = float(os.environ.get("VOICEMEM_BC_TARGET_DB", "-22"))
-
-    @classmethod
-    def _max_ms(cls, token: str) -> int:
-        """这个词允许多长：单字 700ms 起，每多一个字多给 220ms，封顶 1.4s。"""
-        n = max(1, len([c for c in (token or "") if c.strip()]))
-        if any(ord(c) > 0x2E80 for c in token):        # 中日韩：按字算
-            extra = (n - 1) * cls.PER_CHAR_MS
-        else:                                          # 英文：按词算
-            extra = (len(token.split()) - 1) * cls.PER_CHAR_MS * 2
-        return int(min(1400, cls.MAX_MS + extra))
+    TARGET_DB = float(os.environ.get("VOICEMEM_BC_TARGET_DB", "-24"))
 
     @staticmethod
     def _trim(pcm: bytes, max_ms: int = MAX_MS) -> bytes:
-        """切掉头尾静音、限长、两端加短淡入淡出。
-
-        三件事都不能省：不切头，"嗯"会晚半秒才出来，附和就迟到了；不限长，一声
-        附和盖住用户下一句；不淡入淡出，从波形中间硬切会有咔哒声。
-        """
+        """Trim silence while preserving the complete final syllable."""
         import numpy as np
         a = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
         if a.size == 0:
             return pcm
-        loud = np.abs(a) > BackchannelVoice.SILENCE
+        window = 240
+        power = np.convolve(
+            a * a, np.full(window, 1.0 / window, dtype=np.float32), mode="same")
+        loud = np.sqrt(power) > BackchannelVoice.SILENCE
         if not loud.any():
-            return b""                       # 整条都是静音：这条不要
+            return b""
         i, j = int(np.argmax(loud)), int(a.size - np.argmax(loud[::-1]))
-        a = a[max(0, i - 240):min(a.size, j + 240)]      # 两端各留 10ms
+        leading = round(BackchannelVoice.LEADING_MS * 24)
+        trailing = round(BackchannelVoice.TRAILING_MS * 24)
+        natural_tail = max(0, a.size - j)
+        minimum_tail = round(BackchannelVoice.MIN_NATURAL_TAIL_MS * 24)
+        if natural_tail < minimum_tail:
+            edge_n = min(a.size, 480)
+            edge_rms = float(np.sqrt(np.mean(a[-edge_n:] * a[-edge_n:])))
+            voiced_rms = float(np.sqrt(np.mean(a[i:j] * a[i:j])))
+            if edge_rms > max(BackchannelVoice.SILENCE, voiced_rms * 0.2):
+                return b""
+        start, end = max(0, i - leading), min(a.size, j + trailing)
+        a = a[start:end]
+        missing_tail = trailing - max(0, end - j)
+        if missing_tail > 0:
+            a = np.pad(a, (0, missing_tail))
         cap = int(max_ms * 24000 / 1000)
         if a.size > cap:
-            a = a[:cap]
-        fade = min(240, a.size // 4)                      # 10ms 淡入淡出
+            return b""
+        fade = min(240, a.size // 4)
         if fade > 0:
             a[:fade] *= np.linspace(0, 1, fade)
             a[-fade:] *= np.linspace(1, 0, fade)
@@ -535,13 +575,14 @@ class BackchannelVoice:
 
     async def _synth_one(self, text: str, instruction: str) -> bytes:
         buf = bytearray()
+        spoken = self._spoken_text(text)
         try:
-            stream = self.tts.stream(text, instruction)
+            stream = self.tts.stream(spoken, instruction)
         except TypeError:            # 用户自己的 TTS 只认 stream(text)
-            stream = self.tts.stream(text)
+            stream = self.tts.stream(spoken)
         async for chunk in stream:
             buf.extend(chunk)
-        return self._trim(bytes(buf), self._max_ms(text))
+        return self._trim(bytes(buf))
 
     async def prime(self, tokens=None, variants=None, cache_only=False) -> int:
         """合成（或从缓存读）全部词×语气。返回可用的条数。放后台调。
@@ -557,24 +598,29 @@ class BackchannelVoice:
         root = _cache_root()
         root.mkdir(parents=True, exist_ok=True)
         tokens = self._tokens() if tokens is None else list(tokens)
-        styles = _STYLES[self.lang][:variants]
+        jobs = [(token, i) for token in tokens
+                for i in self._style_indices(token, variants)]
+        if cache_only and self._uses_bundled_voice():
+            # The checked-in WAV directory is the user's reviewed selection.
+            # Missing files intentionally disable variants even if an older
+            # generated cache entry still exists.
+            jobs = [job for job in jobs if self._bundled_pcm(*job)]
+        active_jobs = set(jobs)
         bundled = 0
-        for token in tokens:
-            for i in range(len(styles)):
-                path = self._path(token, i)
-                pcm = self._bundled_pcm(token, i)
-                if pcm:
-                    # The reviewed bank is authoritative for the bundled voice.
-                    # A colleague may already have clips generated by an older
-                    # checkout; replace those too, otherwise pulling the WAVs
-                    # would appear to work while playback still used old audio.
-                    pcm = self._normalize(pcm)
-                    if not path.is_file() or path.read_bytes() != pcm:
-                        path.write_bytes(pcm)
-                    bundled += 1
-        cached = sum(1 for tk in tokens for i in range(len(styles))
-                     if self._path(tk, i).is_file())
-        total = len(tokens) * len(styles)
+        for token, i in jobs:
+            path = self._path(token, i)
+            pcm = self._bundled_pcm(token, i)
+            if pcm:
+                # The reviewed bank is authoritative for the bundled voice.
+                # A colleague may already have clips generated by an older
+                # checkout; replace those too, otherwise pulling the WAVs
+                # would appear to work while playback still used old audio.
+                pcm = self._normalize(pcm)
+                if not path.is_file() or path.read_bytes() != pcm:
+                    path.write_bytes(pcm)
+                bundled += 1
+        cached = sum(1 for token, i in jobs if self._path(token, i).is_file())
+        total = len(jobs)
         print(f"[backchannel] 开始预合成：{self.lang} / {self.voice_id} · "
               f"{total} 条，其中 {cached} 条已有缓存"
               + (f"（仓库定稿 {bundled} 条）" if bundled else "")
@@ -584,7 +630,10 @@ class BackchannelVoice:
         n = 0
         for token in tokens:
             clips = []
-            for i, style in enumerate(styles):
+            for i in self._style_indices(token, variants):
+                if (token, i) not in active_jobs:
+                    continue
+                style = _STYLES[self.lang][i]
                 path = self._path(token, i)
                 try:
                     if path.is_file() and path.stat().st_size > 0:

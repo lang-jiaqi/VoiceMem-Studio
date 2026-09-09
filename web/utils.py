@@ -8,11 +8,13 @@ import os
 import re
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+
+from pet_bridge import PetHub, PetSupervisor, TeeSocket, loopback_ws_url
 
 # 本地句向量（memory embedding + slot 分类 + 语义情绪原型共享一份模型）在核心里，
 # 见 voicemem/leftbrain/local_embedder.py。demo 侧要的是"跟记忆库同一个模型"，
@@ -186,15 +188,37 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
     spaces=(list_fn, create_fn, use_fn, active_fn)：Memory Space 的增/查/切换。
     set_lang(lang)：界面切语言时同步给助手（回复语言 + 抽取语言）。"""
     app = FastAPI()
+    pet, pet_hub = PetSupervisor(), PetHub()
 
     @app.websocket("/ws")
     async def ws(sock: WebSocket):
         await sock.accept()
         await sock.send_json({"type": "session_ready", "mode": mode})
         try:
-            await session(sock)
+            # 包一层再交给会话循环：它感知不到区别，只是播放状态会顺手抄给桌面小人。
+            await session(TeeSocket(sock, pet_hub))
         except WebSocketDisconnect:
             pass          # 关页面/刷新是正常结束，别刷一屏 traceback
+
+    @app.websocket("/ws-pet")                        # 桌面小人的只读广播口
+    async def ws_pet(sock: WebSocket):
+        """跟 /ws 完全分开：连这里不会开新会话，只是听播放状态。
+
+        小人连 /ws 的话，每连一次就凭空多开一路对话（那边在等麦克风上行）。
+        """
+        await sock.accept()
+        pet_hub.add(sock)
+        try:
+            while True:                              # 只收不发，等着对面断开
+                await sock.receive()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            pet_hub.discard(sock)
+
+    @app.on_event("shutdown")
+    def _stop_pet():
+        pet.shutdown()
 
     class Q(BaseModel):
         query: str
@@ -297,7 +321,14 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
                             media_type="application/javascript")
 
     @app.get("/")
-    def index():
+    def index(request: Request, pet_on: bool = Query(False, alias="pet")):
+        """?pet=1 顺带把桌面小人拉起来；不带参数就是原来的页面，一点没变。
+
+        只在这里拉起、不在这里关：小人的生死跟后端进程绑定，不跟标签页绑定，
+        所以刷新、关页面、开很多个标签页都不会动它（见 pet_bridge 模块注释）。
+        """
+        if pet_on:
+            pet.ensure_running(loopback_ws_url(request))
         return FileResponse(HERE / "voicemem.html", headers=_NOCACHE)
 
     @app.get("/classic")                             # 上一版页面，留着对照
