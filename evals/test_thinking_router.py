@@ -34,7 +34,7 @@ class ThinkingRouterTests(unittest.TestCase):
         self.assertEqual(ThinkingDecision(MEDIUM).reply_mode, "memory")
         self.assertEqual(ThinkingDecision(SLOW).reply_mode, "memory_cot")
 
-    def test_three_way_route_uses_memory_gate_only_as_invalid_output_fallback(self):
+    def test_three_way_route_and_invalid_output_fallback(self):
         router = QwenThinkingRouter.__new__(QwenThinkingRouter)
         router._cache = {}
 
@@ -48,6 +48,22 @@ class ThinkingRouterTests(unittest.TestCase):
         self.assertEqual(classify("求这个函数的积分", "深思").level, SLOW)
         self.assertEqual(classify("我以前喜欢什么", "?", memory=True).level, MEDIUM)
 
+    def test_memory_gate_is_authoritative_after_explicit_instant_rules(self):
+        router = QwenThinkingRouter.__new__(QwenThinkingRouter)
+        router._cache = {}
+        router._predict = lambda *_: self.fail("the memory gate should skip inference")
+        self.assertEqual(router.classify("我上次说最喜欢什么", True).level, MEDIUM)
+        self.assertEqual(router.classify("我明天有什么安排", True).level, MEDIUM)
+        self.assertEqual(router.classify("请介绍一下你自己", True).level, FAST)
+
+    def test_short_non_request_fragment_is_instant(self):
+        router = QwenThinkingRouter.__new__(QwenThinkingRouter)
+        router._cache = {}
+        router._predict = lambda *_: self.fail("a short fragment should skip inference")
+        for text in ("数学", "x平方", "的积分", "sin x"):
+            with self.subTest(text=text):
+                self.assertEqual(router.classify(text, False).level, FAST)
+
     def test_integral_has_a_deterministic_slow_floor(self):
         router = QwenThinkingRouter.__new__(QwenThinkingRouter)
         router._cache = {}
@@ -55,6 +71,14 @@ class ThinkingRouterTests(unittest.TestCase):
         decision = router.classify("计算 x 平方的不定积分")
         self.assertEqual(decision.level, SLOW)
         self.assertEqual(decision.reply_mode, "memory_cot")
+
+    def test_obvious_conversation_has_a_deterministic_instant_floor(self):
+        router = QwenThinkingRouter.__new__(QwenThinkingRouter)
+        router._cache = {}
+        router._predict = lambda *_: self.fail("the policy floor should skip inference")
+        for text in ("你好", "请介绍一下你自己", "讲一个流浪猫的故事"):
+            with self.subTest(text=text):
+                self.assertEqual(router.classify(text).level, FAST)
 
     def test_chinese_input_uses_a_chinese_policy_and_examples(self):
         router = QwenThinkingRouter.__new__(QwenThinkingRouter)

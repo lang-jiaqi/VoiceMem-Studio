@@ -9,8 +9,11 @@
 三个文件仍是回复路径的 Prompt 占位；路径标识固定为
 `memory_cot`、`memory` 或 `direct`。
 
-`thinking.py` 在最终 ASR 后使用本地 Qwen3-0.6B 输出内部标签 `fast`、`medium`
-或 `slow`，分别对应上面的三条路径。中文输入使用全中文分类 Prompt。最终分类是
-权威结果：instant 清除投机检索结果；mem 和 mem+cot 若没有可复用的投机结果则补做
-检索。只有 mem+cot 会向下游 provider 请求长推理，并允许 turn-taking 使用长工作
-filler。
+`thinking.py` 在最终 ASR 后输出内部标签 `fast`、`medium` 或 `slow`，分别对应
+上面的三条路径。它先应用少量高置信产品规则：明确求解／证明走 mem+cot，寒暄／
+助手自我介绍／故事走 instant，Turn Gate 已确认依赖个人历史的走 mem，极短残片走
+instant；剩余模糊句才交给本地 Qwen3-0.6B。中文输入使用全中文分类 Prompt。
+
+最终分类是权威结果：instant 清除投机检索结果；mem 和 mem+cot 若没有可复用的
+投机结果则补做检索。只有 mem+cot 会向下游 provider 请求长推理，并允许
+turn-taking 使用长工作 filler。

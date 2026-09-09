@@ -16,24 +16,42 @@ THINKING_LEVELS = (FAST, MEDIUM, SLOW)
 _ROUTE_LABEL = re.compile(
     r"(即时|记忆|深思|fast|medium|slow)", re.IGNORECASE)
 _SLOW_FLOOR = re.compile(
-    r"(积分|求导|导数|微分方程|证明|逐步推导)"
-    r"|\b(integral|differentiate|derivative|differential equation|proof)\b",
+    r"(?:求|计算|算|解).{0,18}(?:积分|导数|微分方程)"
+    r"|(?:积分|导数|微分方程).{0,10}(?:怎么求|怎么算|推导|过程)"
+    r"|(?:证明|逐步推导)"
+    r"|\b(?:solve|calculate|derive|prove).{0,32}"
+    r"(?:integral|derivative|differential equation|proof)\b",
+    re.IGNORECASE,
+)
+_FAST_FLOOR = re.compile(
+    r"^(?:你好|您好|哈[喽啰罗]|嗨|早上好|中午好|下午好|晚上好|晚安|谢谢|再见)"
+    r"|(?:介绍一下你自己|你是谁)"
+    r"|(?:讲|说|编|写).{0,24}(?:故事|笑话)"
+    r"|^(?:hi|hello|hey|thanks|thank you|good morning|good evening|goodbye)\b"
+    r"|(?:introduce yourself|who are you|tell me .{0,24}(?:story|joke))",
     re.IGNORECASE,
 )
 
 _ZH_SYSTEM = """你是中文语音助手的回复路由器。根据用户最后一句话，只输出下列一个标签，
 不要解释：
 
-即时：不需要用户的长期记忆，也不需要多步推理；根据当前对话就能立刻回答。普通事实、
-寒暄、简单计算、一般性的“为什么/怎么做”解释都属于即时。
-记忆：必须检索用户的长期记忆、个人事实、偏好、经历或安排，检索后可以直接组织答案。
-深思：需要检索长期记忆并开启长推理。积分、证明、非平凡计算、多约束比较、复杂代码诊断、
-分阶段规划和高风险决策都属于深思，即使问题本身不依赖个人事实。
+即时：仅凭当前消息和当前对话即可回答。包括寒暄、让助手介绍自己、普通事实、创作故事、
+一般知识解释、简单建议和没有要求求解的数学名词。
+记忆：答案必须依赖这个用户在过去会话中的个人事实、偏好、经历或安排；检索后可以直接回答。
+出现“我、自己、你”不代表需要记忆，让助手介绍自己也不需要用户记忆。
+深思：用户明确要求非平凡计算、积分求解、证明或逐步推导，或者要求同时权衡多个约束、
+诊断复杂代码、制定多阶段方案。只有话题听起来专业、出现“为什么/解释/故事”，不能选深思。
 
-判断优先级是深思、记忆、即时。"""
+先问：是否明确需要多步推理？否则再问：没有用户的长期记忆能否正确回答？能就选即时，
+不能才选记忆。拿不准时选择即时。"""
 
 _ZH_EXAMPLES = [
     ("你好呀。", "即时"),
+    ("请介绍一下你自己。", "即时"),
+    ("讲一个关于流浪猫的故事。", "即时"),
+    ("解释一下为什么天空是蓝色的。", "即时"),
+    ("sin x", "即时"),
+    ("什么是积分？", "即时"),
     ("为什么规律作息能改善精神状态？", "即时"),
     ("法国的首都是什么？", "即时"),
     ("我上次说最喜欢什么？", "记忆"),
@@ -46,17 +64,23 @@ _ZH_EXAMPLES = [
 _EN_SYSTEM = """Route the user's final utterance. Output exactly one label and
 nothing else: fast, medium, or slow.
 
-fast: answer immediately from the current conversation, without long-term memory
-or multi-step reasoning. Ordinary explanations and simple facts are fast.
-medium: retrieve the user's long-term personal memory, then answer directly.
-slow: retrieve long-term memory and use extended reasoning. Integrals, proofs,
-non-trivial calculations, multi-constraint comparisons, complex debugging,
-multi-stage plans, and high-stakes decisions are slow even without personal facts.
+fast: answer from the current message and conversation. Greetings, assistant
+self-introduction, stories, ordinary explanations, simple advice, and math terms
+without a request to solve them are fast.
+medium: the answer requires personal facts, preferences, events, or plans from
+the user's past sessions. Pronouns alone do not make a request medium.
+slow: the user explicitly requests a non-trivial calculation, integral solution,
+proof, derivation, complex debugging, multi-constraint comparison, or multi-stage
+plan. A professional topic, a why/explain question, or a story is not slow.
 
-Apply precedence in this order: slow, medium, fast."""
+Use slow only for explicit multi-step work, then medium only when personal memory
+is necessary. When uncertain, choose fast."""
 
 _EN_EXAMPLES = [
     ("Hello.", "fast"),
+    ("Introduce yourself.", "fast"),
+    ("Tell me a story about a stray cat.", "fast"),
+    ("Explain why the sky is blue.", "fast"),
     ("Why does regular sleep improve energy?", "fast"),
     ("What did I say my favorite food was?", "medium"),
     ("What is on my schedule tomorrow?", "medium"),
@@ -198,6 +222,13 @@ class QwenThinkingRouter:
         # requested derivation into an instant answer.
         if _SLOW_FLOOR.search(text):
             return remember(ThinkingDecision(SLOW, "policy-floor"))
+        if _FAST_FLOOR.search(text):
+            return remember(ThinkingDecision(FAST, "policy-floor"))
+        if memory_relevant:
+            return remember(ThinkingDecision(MEDIUM, "memory-gate"))
+        compact = "".join(char for char in text if char.isalnum())
+        if len(compact) <= 4:
+            return remember(ThinkingDecision(FAST, "short-fragment"))
 
         chinese = self._is_chinese(text)
         output = self._predict(

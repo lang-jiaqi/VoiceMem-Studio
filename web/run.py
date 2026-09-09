@@ -1286,6 +1286,8 @@ async def route_pending_thinking(pending: Pending, memory_vm=None) -> Pending:
         print(f"[thinking] router failed; using fast: {type(exc).__name__}: {exc}",
               flush=True)
         return pending
+    classified = time.monotonic()
+    memory_ms = 0.0
     pending.reply_mode = decision.reply_mode
     if pending.stranger:
         # Speaker privacy outranks routing: never expose the owner's retrieved data.
@@ -1301,6 +1303,7 @@ async def route_pending_thinking(pending: Pending, memory_vm=None) -> Pending:
         pending.replay = ""
         pending.route = gate.SHALLOW
     else:
+        memory_started = time.monotonic()
         try:
             await _ensure_pending_memory(pending, memory_vm)
         except Exception as exc:
@@ -1310,9 +1313,12 @@ async def route_pending_thinking(pending: Pending, memory_vm=None) -> Pending:
             pending.memory_context = ""
             print(f"[route] memory retrieval failed: {type(exc).__name__}: {exc}",
                   flush=True)
+        memory_ms = (time.monotonic() - memory_started) * 1000
     print(f"[route] {decision.display_name} → {decision.reply_mode}"
           f" / reasoning={decision.reasoning_effort} "
-          f"({(time.monotonic() - started) * 1000:.0f}ms)", flush=True)
+          f"(model={(classified - started) * 1000:.0f}ms"
+          f" memory={memory_ms:.0f}ms"
+          f" total={(time.monotonic() - started) * 1000:.0f}ms)", flush=True)
     return pending
 
 
@@ -4810,8 +4816,8 @@ if __name__ == "__main__":
             print(f"[web] 真生成预热失败（不影响运行）：{type(e).__name__}: {e}", flush=True)
     print(f"[mem] 全部就位 · {_mem_line()}", flush=True)
     print("[web] 可选模型："
-          f"复核ASR(SenseVoice 0.9G)={'开' if os.environ.get('VOICEMEM_FINAL_ASR', '1') != '0' else '关'} "
-          f"[VOICEMEM_FINAL_ASR=0] · "
+          f"复核ASR(SenseVoice CPU int8)={'开' if os.environ.get('VOICEMEM_FINAL_ASR', '1') != '0' else '关'} "
+          f"[VOICEMEM_FINAL_ASR={os.environ.get('VOICEMEM_FINAL_ASR', '1')}] · "
           f"声学情绪(emotion2vec 1.0G)={'开' if os.environ.get('VOICEMEM_ACOUSTIC_TAG', '1') != '0' else '关'} "
           f"[VOICEMEM_ACOUSTIC_TAG=0] · "
           f"MLX缓存上限 {os.environ.get('VOICEMEM_MLX_CACHE_MB', '512')}MB", flush=True)

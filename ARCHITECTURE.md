@@ -327,7 +327,7 @@ partial ASR remains transient UI state rather than a chat bubble. It may seed
 buffered speculative work, but that work is cancelled if speech resumes and
 cannot become an accepted reply before confirmation.
 
-After confirmation, the local Qwen router selects exactly one reply mode:
+After confirmation, the local reply router selects exactly one reply mode:
 `direct` (instant), `memory` (mem), or `memory_cot` (mem+cot). `direct` discards
 any speculative memory result. The memory modes reuse an eligible speculative
 result or complete retrieval before generation. A route change between an early
@@ -358,11 +358,13 @@ Studio system prompt
 ```
 
 Reply mode is one per-turn signal rather than an independent memory and thinking
-pair. The local router runs outside the WebSocket loop under the process Torch
-lock. Chinese input uses a Chinese routing policy. Provider-neutral request
-options carry the required reasoning across async reply iteration: `direct` and
-`memory` use non-thinking generation, while `memory_cot` uses high effort.
-Reasoning content remains private and is never spoken.
+pair. The local router resolves explicit high-confidence policy cases first,
+reuses the Turn Gate's personal-memory decision, and sends only ambiguous turns
+to Qwen3-0.6B outside the WebSocket loop under the process Torch lock. Chinese
+input uses a Chinese routing policy. Provider-neutral request options carry the
+required reasoning across async reply iteration: `direct` and `memory` use
+non-thinking generation, while `memory_cot` uses high effort. Reasoning content
+remains private and is never spoken.
 
 `build_reply_context` is the shared context builder used by actual generation
 and local-model prewarming. Keeping one builder preserves local prefix-cache

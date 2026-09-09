@@ -94,14 +94,23 @@ def default_utils(base_url, memory_root):
         if os.environ.get("VOICEMEM_FINAL_ASR", "1") == "0":
             return None
         from voicemem.utils.common.paths import models_dir
-        d = models_dir() / "asr" / os.environ.get(
-            "VOICEMEM_FINAL_ASR_DIR",
-            "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17")
-        if not (d / "tokens.txt").is_file():
-            print(f"[asr] 没有离线复核模型（{d.name}）→ 只用流式那份转写。"
+        configured = os.environ.get("VOICEMEM_FINAL_ASR_DIR", "").strip()
+        names = ([configured] if configured else [
+            "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17",
+            "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+        ])
+        candidates = [models_dir() / "asr" / name for name in names]
+        d = next((path for path in candidates
+                  if (path / "tokens.txt").is_file()
+                  and ((path / "model.int8.onnx").is_file()
+                       or (path / "model.onnx").is_file())), None)
+        if d is None:
+            expected = ", ".join(path.name for path in candidates)
+            print(f"[asr] 没有离线复核模型（尝试了 {expected}）→ 只用流式那份转写。"
                   "scripts/download_models.sh 可下载。", flush=True)
             return None
         from voicemem.utils.audio.asr import OfflineASR
+        print(f"[asr] 最终复核模型：{d.name}（CPU int8 优先）", flush=True)
         return OfflineASR(str(d))
 
     def vad():
