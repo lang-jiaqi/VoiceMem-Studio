@@ -124,6 +124,93 @@ def state(text="", *, final=False):
                        spoke=not final, speech_end=time.monotonic())
 
 
+class CaptureBackchannelTests(unittest.IsolatedAsyncioTestCase):
+    async def run_pause(self, *, busy=False, early=False, echo=False, growing=True):
+        """Feed real capture/policy code voiced frames followed by a 120ms gap."""
+        ns, sent, interrupted, speculated = anticipate_namespace(), [], [], []
+        reference = "今天外面天气不错"
+        texts = ["我来讲", "我来讲今天", "我来讲今天的安排"]
+        if echo:
+            texts = [reference] * 3
+        elif not growing:
+            texts = [texts[-1]] * 3
+        frames = []
+        for text in texts:
+            st = state(text)
+            st.eot_score = .9 if early else 0
+            frames.append((st, 1200))
+        for i in range(6):
+            st = state(texts[-1])
+            st.state, st.silence = "<silence>", (i + 1) * .02
+            frames.append((st, 0))
+        frames = iter(frames)
+        current = None
+        clock = types.SimpleNamespace(now=100.0)
+        ns["time"] = types.SimpleNamespace(monotonic=lambda: clock.now)
+        ns["_backchannel_voice"] = lambda: types.SimpleNamespace(
+            available={"嗯"}, get=lambda *args: bytes(4800))
+        taking = TurnTakingStateMachine(backchannel=Backchannel(policy=backchannel_policy()))
+
+        class Sock:
+            async def receive(self):
+                nonlocal current
+                current = next(frames, None)
+                if current is None:
+                    return {"type": "websocket.disconnect"}
+                clock.now += .02
+                return {"bytes": np.full(480, current[1], np.int16).tobytes()}
+
+            async def send_json(self, message):
+                sent.append(message)
+
+        async def feed(_):
+            return current[0]
+
+        async def stop():
+            nonlocal busy
+            busy = False
+            taking.finish_reply()
+            interrupted.append(True)
+
+        async def on_early(text, st, refined):
+            speculated.append(await refined)
+
+        stream = types.SimpleNamespace(
+            feed=feed, confirm_s=.2,
+            refine_current_snapshot=lambda: asyncio.create_task(
+                asyncio.sleep(0, result=current[0].text)))
+        ns["vm"] = types.SimpleNamespace(stream=lambda **kw: stream)
+        with patch("studio.core.utils.turn_taking.backchannel.emitting", return_value=True):
+            turns = [turn async for turn in ns["anticipate"](
+                Sock(), is_busy=lambda: busy, said=lambda: reference if busy or echo else "",
+                on_speech=stop, on_early=on_early if early else None,
+                turn_taking=taking)]
+        self.assertEqual(turns, [])
+        return [m for m in sent if m["type"] == "backchannel"], interrupted, speculated
+
+    async def test_confirmed_barge_can_receive_backchannel(self):
+        clips, interrupted, _ = await self.run_pause(busy=True)
+        self.assertEqual(interrupted, [True])
+        self.assertEqual(len(clips), 1)
+
+    async def test_speculative_eot_does_not_block_backchannel(self):
+        clips, _, speculated = await self.run_pause(early=True)
+        self.assertTrue(speculated)
+        self.assertEqual(len(clips), 1)
+
+    async def test_idle_pause_can_receive_backchannel(self):
+        clips, _, _ = await self.run_pause()
+        self.assertEqual(len(clips), 1)
+
+    async def test_echo_and_unconfirmed_barge_still_cannot_receive_backchannel(self):
+        for options in ({"busy": True, "echo": True},
+                        {"busy": True, "growing": False}, {"echo": True}):
+            with self.subTest(**options):
+                clips, interrupted, _ = await self.run_pause(**options)
+                self.assertEqual(clips, [])
+                self.assertEqual(interrupted, [])
+
+
 class AnticipateTests(unittest.IsolatedAsyncioTestCase):
     async def run_frames(self, frames, on_early=None, on_early_cancel=None):
         ns, sent, yielded, interrupted = anticipate_namespace(), [], [], []

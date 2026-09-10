@@ -7,42 +7,60 @@ CONTROLS = {
     "unfinished_wait_ms": 1200,
     "unfinished_followup_s": 2.5,
     "backchannel_resume_ms": 300,
-    "backchannel_cooldown_ms": 3000,
-    "backchannel_opening_turns": 3,
-    "backchannel_recovery_turn": 6,
-    "backchannel_opening_probability": 0.70,
-    "backchannel_middle_probability": 0.35,
-    "backchannel_steady_probability": 0.50,
+    "backchannel_cooldown_ms": 900,
+    "backchannel_opening_s": 3.0,
+    "backchannel_recovery_s": 6.0,
+    "backchannel_late_s": 10.0,
+    "backchannel_opening_counts": ((2, 0.80), (1, 0.20)),
+    "backchannel_middle_counts": ((1, 0.80), (0, 0.20)),
+    "backchannel_steady_counts": ((1, 0.30), (2, 0.30), (3, 0.30), (0, 0.10)),
+    "backchannel_late_counts": ((2, 0.80), (0, 0.20)),
 }
 
 @dataclass(frozen=True)
 class SessionFrequencyCurve:
-    """Return the baseline chance for one eligible pause in a session."""
+    """Draw one acknowledgement quota for each phase of an utterance."""
 
-    opening_turns: int = 3
-    recovery_turn: int = 6
-    opening_probability: float = 0.50
-    middle_probability: float = 0.10
-    steady_probability: float = 0.30
+    opening_s: float = 3.0
+    recovery_s: float = 6.0
+    opening_counts: tuple[tuple[int, float], ...] = ((2, 0.80), (1, 0.20))
+    middle_counts: tuple[tuple[int, float], ...] = ((1, 0.80), (0, 0.20))
+    steady_counts: tuple[tuple[int, float], ...] = (
+        (1, 0.30), (2, 0.30), (3, 0.30), (0, 0.10))
+    late_s: float = 10.0
+    late_counts: tuple[tuple[int, float], ...] = ((2, 0.80), (0, 0.20))
 
     def __post_init__(self) -> None:
-        if self.opening_turns < 0 or self.recovery_turn < self.opening_turns:
-            raise ValueError("session frequency turn boundaries are invalid")
-        for value in (
-            self.opening_probability,
-            self.middle_probability,
-            self.steady_probability,
-        ):
-            if not 0.0 <= value <= 1.0:
-                raise ValueError("session frequency probabilities must be between 0 and 1")
+        if not 0 <= self.opening_s <= self.recovery_s <= self.late_s:
+            raise ValueError("turn frequency time boundaries are invalid")
+        for distribution in (self.opening_counts, self.middle_counts,
+                             self.steady_counts, self.late_counts):
+            if (not distribution or any(count < 0 or probability < 0
+                                        for count, probability in distribution)
+                    or abs(sum(probability for _, probability in distribution) - 1.0) > 1e-9):
+                raise ValueError("turn frequency count distributions must sum to one")
 
-    def probability(self, completed_turns: int) -> float:
-        completed = max(0, int(completed_turns))
-        if completed < self.opening_turns:
-            return self.opening_probability
-        if completed < self.recovery_turn:
-            return self.middle_probability
-        return self.steady_probability
+    def phase(self, speech_s: float) -> int:
+        elapsed = max(0.0, float(speech_s))
+        if elapsed < self.opening_s:
+            return 0
+        if elapsed < self.recovery_s:
+            return 1
+        if elapsed < self.late_s:
+            return 2
+        return 3
+
+    def draw_target(self, speech_s: float, roll: float) -> int:
+        distribution = (
+            self.opening_counts, self.middle_counts, self.steady_counts, self.late_counts
+        )[self.phase(speech_s)]
+        threshold = min(1.0, max(0.0, float(roll)))
+        total = 0.0
+        for count, probability in distribution:
+            total += probability
+            if threshold < total:
+                return count
+        return distribution[-1][0]
 
 _ASK = re.compile(r"(吗|呢|吧|么)\s*[?？]?$|[?？]$"
                   r"|(?:怎么样|如何|多少|哪里|几点)\s*[。.!！]?$"
@@ -80,10 +98,10 @@ class BackchannelPolicy:
 
     min_chars: int = field(default_factory=lambda: 4)
 
-    refractory_s: float = field(default_factory=lambda: max(3.0, 3.0))
+    refractory_s: float = field(default_factory=lambda: 0.9)
 
     p_max: float = field(default_factory=lambda: 0.9)
-    #: Session-level baseline: turns 1–3 use 50%, 4–6 use 10%, then 30%.
+    #: Within-turn count quotas for 0–3s, 3–6s, and the remainder.
     session_curve: SessionFrequencyCurve = field(default_factory=SessionFrequencyCurve)
 
 def f_sentence(text: str) -> float:
@@ -120,7 +138,7 @@ def f_prosody(tail_rms: float, prev_rms: float) -> float:
 
 def f_refractory(since_s: float, policy: BackchannelPolicy) -> float:
     """Return the cooldown multiplier for a candidate acknowledgement."""
-    cooldown = max(3.0, policy.refractory_s)
+    cooldown = max(0.0, policy.refractory_s)
     return 0.0 if since_s < cooldown else 1.0
 
 FILLER_PROMPT = '只生成一段约四秒、可以直接说出口的自然垫话，用在后台工作尚未完成时。\n语气要像正在认真帮对方处理，可以说“稍等呀，我帮你看下”一类自然口语，但不要固定复读同一句。\n不要声称已经完成，不要提前给结果，不要虚构进度，也不要提工具、思维链或内部系统。\n只输出真正要说出口的内容，不要添加语气标签、引号、解释或舞台指示。\n\n当前任务背景：{task_context}'

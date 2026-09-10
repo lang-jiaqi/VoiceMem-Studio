@@ -16,7 +16,7 @@ def emitting() -> bool:
 
 DEBUG = False
 
-from studio.harness.turn_taking.policy import (BackchannelPolicy, SessionFrequencyCurve, f_sentence, f_content, f_emotion, f_prosody, f_refractory, _ASK, _INVITE, _CONTINUE, _DISCLOSE)
+from studio.harness.turn_taking.policy import (BackchannelPolicy, SessionFrequencyCurve, _ASK, _INVITE, _DISCLOSE)
 
 ZH_AFFIRMATIVE_TOKENS = ("哦", "哦哦", "嗯嗯", "嗯", "对", "明白")
 ZH_QUESTION_TOKENS = ("哦？", "嗯？", "是吗？")
@@ -26,6 +26,7 @@ ZH_SYNTHESIS_TEXT = {
 }
 ZH_VARIANTS = {
     **{token: 2 for token in ZH_AFFIRMATIVE_TOKENS},
+    **{token: 5 for token in ("哦", "嗯嗯", "嗯")},
     **{token: 1 for token in ZH_QUESTION_TOKENS},
 }
 
@@ -115,7 +116,8 @@ class Backchannel:
     _armed: bool = True
     _speech_started: float = 0.0
     _completed_turns: int = 0
-    _opening_ack: bool = False
+    _phase_targets: list = field(default_factory=lambda: [None] * 4)
+    _phase_emitted: list = field(default_factory=lambda: [0] * 4)
 
     @property
     def completed_turns(self) -> int:
@@ -124,9 +126,11 @@ class Backchannel:
     def reset_turn(self) -> None:
         self._speech_started = 0.0
         self._armed = True
+        self._phase_targets = [None] * 4
+        self._phase_emitted = [0] * 4
 
     def complete_turn(self) -> None:
-        """Advance the session frequency curve after one accepted user turn."""
+        """Finish one accepted user turn and reset turn-local state."""
         self._completed_turns += 1
         self.reset_turn()
 
@@ -135,7 +139,7 @@ class Backchannel:
         now = now if now is not None else time.monotonic()
         return (emitting() and
                 (self._last_at is None or
-                 now - self._last_at >= max(3.0, self.policy.refractory_s)))
+                 now - self._last_at >= max(0.0, self.policy.refractory_s)))
 
     def choose(self, *, text: str, emotion: str = "", lang: str = "zh",
                available=None, now: float | None = None) -> str | None:
@@ -151,29 +155,7 @@ class Backchannel:
             return
         self._last_at = now if now is not None else time.monotonic()
         self._last_token = token
-        if 1 <= self._completed_turns <= 3:
-            self._opening_ack = True
         self._recent = (self._recent + [token])[-3:]
-
-    def probability(self, *, text: str, speech_s: float, emotion: str = "",
-                    tail_rms: float = 0.0, prev_rms: float = 0.0,
-                    now: float | None = None) -> tuple[float, dict]:
-        """Return the emission probability and its policy factors."""
-        p = self.policy
-        now = now if now is not None else time.monotonic()
-        parts = {
-            # The session curve now owns baseline frequency. Eligible pauses no
-            # longer decay merely because they happen early in an utterance.
-            "S": f_sentence(text),
-            "M": f_content(text),
-            "E": f_emotion(emotion),
-            "P": f_prosody(tail_rms, prev_rms),
-            "R": f_refractory(now - self._last_at if self._last_at is not None else 1e9, p),
-        }
-        val = p.session_curve.probability(self._completed_turns)
-        for v in parts.values():
-            val *= v
-        return min(p.p_max, val), parts
 
     def offer(self, *, text: str, silence: float, spoke: bool, speech_s: float,
               emotion: str = "", tail_rms: float = 0.0, prev_rms: float = 0.0,
@@ -181,8 +163,6 @@ class Backchannel:
               unfinished: bool = False) -> str | None:
         """Return an eligible acknowledgement or None without synthesizing audio."""
         now = now if now is not None else time.monotonic()
-        if unfinished:
-            return None
         if silence < 0.01:
             self._armed = True
             if spoke and not self._speech_started:
@@ -201,20 +181,20 @@ class Backchannel:
         if not clean or len(clean) < (2 if unfinished else self.policy.min_chars):
             return None
         self._armed = False
-        if self._last_at is not None and now - self._last_at < max(3.0, self.policy.refractory_s):
+        if self._last_at is not None and now - self._last_at < max(0.0, self.policy.refractory_s):
             return None
         speech = speech_s or (now - self._speech_started if self._speech_started else 0.0)
-        p, parts = self.probability(text=text, speech_s=speech, emotion=emotion,
-                                    tail_rms=tail_rms, prev_rms=prev_rms, now=now)
-        roll = self.rng.random()
+        phase = self.policy.session_curve.phase(speech)
+        target = self._phase_targets[phase]
+        if target is None:
+            target = self.policy.session_curve.draw_target(speech, self.rng.random())
+            self._phase_targets[phase] = target
         if DEBUG:
-
-            f = " ".join(f"{k}={v:.2f}" for k, v in parts.items())
-            print(f"[backchannel] turn={self._completed_turns + 1} 机会 p={p:.0%} 掷={roll:.2f} "
-                  f"{'中' if roll < p else '不中'}  {f}  说了{speech:.1f}s  "
+            print(f"[backchannel] turn={self._completed_turns + 1} "
+                  f"阶段={phase + 1} 目标={target} 已说={self._phase_emitted[phase]} "
+                  f"说了{speech:.1f}s "
                   f"{text[-12:]!r}", flush=True)
-        guaranteed = 1 <= self._completed_turns <= 2 and not self._opening_ack
-        if roll >= p and not guaranteed:
+        if self._phase_emitted[phase] >= target:
             return None
         if unfinished:
             pool = (_TOKENS.get(lang) or _TOKENS["en"])["continuer"]
@@ -225,6 +205,7 @@ class Backchannel:
         if not token:
             return None
         self.mark_emitted(token, now)
+        self._phase_emitted[phase] += 1
         return token
 
 #

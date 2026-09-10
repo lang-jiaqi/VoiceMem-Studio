@@ -36,12 +36,12 @@ from evals.test_short_turns import anticipate_namespace
 
 
 class BackchannelTests(unittest.TestCase):
-    def test_pause_ack_is_independent_from_continuation(self):
+    def test_pause_ack_accepts_incomplete_continuation_points(self):
         with patch('random.Random.random', return_value=0):
-            for text in ("你好", "你好！", "今天天气怎么样", "你能帮我吗？", "其实我觉得", "今天", "因为", "我现在是这么想的"):
+            for text in ("你好", "你好！", "今天天气怎么样", "你能帮我吗？"):
                 bc = Backchannel(policy=backchannel_policy())
                 self.assertIsNone(self.offer(bc, 0, text=text))
-            for text in ("今天真的特别开心", "这件事情说来话长"):
+            for text in ("今天真的特别开心", "这件事情说来话长", "其实我觉得", "今天", "因为", "我现在是这么想的"):
                 bc = Backchannel(policy=backchannel_policy())
                 self.assertIsNotNone(self.offer(bc, 0, text=text))
 
@@ -51,20 +51,19 @@ class BackchannelTests(unittest.TestCase):
                         now=now, unfinished=is_unfinished(text), available=available)
 
     @patch.dict(os.environ, {"VOICEMEM_BACKCHANNEL_EMIT": "1"})
-    def test_first_opportunity_and_cross_turn_three_second_cooldown(self):
+    def test_first_opportunity_and_cross_turn_cooldown(self):
         bc = Backchannel(policy=backchannel_policy(), rng=random.Random(1))
         with patch('random.Random.random', return_value=0):
             self.assertIsNotNone(self.offer(bc, 0))
             bc.reset_turn()
-            self.assertIsNone(self.offer(bc, 2.999))
-            self.assertIsNotNone(self.offer(bc, 3))
+            self.assertIsNone(self.offer(bc, .899))
+            self.assertIsNotNone(self.offer(bc, .9))
 
     @patch.dict(os.environ, {"VOICEMEM_BACKCHANNEL_EMIT": "1"})
     def test_one_offer_per_pause_and_only_playable_continuers(self):
         bc = Backchannel(policy=backchannel_policy(), rng=random.Random(1))
         self.assertEqual(self.offer(bc, 0, available={"嗯"}), "嗯")
-        self.assertIsNone(bc.offer(text="我就是觉得", silence=.15, spoke=True,
-                                  speech_s=1, now=5, unfinished=True))
+        self.assertEqual(self.offer(bc, 1, text="我就是觉得", available={"嗯"}), "嗯")
         self.assertIsNone(self.offer(bc, 6, available=set()))
 
     def test_chinese_bank_has_only_the_reviewed_nine_tokens(self):
@@ -77,6 +76,13 @@ class BackchannelTests(unittest.TestCase):
         active = {token for group in backchannel_module._TOKENS["zh"].values()
                   for token in group}
         self.assertEqual(active, set((*affirm, *questions)))
+
+    def test_natural_continuers_have_extra_audio_variants(self):
+        voice = backchannel_module.BackchannelVoice(object(), lang="zh")
+        for token in ("哦", "嗯嗯", "嗯"):
+            self.assertEqual(list(voice._style_indices(token)), list(range(5)))
+        self.assertEqual(list(voice._style_indices("对")), [0, 1])
+        self.assertEqual(list(voice._style_indices("嗯？")), [0])
 
     def test_clip_trim_preserves_tail_beyond_the_old_700ms_limit(self):
         audio = np.concatenate((
@@ -136,7 +142,13 @@ class BackchannelTests(unittest.TestCase):
             ref_audio=str(root / "voice" / "noctelle_ref_short.wav"))
         voice = backchannel_module.BackchannelVoice(tts, lang="zh")
         self.assertTrue(voice._uses_bundled_voice())
-        self.assertTrue(voice._bundled_pcm("哦", 0))
+        self.assertTrue(voice._bundled_pcm("哦", 1))
+        expected = {p.name for p in (root / "voice/backchannel").glob("OK_*.wav")}
+        loaded = {voice._bundled_filename(token, i)
+                  for token in voice._tokens()
+                  for i in voice._style_indices(token)
+                  if voice._bundled_pcm(token, i)}
+        self.assertEqual(loaded, expected)
 
     @patch.dict(os.environ, {"VOICEMEM_BACKCHANNEL_EMIT": "1"})
     def test_end_ack_and_in_speech_backchannel_share_cooldown(self):
@@ -144,22 +156,50 @@ class BackchannelTests(unittest.TestCase):
         token = bc.choose(text="我说完了", available={"嗯"}, now=0)
         self.assertEqual(token, "嗯")
         bc.mark_emitted(token, now=0)
-        self.assertIsNone(bc.choose(text="下一句", available={"嗯"}, now=2.99))
-        self.assertEqual(bc.choose(text="下一句", available={"嗯"}, now=3), "嗯")
+        self.assertIsNone(bc.choose(text="下一句", available={"嗯"}, now=.899))
+        self.assertEqual(bc.choose(text="下一句", available={"嗯"}, now=.9), "嗯")
 
-    def test_session_probability_is_50_then_10_then_30_percent(self):
+    def test_count_targets_change_within_each_turn(self):
+        curve = SessionFrequencyCurve()
+        self.assertEqual([curve.draw_target(0, roll) for roll in (.0, .79, .80)],
+                         [2, 2, 1])
+        self.assertEqual([curve.draw_target(3, roll) for roll in (.0, .79, .80)],
+                         [1, 1, 0])
+        self.assertEqual([curve.draw_target(6, roll) for roll in (
+            .0, .29, .30, .59, .60, .89, .90)], [1, 1, 2, 2, 3, 3, 0])
+        self.assertIn("单轮次数=前段2次80%/1次20%",
+                      backchannel_policy_summary())
+        for curve in (curve, backchannel_policy().session_curve):
+            self.assertEqual([curve.phase(t) for t in (5.999, 6, 9.999, 10, 30)],
+                             [1, 2, 2, 3, 3])
+            self.assertEqual([curve.draw_target(10, roll) for roll in (0, .799, .8, .99)],
+                             [2, 2, 0, 0])
+
+    def test_late_phase_has_its_own_quota_and_resets(self):
         bc = Backchannel(policy=backchannel_policy())
-        probabilities = [bc.probability(text="今天路上有点堵车", speech_s=1, now=0)[0]]
-        for _ in range(3):
+        def offer(now, speech_s):
+            bc.offer(text="我就是觉得", silence=0, spoke=True, speech_s=speech_s, now=now)
+            return bc.offer(text="我就是觉得", silence=.15, spoke=True,
+                            speech_s=speech_s, now=now, unfinished=True, available={"嗯"})
+        with patch('random.Random.random', return_value=0):
+            self.assertEqual(offer(6, 6), "嗯")
+            self.assertIsNone(offer(8, 8))
+            self.assertEqual(offer(10, 10), "嗯")
+            self.assertEqual(offer(11, 11), "嗯")
+            self.assertIsNone(offer(12, 12))
             bc.complete_turn()
-        probabilities.append(bc.probability(
-            text="今天路上有点堵车", speech_s=1, now=0)[0])
-        for _ in range(3):
+            self.assertEqual(offer(20, 10), "嗯")
+
+    def test_opening_quota_limits_emissions_and_resets_each_turn(self):
+        bc = Backchannel(policy=backchannel_policy())
+        with patch('random.Random.random', return_value=0):
+            self.assertIsNotNone(self.offer(bc, 0))
+            self.assertIsNotNone(self.offer(bc, .9))
+            self.assertIsNone(self.offer(bc, 1.8))
             bc.complete_turn()
-        probabilities.append(bc.probability(
-            text="今天路上有点堵车", speech_s=1, now=0)[0])
-        self.assertEqual(probabilities, [.7, .35, .5])
-        self.assertIn("session概率=70%/35%/50%", backchannel_policy_summary())
+            self.assertIsNotNone(self.offer(bc, 2.7))
+        self.assertIn("后段1/2/3次各30%/0次10%",
+                      backchannel_policy_summary())
 
     def test_unfinished_detection_tolerates_asr_punctuation(self):
         for text in (
@@ -304,7 +344,7 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
         ns = anticipate_namespace()
         sent, turns = [], []
         # 200ms voiced + enough silence for the unfinished-turn fallback, twice.
-        # The second opportunity is still inside the cross-turn cooldown.
+        # Synthetic frames run instantly, so the second turn remains in cooldown.
         frames = iter(([True] * 10 + [False] * 65) * 2)
         captured = 0
         def stream_factory(**kwargs):
@@ -330,7 +370,7 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
             async for turn in ns['anticipate'](Sock(), is_busy=lambda: False):
                 turns.append((captured, turn))
         clips = [(frame, msg) for frame, msg in sent if msg['type'] == 'backchannel']
-        self.assertEqual(len(clips), 0)
+        self.assertEqual(len(clips), 1)
         self.assertEqual([turn.text for _, turn in turns],
                          ['我就是觉得', '我就是觉得'])
         # One 200ms clip followed by 300ms silence, measured in captured audio.
@@ -414,8 +454,8 @@ class TurnTakingTimingTests(unittest.IsolatedAsyncioTestCase):
 
     def test_frequency_curve_boundaries(self):
         curve = SessionFrequencyCurve()
-        self.assertEqual([curve.probability(i) for i in range(8)],
-                         [.5, .5, .5, .1, .1, .1, .3, .3])
+        self.assertEqual([curve.phase(i) for i in range(8)],
+                         [0, 0, 0, 1, 1, 1, 2, 2])
 
     def test_short_ack_uses_actual_clip_length_without_cutting_its_tail(self):
         self.assertAlmostEqual(short_ack_plan(.72).main_start_seconds, .72)

@@ -106,21 +106,24 @@ def backchannel_policy():
         gap_s=CONTROLS["pause_ms"] / 1000,
         refractory_s=CONTROLS["backchannel_cooldown_ms"] / 1000,
         session_curve=SessionFrequencyCurve(
-            opening_turns=int(CONTROLS["backchannel_opening_turns"]),
-            recovery_turn=int(CONTROLS["backchannel_recovery_turn"]),
-            opening_probability=CONTROLS["backchannel_opening_probability"],
-            middle_probability=CONTROLS["backchannel_middle_probability"],
-            steady_probability=CONTROLS["backchannel_steady_probability"],
+            opening_s=float(CONTROLS["backchannel_opening_s"]),
+            recovery_s=float(CONTROLS["backchannel_recovery_s"]),
+            opening_counts=CONTROLS["backchannel_opening_counts"],
+            middle_counts=CONTROLS["backchannel_middle_counts"],
+            steady_counts=CONTROLS["backchannel_steady_counts"],
+            late_s=float(CONTROLS["backchannel_late_s"]),
+            late_counts=CONTROLS["backchannel_late_counts"],
         ),
     )
 
 def backchannel_policy_summary() -> str:
-    """Return the concise startup description for the active session curve."""
+    """Return the concise startup description for the within-turn curve."""
     policy = backchannel_policy()
     curve = policy.session_curve
     return (
-        f"session概率={curve.opening_probability:.0%}/"
-        f"{curve.middle_probability:.0%}/{curve.steady_probability:.0%} "
+        f"单轮次数=前段2次80%/1次20%，中段1次80%/0次20%，"
+        f"后段1/2/3次各30%/0次10%，末段2次80%/0次20% "
+        f"分段={curve.opening_s:g}s/{curve.recovery_s:g}s/{curve.late_s:g}s "
         f"停顿窗口={policy.gap_s * 1000:.0f}~{policy.max_gap_s * 1000:.0f}ms "
         f"冷却={policy.refractory_s}s"
     )

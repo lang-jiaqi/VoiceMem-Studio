@@ -483,12 +483,21 @@ Explicit incomplete two-character openings (such as 今天 or 因为) bypass the
 four-character acknowledgement minimum. Introductions such as 我现在是这么想的
 also retain the continuation window. Completed answers and greetings do not.
 The PCM comfort-noise level stays constant during speech and silence.
-Incomplete clauses do not emit pause-time backchannels: their confirmed-turn
-acknowledgement is the single mandatory handoff when a cached clip is available.
-Ordinary eligible pauses use 70/35/50 percent baseline probabilities. One
-acknowledgement is guaranteed during voice turns two to three, with a confirmed
-turn fallback if no eligible pause produced one; available audio and enabled
-backchannels remain prerequisites.
+Incomplete clauses may emit a quiet continuer during an eligible in-speech
+pause; delayed continuation remains a separate confirmed-turn decision. Each
+utterance samples acknowledgement quotas independently for four elapsed-time
+phases. The first three seconds select two clips with 80 percent probability or
+one clip otherwise. Three to six seconds select one clip with 80 percent
+probability or none otherwise. Six to ten seconds select one, two, or three
+clips with 30 percent probability each, and none with 10 percent probability.
+From ten seconds onward, the remaining utterance selects two clips with 80
+percent probability or none otherwise.
+Quotas are upper bounds when the user supplies fewer eligible pauses. Available
+audio and enabled backchannels remain prerequisites. Buffered EOT speculation
+does not suppress these in-speech acknowledgements. After a confirmed barge-in,
+the user can receive them again once the main reply stops; the utterance's
+original echo reference is retained. Active replies, unconfirmed barge-ins,
+and detected echo still suppress acknowledgement playback.
 Self-introduction segments use a shared TTS arc for both DeepSeek and Qwen:
 bright and proud initially, then explicitly sad and slower at the limitation
 clause. Qwen 3.6 additionally receives a model-specific prompt and general voice

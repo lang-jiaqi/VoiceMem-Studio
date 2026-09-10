@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
-async def generate(output: Path, ref_audio: Path) -> None:
+async def generate(output: Path, ref_audio: Path, *, tokens=None,
+                   style_indices=None, add_only: bool = False) -> None:
     import mlx.core as mx
     if not mx.metal.is_available():
         raise RuntimeError("Breeze backchannel generation requires Apple Silicon Metal")
@@ -35,9 +36,13 @@ async def generate(output: Path, ref_audio: Path) -> None:
     )
     voice = BackchannelVoice(tts, lang="zh")
     output.mkdir(parents=True, exist_ok=True)
-    tokens = (*ZH_AFFIRMATIVE_TOKENS, *ZH_QUESTION_TOKENS)
+    tokens = tuple(tokens or (*ZH_AFFIRMATIVE_TOKENS, *ZH_QUESTION_TOKENS))
     jobs = [(token, i) for token in tokens
-            for i in voice._style_indices(token, variants=2)]
+            for i in voice._style_indices(token)
+            if style_indices is None or i in style_indices]
+    if add_only:
+        jobs = [(token, i) for token, i in jobs
+                if not (output / voice._bundled_filename(token, i)).exists()]
     started = time.perf_counter()
     base_seed = tts.seed
     with tempfile.TemporaryDirectory(prefix=".backchannel-", dir=output) as tmp:
@@ -62,14 +67,17 @@ async def generate(output: Path, ref_audio: Path) -> None:
                 wav.writeframes(pcm)
             print(f"[{index:02d}/{len(jobs)}] {token} v{style_idx + 1} "
                   f"{len(pcm) / 48:.0f}ms", flush=True)
-        keep = {voice._bundled_filename(token, i) for token, i in jobs}
-        for path in staging.glob("OK_*.wav"):
+        # Moving entries while iterating a directory can make the iterator skip
+        # later clips on some filesystems, so freeze the staging set first.
+        for path in list(staging.glob("OK_*.wav")):
             os.replace(path, output / path.name)
         removed = 0
-        for path in output.glob("OK_*.wav"):
-            if path.name not in keep:
-                path.unlink()
-                removed += 1
+        if not add_only and style_indices is None:
+            keep = {voice._bundled_filename(token, i) for token, i in jobs}
+            for path in output.glob("OK_*.wav"):
+                if path.name not in keep:
+                    path.unlink()
+                    removed += 1
     print(f"Generated {len(jobs)} clips in {time.perf_counter() - started:.1f}s", flush=True)
     if removed:
         print(f"Removed {removed} clips outside the reviewed bank", flush=True)
@@ -80,5 +88,15 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, default=ROOT / "voice/backchannel")
     parser.add_argument("--ref-audio", type=Path,
                         default=ROOT / "voice/noctelle_ref_short.wav")
+    parser.add_argument("--tokens", nargs="+",
+                        help="generate only these acknowledgement tokens")
+    parser.add_argument("--styles", nargs="+", type=int,
+                        help="generate only these one-based style numbers")
+    parser.add_argument("--add-only", action="store_true",
+                        help="keep every existing clip and generate only missing files")
     args = parser.parse_args()
-    asyncio.run(generate(args.output, args.ref_audio))
+    styles = {value - 1 for value in args.styles} if args.styles else None
+    if styles is not None and any(value < 0 for value in styles):
+        parser.error("--styles values must be positive")
+    asyncio.run(generate(args.output, args.ref_audio, tokens=args.tokens,
+                         style_indices=styles, add_only=args.add_only))

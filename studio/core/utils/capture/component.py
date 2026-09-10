@@ -211,10 +211,10 @@ class Capture:
             bc_gap = bc_gap + frame_s if quiet else 0.0
 
             unfinished = is_unfinished(cur)
-            bc_ok = (unfinished or not early_at
-                     or (time.monotonic() - early_at >= self.BC_AFTER_EARLY_S
-                         and cur != early_text and st.state == "<speak>"))
-            if not st.turn and not busy and not input_echo and not utterance.started_busy and bc_speech_t0 and bc_ok:
+            # Buffered EOT work does not own the floor. A confirmed barge-in
+            # also returns it to the user; keep the captured echo reference intact.
+            if (not st.turn and not busy and not input_echo and bc_speech_t0
+                    and (not utterance.started_busy or barged)):
                 voice = self._backchannel_voice() if _bc_mod.emitting() else None
                 token = turn_taking.offer_backchannel(
                     text=cur, silence=bc_gap, spoke=st.spoke,

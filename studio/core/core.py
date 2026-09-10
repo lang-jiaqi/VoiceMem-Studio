@@ -80,7 +80,10 @@ def main(argv=None):
         agent.warmup()
         app = build_app(agent)
         import uvicorn
-        print(f'[startup] 就绪：http://localhost:{args.port}', flush=True)
+        app.router.add_event_handler(
+            'startup',
+            lambda: print(f'[startup] VoiceMem Studio 启动成功：http://localhost:{args.port}', flush=True),
+        )
         uvicorn.run(app, host=args.host, port=args.port)
     except (ImportError, RuntimeError, ValueError, OSError) as exc:
         print(f'[startup] 无法启动：{exc}', flush=True)

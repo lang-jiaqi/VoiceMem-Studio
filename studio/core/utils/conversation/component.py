@@ -125,8 +125,7 @@ class Conversation:
     def cached_ack(self, pending):
         bc = self.turn_taking.backchannel
         unfinished = needs_continuation(pending.text)
-        opening_due = 2 <= bc.completed_turns <= 3 and not bc._opening_ack
-        if not pending.spoken or not (unfinished or opening_due):
+        if not pending.spoken or not unfinished:
             return None
         voice = self.agent._backchannel_voice()
         if not voice or not voice.ready:
