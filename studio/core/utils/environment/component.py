@@ -1,22 +1,25 @@
 """Set the fixed Studio profile before importing shared memory providers."""
 import os
-from studio.paths import ROOT, MODELS
+from pathlib import Path
+
+
+def load_environment(root=None):
+    """Load repository credentials and options without replacing exported values."""
+    from dotenv import load_dotenv
+    root = Path(root) if root is not None else Path(__file__).resolve().parents[4]
+    load_dotenv(root / '.env', override=False)
+    load_dotenv(root / '.env.qwen', override=False)
 
 
 def prepare(args):
-    """Apply internal paths and tuning; users supply only provider credentials."""
-    credential_file = ROOT / '.env.qwen'
-    if credential_file.exists():
-        for line in credential_file.read_text().splitlines():
-            name, sep, value = line.partition('=')
-            if sep and name.strip() == 'DASHSCOPE_API_KEY':
-                os.environ.setdefault('DASHSCOPE_API_KEY', value.strip())
+    """Apply the selected backend and shared paths before model imports."""
+    from studio.paths import ROOT, MODELS
     # VoiceMem retains its public environment API; Studio supplies that adapter
     # configuration internally so worker subprocesses use the same model roots.
-    for key in list(os.environ):
-        if key.startswith(('VOICEMEM_', 'BARGE_', 'SPEAKER_')) and not key.endswith('_API_KEY'):
-            os.environ.pop(key)
     os.environ.update({
+        'STUDIO_BACKEND': args.backend,
+        'STUDIO_DEVICE': args.device,
+        'STUDIO_TTS_DEVICE': args.tts_device,
         'VOICEMEM_MODELS_DIR': str(MODELS),
         'VOICEMEM_MEMORYSPACE_ROOT': str(ROOT / 'voicemem_memoryspace'),
         'VOICEMEM_MEMORY_LANGUAGE': args.lang,

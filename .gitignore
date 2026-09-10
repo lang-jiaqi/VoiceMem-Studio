@@ -18,6 +18,7 @@ out/
 .env.*
 !.env.example
 .venv/
+.venv-cuda/
 .claude/
 .DS_Store
 

@@ -437,6 +437,7 @@ class BreezeTTS(BaseTTS):
                     yield chunk
 
 from studio.core.utils.tts.component import BreezeMLXTTS
+from studio.core.utils.tts.cuda import BreezeCUDATTS
 
 TTS_PROVIDERS = {
     "openai": OpenAITTS,
@@ -445,6 +446,7 @@ TTS_PROVIDERS = {
     "voxcpm": VoxCPMTTS,
     "breeze": BreezeTTS,
     "breeze_mlx": BreezeMLXTTS,
+    "breeze_cuda": BreezeCUDATTS,
     "qwen":   QwenTTS,
     "kokoro": KokoroTTS,
 }

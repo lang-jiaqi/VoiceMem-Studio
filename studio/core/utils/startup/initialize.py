@@ -7,17 +7,21 @@ from studio.paths import ROOT, MODELS
 from studio.core.utils.models.initialize import models
 
 
+def required_credentials(args):
+    """Use the same provider selection as the memory and visible reply factories."""
+    provider = args.llm if args.mode == 'llm_tts' else 'openai'
+    credential = {'deepseek': 'DEEPSEEK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY'}.get(provider, 'OPENAI_API_KEY')
+    return {credential: f'{provider} 回复与记忆处理'}
+
+
 def inspect(args):
     """Report missing prerequisites together, without printing any secret value."""
     errors = []
     print(f'[startup] Python {platform.python_version()} · {platform.machine()} · {sys.executable}', flush=True)
     if sys.version_info[:2] != (3, 12):
         errors.append('Studio 需要 Python 3.12，请切换原有 Studio 环境')
-    required_keys = {'OPENAI_API_KEY': 'VoiceMem 记忆抽取、归因与后台整理'}
-    if args.mode == 'llm_tts' and args.llm == 'deepseek':
-        required_keys['DEEPSEEK_API_KEY'] = 'DeepSeek 流式回复'
-    if args.mode == 'llm_tts' and args.llm == 'qwen':
-        required_keys = {'DASHSCOPE_API_KEY': 'Qwen 流式回复与记忆处理'}
+    required_keys = required_credentials(args)
+    print(f'[startup] backend={args.backend} · Studio={args.device} · Breeze={args.tts_device}', flush=True)
     for name, purpose in required_keys.items():
         present = bool(os.environ.get(name, '').strip())
         print(f'[startup] {name}: {"已找到" if present else "缺失"}（{purpose}）', flush=True)
@@ -28,8 +32,35 @@ def inspect(args):
         'websockets', 'openai', 'httpx', 'mem0ai', 'sentence-transformers',
         'funasr', 'modelscope', 'sherpa-onnx', 'soundfile', 'scipy',
         'huggingface-hub', 'onnxruntime', 'accelerate')}
-    packages['transformers'] = '5.16.1'
-    if args.mode == 'llm_tts':
+    packages['python-dotenv'] = None
+    packages['transformers'] = '4.57.3' if args.backend == 'cuda' else '5.16.1'
+    if args.backend == 'cuda':
+        if platform.system() != 'Linux':
+            errors.append('CUDA backend 需要 Linux + NVIDIA GPU')
+        if args.mode == 'llm_tts':
+            packages['qwen-tts'] = '0.1.1'
+            from studio.core.utils.tts.cuda import source_directory
+            source = source_directory()
+            for relative in ('breeze_infer/runtime.py', 'breeze_infer/templates.py',
+                             'models/fast_streaming.py', 'configs/fast.json'):
+                if not (source / relative).is_file():
+                    errors.append(f'BREEZE_CODE_DIR 缺少 {relative}：{source}')
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                errors.append('PyTorch 无法使用 CUDA；请检查 NVIDIA 驱动和 CUDA 版 PyTorch')
+            else:
+                for device in {args.device, args.tts_device}:
+                    index = torch.device(device).index or 0
+                    if index >= torch.cuda.device_count():
+                        errors.append(f'设备不存在：{device}，当前可见 GPU 数 {torch.cuda.device_count()}')
+                    else:
+                        print(f'[startup] {device}: {torch.cuda.get_device_name(index)}', flush=True)
+            if tuple(int(n) for n in torch.__version__.split('+')[0].split('.')[:2]) < (2, 6):
+                errors.append('本地 Breeze CUDA 需要 torch>=2.6，请安装 .[studio-cuda]')
+        except (ImportError, RuntimeError, OSError) as exc:
+            errors.append(f'CUDA 检查失败：{type(exc).__name__}')
+    elif args.mode == 'llm_tts':
         packages.update({'mlx': '0.32.2', 'mlx-audio': '0.5.1', 'mlx-lm': None})
         if platform.system() != 'Darwin' or platform.machine() != 'arm64':
             errors.append('Breeze MLX 需要原生 Apple Silicon macOS 环境')

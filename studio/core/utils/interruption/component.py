@@ -6,7 +6,7 @@ class Interruption:
         return bool(self.BACKCHANNEL_ON) and gate.is_backchannel(new_chars)
 
     def _is_echo(self, new_chars: str, said: str) -> bool:
-        from echo_guard import is_echo
+        from studio.core.utils.echo_guard.component import is_echo
         return is_echo(new_chars, said, max(self.ECHO_WINDOW, min(len(said), 4096)),
                        self.ECHO_RATIO, self.ECHO_FUZZY_MIN)
 

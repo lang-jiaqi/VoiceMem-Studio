@@ -59,9 +59,10 @@ class Startup:
                     break
 
         if self.MODE == 'llm_tts':
-            import mlx.core as mx
-            from voicemem.utils.gpu_loop import gpu_loop
-            gpu_loop().call(lambda: mx.set_cache_limit(536870912))
+            if self.ARGS.backend == 'mlx':
+                import mlx.core as mx
+                from voicemem.utils.gpu_loop import gpu_loop
+                gpu_loop().call(lambda: mx.set_cache_limit(536870912))
             step('Breeze TTS / 附和缓存', lambda: asyncio.run(warm_speech()))
             step('三级回复路由', lambda: thinking_router().warmup())
         for name, action in memory_warmups(self.vm):

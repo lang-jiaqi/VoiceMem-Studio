@@ -27,26 +27,89 @@ studio/
   apps/
 ```
 
-在仓库根目录使用原生 Apple Silicon 的 Python 3.12 环境。首次安装 Studio 依赖：
+## 启动
+
+在项目根目录激活已经安装好的 Python 3.12 环境。Linux / NVIDIA 使用：
 
 ```bash
+source .venv-cuda/bin/activate
+```
+
+macOS / Apple Silicon 使用：
+
+```bash
+source .venv/bin/activate
+```
+
+之后两边的启动命令完全相同，不需要额外脚本或后端参数：
+
+```bash
+python -m studio
+```
+
+未覆盖配置时，Linux 自动选择 CUDA，Mac 自动选择 MLX；默认 DeepSeek、中文、
+`demo-zh` 记忆空间和 `8787` 端口，CUDA 默认只使用 `cuda:0`。
+原来的 `python web/run.py` 仍使用同一入口。需要其他记忆空间时加 `--space 空间名`；
+需要详细日志时加 `--verbose`。
+
+打开 `http://localhost:8787`；远程使用需 HTTPS 或本地 SSH 端口转发才能让浏览器使用麦克风。
+
+## 首次安装
+
+### Linux / NVIDIA CUDA
+
+Studio 在进程内加载 Breeze CUDA，通过专用线程流式生成 PCM，不需要单独启动 Breeze
+HTTP 服务。使用已有的 Breeze CUDA streaming 源码仓库和权重；两者默认是本仓库旁边的
+`breeze-tts/` 和 `breeze-tts-2/`。其他位置在 `.env` 中配置 `BREEZE_CODE_DIR` 和
+`BREEZE_MODEL_DIR`。源码必须包含 `models/fast_streaming.py`。
+
+Python 3.12 首次安装（保留原有 Mac/旧 Studio 环境）：
+
+```bash
+python3.12 -m venv .venv-cuda
+source .venv-cuda/bin/activate
+python -m pip install -e '.[studio-cuda]'
+```
+
+Docker 暂未打包；这里验证的是本机进程。
+
+### macOS / Apple Silicon MLX
+
+同样使用 Python 3.12，保留原生 MLX 模型和调度方式：
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
 python -m pip install -e '.[studio]'
 ```
 
-启动：
+## 配置和启动检查
+
+首次创建配置后，在 `.env` 中填写 `DEEPSEEK_API_KEY`；已有文件时直接编辑，不要覆盖：
 
 ```bash
-python web/run.py --mode llm_tts --space demo-zh --lang zh --confirm_ms 200 --verbose
+cp -n .env.example .env
 ```
 
-打开 `http://localhost:8787`。`python -m studio` 使用相同入口。
-可用 `--llm local`、`--llm openai` 或 `--mode realtime` 选择已有模式。
-
 启动依次检查凭据、依赖版本、资源、四份 policy 和模型清单；缺项集中打印并退出。
-只从启动进程的环境读取 `DEEPSEEK_API_KEY` 和 `OPENAI_API_KEY`，不打印值。
-DeepSeek 用于默认回复，OpenAI 仍用于 VoiceMem 记忆抽取及后台整理。
-其它 Studio 参数由组件初始化文件固定，不再要求配置环境变量。
-加 `--check` 只检查，不下载、不打开 Memory Space。
+自动加载仓库根目录 `.env`，已导出的环境变量优先；兼容 `.env.qwen`。
+DeepSeek 模式的回复和记忆处理都使用 `DEEPSEEK_API_KEY`，不再要求额外 OpenAI key。
+`--llm openai` / `--mode realtime` 使用 `OPENAI_API_KEY`；`--llm qwen` 使用
+`DASHSCOPE_API_KEY`。`--llm local` 仅支持 MLX。
+
+下面是可选覆盖项，正常启动无需设置：
+
+| 配置 | 用途 |
+| --- | --- |
+| `STUDIO_BACKEND` / `--backend` | `cuda` 或 `mlx`；未指定时 Linux 默认 CUDA，Mac 默认 MLX |
+| `STUDIO_DEVICE` / `--device` | CUDA ASR/Router 设备，默认 `cuda:0` |
+| `STUDIO_TTS_DEVICE` / `--tts-device` | Breeze CUDA 设备，默认与 Studio 相同 |
+| `STUDIO_MODELS_DIR` | 模型根目录，默认 `studio/models/` |
+| `BREEZE_CODE_DIR` | Breeze CUDA streaming 实现目录 |
+| `BREEZE_MODEL_DIR` | Breeze CUDA 权重目录，未指定则复用旁边的 `breeze-tts-2` |
+
+命令行参数优先于环境变量和 `.env`。两种后端分别检查依赖；CUDA 不检查或下载 MLX。
+`python -m studio --check` 只检查，不下载、不打开 Memory Space。
 
 检查通过后，完整的原有权重以本地链接复用到 `studio/models/`，缺少的权重自动下载；
 中断后再次启动会复用下载缓存。选中的模型预热失败会阻止服务启动。
@@ -62,8 +125,19 @@ VoiceMem 库自身的多语言默认 prompt 保留。四秒追问只针对明确
 
 离线回归覆盖状态和协议；真实音色、麦克风与端到端延时需要完整原生模型环境验收。
 
-Studio uses `transformers==5.16.1` and `huggingface-hub>=1.5,<2` with
-`mlx-audio==0.5.1`. Install the complete `studio` extra together; do not use
-`--no-deps` to bypass dependency constraints.
+MLX uses `transformers==5.16.1`, Hub 1.x, and `mlx-audio==0.5.1`.
+CUDA uses Torch 2.6.0, `transformers==4.57.3`, Hub 0.x, and `qwen-tts==0.1.1`.
+Install the matching extra in its own environment; do not combine both extras.
 
 情绪识别使用共享的 SenseVoiceSmall CPU 实例，保留情绪标签，不再生成多模态情绪原因。
+
+## 可选：CUDA 性能验证
+
+CUDA 默认预热并使用 depth decoder 的编译加速，首次启动需要等待 CUDA graph 准备。
+完成的语音段在日志中报告 `[tts-cuda] RTF`；RTF 小于 1 表示交付速度快于音频播放。
+激活 CUDA 环境后，可用以下命令验证单卡供给速度（合成测试，不访问个人记忆或 LLM API）：
+
+```bash
+python -m evals.breeze_cuda_latency --device cuda:0 --with-asr --assert-realtime
+python -m evals.breeze_cuda_latency --device cuda:0 --with-asr --segmented --assert-realtime
+```

@@ -55,9 +55,11 @@ def build_app(agent):
 
 def main(argv=None):
     """Check all prerequisites, acquire weights, warm providers, then serve."""
-    args = parse_args(argv)
+    tts = None
     try:
-        from .utils.environment.component import prepare
+        from .utils.environment.component import load_environment, prepare
+        load_environment()
+        args = parse_args(argv)
         prepare(args)
         from .utils.startup.initialize import inspect
         inspect(args)
@@ -73,6 +75,8 @@ def main(argv=None):
         configure(ROOT / 'prompt/logs')
         from .voiceagent import VoiceAgent
         agent = VoiceAgent(args)
+        if args.mode == 'llm_tts':
+            tts = agent.vm.utils.get('tts')
         agent.warmup()
         app = build_app(agent)
         import uvicorn
@@ -81,3 +85,6 @@ def main(argv=None):
     except (ImportError, RuntimeError, ValueError, OSError) as exc:
         print(f'[startup] 无法启动：{exc}', flush=True)
         raise SystemExit(1) from None
+    finally:
+        if tts is not None and hasattr(tts, 'aclose'):
+            asyncio.run(tts.aclose())

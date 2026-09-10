@@ -25,6 +25,7 @@ classifiers = [
 # 之前把这些拆在 [slm] extra 里，用户按 README 装完基础包仍然
 # ModuleNotFoundError: funasr —— 名字叫 slm，没人想得到 ASR 在里面。
 dependencies = [
+    "python-dotenv>=1,<2",
     "numpy",
     "openai",
     "httpx>=0.27,<1",     # DeepSeek SSE / 可取消的流式回复，独立于 OpenAI SDK
@@ -51,6 +52,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+studio-cuda = [
+    "torch==2.6.0",
+    "torchaudio==2.6.0",
+    "torchvision==0.21.0",
+    "transformers==4.57.3",
+    "qwen-tts==0.1.1",
+    "gradio>=5,<6",
+    "sentence-transformers==5.7.0",
+    "funasr==1.4.14",
+    "modelscope==1.39.1",
+    "numpy==1.26.4",
+    "scipy==1.17.1",
+    "huggingface-hub>=0.34,<1",
+    "onnxruntime",
+]
+
 studio = [
     "transformers==5.16.1",
     "mlx==0.32.2",

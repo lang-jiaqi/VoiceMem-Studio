@@ -90,14 +90,21 @@ ordinary replies disable thinking, while deep reasoning preserves the router's
 selection. Memory workers and display rewriting use the selected memory model.
 Startup reports missing credentials, dependencies, versions, assets, policies,
 and weights before opening memory.
-Only credentials come from environment; component initialization supplies fixed
-Studio tuning and shared memory model paths. Complete legacy weights are linked
+Repository `.env` files supply credentials and deployment options without overriding
+exported environment variables. Both platforms use `python -m studio` after
+activating their separately installed environment; `python web/run.py` remains
+the compatibility entry point. No platform-specific shell launcher is required.
+The backend defaults to CUDA on Linux and MLX on macOS, with CUDA devices
+defaulting to `cuda:0`. Environment variables and explicit CLI flags remain
+optional overrides for the backend and ASR/router or TTS device. Complete legacy weights are linked
 into `studio/models/`; missing artifacts download there with resumable caching.
 The DeepSeek provider is also passed into VoiceMem's internal extraction,
 annotation, and cleanup workers, so their model and endpoint cannot fall back to
 an OpenAI model name.
-Studio pins Transformers 5.16.1 with Hugging Face Hub 1.x to satisfy
-MLX Audio 0.5.1. The memory package accepts Transformers 4.52.3 through 5.x;
+The MLX extra pins Transformers 5.16.1 with Hugging Face Hub 1.x to satisfy
+MLX Audio 0.5.1. The separate CUDA extra pins Torch 2.6.0, Transformers 4.57.3,
+Hub 0.x and qwen-tts 0.1.1 for the native Breeze streaming runtime.
+The memory package accepts Transformers 4.52.3 through 5.x;
 its recognition and reply contracts remain unchanged.
 Selected model warmup failures prevent serving a silently degraded pipeline.
 `--check` performs inspection only. Model directories contain weights, while
@@ -495,6 +502,27 @@ Some speech jobs receive temporary first-chunk priority; afterward they rejoin
 weighted scheduling. Cancellation closes the generator and removes it from the
 active set. Creating an independent MLX thread or stream bypasses this safety
 and scheduling model.
+
+### CUDA
+
+`studio/core/utils/tts/cuda.py` loads the configured Breeze streaming checkout
+and checkpoint locally. Its public `stream(text, instruction)` contract matches
+MLX: sample-aligned 24 kHz PCM16. No separate HTTP service or listening port is
+required. One shared provider serializes model loading, generation and codec
+cleanup on a dedicated worker. A bounded output queue limits buffered PCM;
+cancellation is observed between acoustic frames and queued work checks its
+cancellation flag before entering inference. Application shutdown closes the
+worker. Initial and subsequent acoustic batches preserve the MLX chunk settings.
+CUDA depth decoding uses the existing compiled CUDA-graph path by default, with
+profile warmup completed before serving. The master `fast_all` override remains
+unset so it cannot disable that stage. Completed requests report delivery RTF;
+`evals/breeze_cuda_latency.py` measures warmed delivery and same-GPU ASR contention.
+
+ASR/router and TTS devices are explicit configuration. Shared GPU use still
+competes for resources; separate devices can be selected without changing the
+conversation pipeline. CUDA startup validates the selected devices, code checkout,
+and CUDA checkpoint including its bundled codec, and never acquires MLX weights.
+DeepSeek-only deployments require only DeepSeek credentials.
 
 ### Torch/MPS
 

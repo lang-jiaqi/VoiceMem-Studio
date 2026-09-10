@@ -67,7 +67,7 @@ def configure(self, args):
         "space": args.space, "embedding": {"provider": "local"},
         "slots": {"provider": "local"},
         "reply": {"llm": configuration(provider),
-                  "tts": {"provider": "breeze_mlx", "config": {}},
+                  "tts": {"provider": "breeze_cuda" if args.backend == "cuda" else "breeze_mlx", "config": {}},
                   "realtime": {"provider": "openai", "config": {"model": "gpt-realtime"}}},
     }
     # Memory extraction and cleanup must use the same provider as visible reply.
