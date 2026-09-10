@@ -29,28 +29,32 @@ studio/
 
 ## 启动
 
-在项目根目录激活已经安装好的 Python 3.12 环境。Linux / NVIDIA 使用：
+安装好对应的 Python 3.12 环境后，在项目根目录启动。Linux / NVIDIA 使用：
 
 ```bash
-source .venv-cuda/bin/activate
+./scripts/run_studio_cuda.sh
 ```
 
 macOS / Apple Silicon 使用：
 
 ```bash
-source .venv/bin/activate
+./scripts/run_studio_mlx.sh
 ```
 
-之后两边的启动命令完全相同，不需要额外脚本或后端参数：
+脚本自动使用对应虚拟环境、选择后端，并开启详细终端日志，不需要手动激活环境。
+两者仍调用同一个 Python 入口；如果已经激活了对应环境，也可以直接运行：
 
 ```bash
-python -m studio
+python -m studio --verbose
 ```
 
-未覆盖配置时，Linux 自动选择 CUDA，Mac 自动选择 MLX；默认 DeepSeek、中文、
-`demo-zh` 记忆空间和 `8787` 端口，CUDA 默认只使用 `cuda:0`。
+直接使用 Python 入口且未覆盖配置时，Linux 自动选择 CUDA，Mac 自动选择 MLX。
+默认 DeepSeek、中文、
+`studio-zh` 记忆空间和 `8787` 端口，CUDA 默认只使用 `cuda:0`。
 原来的 `python web/run.py` 仍使用同一入口。需要其他记忆空间时加 `--space 空间名`；
-需要详细日志时加 `--verbose`。
+直接使用 Python 入口时，省略 `--verbose` 可切换为精简终端日志。
+启动会沿用所选空间已保存的语言，不会重写已有记忆；旧的 `demo-zh` 仍可用
+`--space demo-zh` 打开。
 
 打开 `http://localhost:8787`；远程使用需 HTTPS 或本地 SSH 端口转发才能让浏览器使用麦克风。
 
@@ -130,6 +134,15 @@ CUDA uses Torch 2.6.0, `transformers==4.57.3`, Hub 0.x, and `qwen-tts==0.1.1`.
 Install the matching extra in its own environment; do not combine both extras.
 
 情绪识别使用共享的 SenseVoiceSmall CPU 实例，保留情绪标签，不再生成多模态情绪原因。
+
+## TTS 切句
+
+正文 TTS 使用两端共用的完整句优先切分：首段通常不再在短逗号分句处提交，
+后续优先句末，长句才在逗号等位置分段。首段文字缓冲等待上限为 450ms；
+后续为 600ms，浏览器确认正在播放且剩余音频充足时最多放宽到 1200ms。
+等待从该段首个正文片段进入缓冲开始计算，不包含 LLM 首字和 TTS 合成耗时。
+句末或 LLM 输出结束会立即提交，不固定等待到上限。长度兜底为首段 48、后续 100 字符，
+首段达到 28、后续达到 60 字符时允许逗号等软边界。语气指令和音频 chunk 参数未改变。
 
 ## 可选：CUDA 性能验证
 

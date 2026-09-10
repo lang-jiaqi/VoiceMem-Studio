@@ -113,6 +113,7 @@ class Reply:
         _lat = {"llm": 0.0, "seg": 0.0, "audio": 0.0, "pre": 0.0}
 
         queue: asyncio.Queue = asyncio.Queue()
+        text_queue: asyncio.Queue = asyncio.Queue()
 
         tts = memory_vm.utils.get("tts")
 
@@ -233,10 +234,56 @@ class Reply:
                     timeline.finish_segment(
                         segment_id, complete=state["complete"])
 
+        async def segment_text():
+            from studio.core.utils.tts.segmentation import SpeechBuffer
+            buffer = SpeechBuffer()
+
+            def audio_ahead():
+                if not timeline.checkpoint_seen or timeline.playback_state != "playing":
+                    return 0.0
+                return max(0.0, (timeline.sent_samples - timeline.rendered_cutoff_samples())
+                           / timeline.sample_rate)
+
+            try:
+                while True:
+                    remaining = buffer.remaining_wait(time.monotonic(), audio_ahead())
+                    final = False
+                    try:
+                        try:
+                            delta = text_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            if remaining is None:
+                                delta = await text_queue.get()
+                            else:
+                                # Recheck playback headroom while the LLM is stalled.
+                                delta = await asyncio.wait_for(text_queue.get(), min(remaining, 0.1))
+                    except asyncio.TimeoutError:
+                        pass
+                    else:
+                        final = delta is None
+                        if not final:
+                            buffer.append(delta, time.monotonic())
+                    for segment in buffer.ready(time.monotonic(), audio_ahead(), final=final):
+                        if not _lat["seg"]:
+                            _lat["seg"] = (time.monotonic() - _t0) * 1000
+                            if self.BARGE_DEBUG:
+                                print(f"[seg] 第一段 {len(segment.text)} 字 → {segment.text!r}", flush=True)
+                        queue.put_nowait((segment.text, segment.start, segment.end))
+                    if final:
+                        break
+            finally:
+                queue.put_nowait(None)
+
+        segmenter = asyncio.create_task(segment_text())
         synther = asyncio.create_task(synth())
         speaker = asyncio.create_task(speak())
-        reply, buf, sent = "", "", 0
+        reply = ""
         interrupted = False
+
+        async def _drop_pipeline():
+            for task in (segmenter, speaker, synther, *synths):
+                task.cancel()
+            await asyncio.gather(segmenter, speaker, synther, *synths, return_exceptions=True)
 
         _hot = self.hot_path_enter()
         try:
@@ -285,64 +332,34 @@ class Reply:
                     if not d:
                         continue
 
-                if (sent == 0 and d[:1].isspace()
-                        and len(buf.strip()) >= self._FIRST_MAX_CHARS):
-                    segment = buf.strip()
-                    leading = len(buf) - len(buf.lstrip())
-                    start = len(reply) - len(buf) + leading
-                    if not _lat["seg"]:
-                        _lat["seg"] = (time.monotonic() - _t0) * 1000
-                        if self.BARGE_DEBUG:
-                            print(f"[seg] 第一段 {len(segment)} 字（词边界切）"
-                                  f" → {segment!r}", flush=True)
-                    await queue.put((segment, start, start + len(segment)))
-                    buf, sent = "", sent + 1
                 reply += d
-                buf += d
                 timeline.append_text(d)
                 await send({"type": "answer_delta", "text": d})
-                if self._cut_point(buf, first=sent == 0):
-                    segment = buf.strip()
-                    leading = len(buf) - len(buf.lstrip())
-                    start = len(reply) - len(buf) + leading
-                    if not _lat["seg"]:
-                        _lat["seg"] = (time.monotonic() - _t0) * 1000
-                        if self.BARGE_DEBUG:
-                            print(f"[seg] 第一段 {len(segment)} 字 → {segment!r}",
-                                  flush=True)
-                    await queue.put((segment, start, start + len(segment)))
-                    buf, sent = "", sent + 1
-            if buf.strip():
-                segment = buf.strip()
-                leading = len(buf) - len(buf.lstrip())
-                start = len(reply) - len(buf) + leading
-                if not _lat["seg"]:
-                    _lat["seg"] = (time.monotonic() - _t0) * 1000
-                await queue.put((segment, start, start + len(segment)))
+                text_queue.put_nowait(d)
         except asyncio.CancelledError:
             interrupted = True
+        except Exception:
+            await _drop_pipeline()
+            self.hot_path_exit(_hot)
+            raise
         finally:
-            await queue.put(None)
-
-        async def _drop_pipeline():
-
-            speaker.cancel()
-            synther.cancel()
-            for t in synths:
-                t.cancel()
-            await asyncio.gather(
-                speaker, synther, *synths, return_exceptions=True)
+            text_queue.put_nowait(None)
 
         if interrupted:
             await _drop_pipeline()
         else:
 
             try:
+                await segmenter
                 await synther
                 await speaker
             except asyncio.CancelledError:
                 interrupted = True
                 await _drop_pipeline()
+            except Exception:
+                await _drop_pipeline()
+                self.hot_path_exit(_hot)
+                raise
             else:
 
                 self.hot_path_exit(_hot)

@@ -8,6 +8,7 @@ import numpy as np
 
 from voicemem.utils.audio.stream_io import resample
 from studio.core.utils.tts.audio_timing import TimedAudioChunk, TextTimestamp
+from studio.core.utils.tts.segmentation import cut_point
 from voicemem.llm_config import resolve_model
 
 TTS_MODEL = resolve_model(role="tts")
@@ -19,37 +20,6 @@ TTS_INSTRUCTIONS = ''
 
 BREEZE_SEED = 42
 SAMPLE_RATE = 24000
-
-_SENT_END  = "。！？!?…\n"
-_SOFT_END  = "，,、；;：: "
-#
-
-_FIRST_MIN = 2
-
-_FIRST_MAX = 24
-_SENT_MIN  = 2
-
-_SENT_MAX  = int('200' if TTS_BACKEND == 'qwen' else '60')
-
-_FIRST_SOFT = True
-
-_CUT_AT_COMMA = True
-_COMMA = "，,、；;：:"
-
-def cut_point(buf: str, first: bool) -> bool:
-    """Return the next safe speech boundary or zero while more text is needed."""
-    s = buf.strip()
-    if not s:
-        return False
-    if first:
-        ends = _SENT_END + _SOFT_END if _FIRST_SOFT else _SENT_END
-        if len(s) >= _FIRST_MIN and s[-1] in ends:
-            return True
-
-        return len(s) >= _FIRST_MAX and (buf[-1:].isspace() or not s[-1].isalnum())
-    return ((len(s) >= _SENT_MIN and s[-1] in _SENT_END)
-            or (_CUT_AT_COMMA and len(s) >= 12 and s[-1] in _COMMA)
-            or len(s) >= _SENT_MAX)
 
 class BaseTTS:
     """Stream mono PCM16 audio with optional text timing metadata."""

@@ -4,6 +4,7 @@ from contextlib import aclosing
 import os
 from pathlib import Path
 import runpy
+import subprocess
 import sys
 import tempfile
 import threading
@@ -26,7 +27,22 @@ class BackendConfigTests(unittest.TestCase):
                 self.assertEqual((args.backend, args.device, args.tts_device),
                                  (backend, device, device))
                 self.assertEqual((args.mode, args.llm, args.space, args.lang, args.port),
-                                 ('llm_tts', 'deepseek', 'demo-zh', 'zh', 8787))
+                                 ('llm_tts', 'deepseek', 'studio-zh', 'zh', 8787))
+
+    def test_explicit_space_still_overrides_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(parse_args(['--space', 'demo-zh']).space, 'demo-zh')
+
+    def test_shell_launchers_enable_verbose_and_forward_arguments(self):
+        root = Path(__file__).resolve().parents[1]
+        for backend in ('cuda', 'mlx'):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as cwd:
+                result = subprocess.run(
+                    ['bash', str(root / f'scripts/run_studio_{backend}.sh'), '--check'],
+                    cwd=cwd, env={**os.environ, 'STUDIO_PYTHON': '/bin/echo'},
+                    text=True, capture_output=True, check=True)
+                self.assertEqual(result.stdout.strip(),
+                                 f'-m studio --backend {backend} --verbose --check')
 
     def test_module_and_legacy_launchers_use_the_same_entry_point(self):
         root = Path(__file__).resolve().parents[1]

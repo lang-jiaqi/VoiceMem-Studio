@@ -44,15 +44,13 @@ async def benchmark(args):
         for index in range(args.repeats):
             texts = [args.text]
             if args.segmented:
-                from studio.core.utils.tts.providers import cut_point
-                texts, pending = [], ''
+                from studio.core.utils.tts.segmentation import SpeechBuffer
+                buffer = SpeechBuffer()
+                texts = []
                 for character in args.text:
-                    pending += character
-                    if cut_point(pending, first=not texts):
-                        texts.append(pending.strip())
-                        pending = ''
-                if pending.strip():
-                    texts.append(pending.strip())
+                    buffer.append(character, 0.0)
+                    texts.extend(segment.text for segment in buffer.ready(0.0))
+                texts.extend(segment.text for segment in buffer.ready(0.0, final=True))
 
             async def response():
                 for text in texts:

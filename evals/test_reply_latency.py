@@ -165,7 +165,6 @@ class DisplayTests(unittest.IsolatedAsyncioTestCase):
             tts_control=types.SimpleNamespace(split=lambda s: ("平静", s),
                                              smooth=lambda a, b: b, instruction=lambda *a: ""),
             build_reply_context=lambda *a, **kw: "original-memory", BARGE_DEBUG=False,
-            _FIRST_MAX_CHARS=20, _cut_point=lambda *a, **k: False,
             _lat_note=lambda _: "test", _mem_line=lambda: "test",
             TimedAudioChunk=type("TimedAudioChunk", (), {}),
             hot_path_enter=lambda: {}, hot_path_exit=lambda _: None,
@@ -176,6 +175,7 @@ class DisplayTests(unittest.IsolatedAsyncioTestCase):
             utils=types.SimpleNamespace(get=lambda _: types.SimpleNamespace(stream=tts_stream)))
         timeline = types.SimpleNamespace(
             output_id="output-1", sample_rate=24000, sent_samples=480, context_saved=False,
+            checkpoint_seen=False, playback_state="idle",
             begin_segment=lambda *a: 0, append_audio=lambda _: None, append_text=lambda _: None,
             finish_segment=lambda *a, **kw: None, mark_generation_complete=lambda: None,
             wait_playback_done=lambda: asyncio.wait_for(displayed.wait(), 2))

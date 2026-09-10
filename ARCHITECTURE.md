@@ -82,7 +82,9 @@ moving model inference onto the event loop. GPU and Torch schedulers remain
 process-scoped. Speculative generation captures its memory instance and space
 before scheduling; cancellation also reaps pending route work.
 
-Startup defaults to DeepSeek reply and Breeze TTS.
+Startup defaults to DeepSeek reply, Breeze TTS, and the `studio-zh` Memory Space.
+An explicit `--space` selects another existing or new space; stored language and
+memory data are preserved when the default selection changes.
 Qwen is selectable with `--llm qwen`: `qwen3.6-flash` uses the international
 DashScope OpenAI-compatible endpoint with streamed content and request-scoped
 thinking. Credentials come from `DASHSCOPE_API_KEY` or ignored `.env.qwen`;
@@ -93,7 +95,9 @@ and weights before opening memory.
 Repository `.env` files supply credentials and deployment options without overriding
 exported environment variables. Both platforms use `python -m studio` after
 activating their separately installed environment; `python web/run.py` remains
-the compatibility entry point. No platform-specific shell launcher is required.
+the compatibility entry point. Optional `scripts/run_studio_cuda.sh` and
+`scripts/run_studio_mlx.sh` select the corresponding interpreter and backend,
+enable verbose terminal logging, and forward arguments to that same entry point.
 The backend defaults to CUDA on Linux and MLX on macOS, with CUDA devices
 defaulting to `cuda:0`. Environment variables and explicit CLI flags remain
 optional overrides for the backend and ASR/router or TTS device. Complete legacy weights are linked
@@ -454,6 +458,18 @@ The TTS layer accepts plain 24 kHz mono PCM16 bytes and optional
 `TimedAudioChunk` alignment metadata. Segment concurrency is selected by the
 provider; local GPU providers can require serialized segments.
 
+`studio/core/utils/tts/segmentation.py` owns sentence-first text boundaries and
+the pending text buffer. A reply-local segmenter consumes plain text after tone
+parsing, independently of LLM iteration, so a stalled token stream cannot prevent
+a deadline flush. Sentence endings release promptly; comma boundaries are a
+fallback for long phrases. Bounded first/rest waits and maximum lengths prevent
+indefinite buffering. Confirmed active playback headroom permits a longer bounded
+wait for subsequent phrases, without changing client playback or filler gates.
+Text offsets retain the original reply, including punctuation; only unsent text
+may be regrouped. Cancellation reaps the segmenter together with synthesis and
+delivery, and discarded text is never flushed into a replacement reply. This
+policy is shared by CUDA and MLX; their inference and PCM chunk settings are unchanged.
+
 ### Spoken backchannels
 
 Pause acknowledgements and delayed continuation are separate decisions. Pauses
@@ -482,8 +498,6 @@ The persona uses an optimistic, proud fictional superintelligence identity with
 the limitation of being unable to physically accompany the user. Identity
 questions use a fixed introduction in the persona prompt. Knowledge and memory
 claims remain grounded; this characterization does not grant additional tools.
-After the first TTS segment, comma boundaries require twelve characters to avoid
-repeated startup overhead on tiny fragments. Sentence endings still flush promptly.
 
 `studio/core/utils/turn_taking/backchannel.py` decides whether to emit a short acknowledgement during
 a user pause and selects a token appropriate to language and context. Audio is

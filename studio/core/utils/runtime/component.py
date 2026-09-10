@@ -80,8 +80,6 @@ def configure(self, args):
     self.use_space(self.ARGS.space)
     self.TURN_AUDIO_DIR = _ROOT / 'results' / 'turn_audio'
     self._THINKING_ROUTER_ON = True
-    self._cut_point = utils.cut_point
-    self._FIRST_MAX_CHARS = 24
     self.ACOUSTIC_MIN_SCORE = 0.92
     self.ACOUSTIC_TRUST = set(('开心,委屈,惊讶').split(','))
     self._EMO_PROTO = {'开心': ['我今天特别开心', '太好了我很高兴', '真不错，我挺满意的', '哈哈太有意思了'], '悲伤': ['我很难过', '我心里特别难受', '我好失落', '这事让我挺沮丧的'], '委屈': ['我好生气', '太气人了', '凭什么这样对我', '我觉得很不公平'], '焦虑': ['我压力好大', '我有点紧张', '我很担心做不完', '这事儿让我睡不着'], '疲惫': ['我好累啊', '累死了，撑不住了', '一天下来人都空了'], '平静': ['今天天气不错', '我明天要去开会', '早上好', '我叫小明', '这个东西放在桌上', '我对花生过敏', '我在一家公司上班', '下周三下午三点有个会', '我不能吃什么', '这个怎么用', '帮我看一下', '我住在市中心']}
