@@ -607,6 +607,20 @@ Interruption separates reversible detection from cancellation:
 Generated, sent, buffered, rendered, and heard output are different states. The
 unheard generated tail is not conversation history.
 
+The HTTP application starts its supervised desktop pet during server startup,
+using the configured listening port, and stops that process during server shutdown.
+Opening the browser page is not required to launch the pet.
+The optional desktop pet observes the existing pet WebSocket without starting
+another conversation. Its renderer follows output-identified playback checkpoints
+for mouth movement and uses interruption/disconnect handling plus a bounded
+watchdog to close the mouth. Backchannel notifications drive nods; completed
+playback can select one random tilt. Linked mode disables timer-driven tilts,
+and pending actions wait for the required pose to finish loading. The pet starts
+lying down. Conversation startup and detected user voice select the sitting pose;
+a local silence timer returns it to lying down. VAD transitions come from the
+existing capture state or realtime provider, not raw microphone packet arrival.
+Conversation closure clears active voice state; resting suppresses random gestures.
+
 ## 12. Session and persistent memory
 
 Session Context contains turns not yet represented by persistent memory. It is

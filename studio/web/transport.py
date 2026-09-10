@@ -165,7 +165,7 @@ def hits_payload(result, has_audio=None, cluster_of=None):
     }
 
 def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None,
-              set_lang=None, title=None):
+              set_lang=None, title=None, pet_port=8787):
     """Build the browser API and WebSocket routes using injected session callbacks."""
     app = FastAPI()
     title = title or make_title_generator()
@@ -175,11 +175,14 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
     async def ws(sock: WebSocket):
         await sock.accept()
         await sock.send_json({"type": "session_ready", "mode": mode})
+        await pet_hub.broadcast({"type": "conversation_started"})
         try:
 
             await session(TeeSocket(sock, pet_hub))
         except WebSocketDisconnect:
             pass
+        finally:
+            await pet_hub.broadcast({"type": "conversation_ended"})
 
     @app.websocket("/ws-pet")
     async def ws_pet(sock: WebSocket):
@@ -192,6 +195,10 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
             pass
         finally:
             pet_hub.discard(sock)
+
+    @app.on_event("startup")
+    def _start_pet():
+        pet.ensure_running(f"ws://127.0.0.1:{pet_port}/ws-pet")
 
     @app.on_event("shutdown")
     def _stop_pet():

@@ -104,9 +104,16 @@ class TeeSocket:
     def __init__(self, sock, hub: PetHub):
         self._sock = sock
         self._hub = hub
+        self._voice_active = False
 
     def __getattr__(self, name):
         return getattr(self._sock, name)
+
+    async def voice_activity(self, active: bool) -> None:
+        """Notify pet observers on VAD transitions without forwarding microphone audio."""
+        if active != self._voice_active:
+            self._voice_active = active
+            await self._hub.broadcast({"type": "user_voice", "active": active})
 
     async def send_json(self, data, *args, **kwargs):
         if isinstance(data, dict) and data.get("type") in self._TEE_OUT:

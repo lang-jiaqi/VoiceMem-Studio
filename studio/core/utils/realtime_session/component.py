@@ -243,11 +243,15 @@ class RealtimeSession:
                                     "response_cancel_not_active"):
                                 print(f"[web] realtime 事件错误：{err or ev}", flush=True)
                         elif t.endswith("input_audio_buffer.speech_stopped"):
+                            if notify_voice := getattr(sock, "voice_activity", None):
+                                await notify_voice(False)
 
                             turn["stopped"] = time.monotonic()
                             if self.BARGE_DEBUG:
                                 print("[lat] OpenAI 判说完", flush=True)
                         elif t.endswith("input_audio_buffer.speech_started"):
+                            if notify_voice := getattr(sock, "voice_activity", None):
+                                await notify_voice(True)
 
                             since = (time.monotonic() - turn["t0"]) * 1000
                             if self.BARGE_DEBUG:

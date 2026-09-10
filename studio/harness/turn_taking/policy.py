@@ -2,12 +2,16 @@
 import re
 from dataclasses import dataclass, field
 
+BACKCHANNEL_QUIET_S = 2.0
+BACKCHANNEL_GROUP_SPLIT_S = 6.0
+BACKCHANNEL_EXCLUDED = ({"哦", "哦哦"}, {"是吗？"})
+
 CONTROLS = {
     "pause_ms": 100,
     "unfinished_wait_ms": 1200,
     "unfinished_followup_s": 2.5,
     "backchannel_resume_ms": 300,
-    "backchannel_cooldown_ms": 900,
+    "backchannel_cooldown_ms": 2000,
     "backchannel_opening_s": 3.0,
     "backchannel_recovery_s": 6.0,
     "backchannel_late_s": 10.0,
@@ -98,7 +102,7 @@ class BackchannelPolicy:
 
     min_chars: int = field(default_factory=lambda: 4)
 
-    refractory_s: float = field(default_factory=lambda: 0.9)
+    refractory_s: float = field(default_factory=lambda: 2.0)
 
     p_max: float = field(default_factory=lambda: 0.9)
     #: Within-turn count quotas for 0–3s, 3–6s, and the remainder.

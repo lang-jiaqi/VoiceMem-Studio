@@ -50,6 +50,7 @@ def build_app(agent):
         agent.memory_snapshot, agent.audio_of,
         spaces=(agent.list_spaces, agent.create_space, agent.use_space, lambda: agent.ACTIVE_SPACE),
         set_lang=agent.set_lang, title=transport.make_title_generator(agent.REPLY),
+        pet_port=agent.ARGS.port,
     )
 
 

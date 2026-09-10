@@ -17,6 +17,8 @@ def emitting() -> bool:
 DEBUG = False
 
 from studio.harness.turn_taking.policy import (BackchannelPolicy, SessionFrequencyCurve, _ASK, _INVITE, _DISCLOSE)
+from studio.harness.turn_taking.policy import (
+    BACKCHANNEL_QUIET_S, BACKCHANNEL_GROUP_SPLIT_S, BACKCHANNEL_EXCLUDED)
 
 ZH_AFFIRMATIVE_TOKENS = ("哦", "哦哦", "嗯嗯", "嗯", "对", "明白")
 ZH_QUESTION_TOKENS = ("哦？", "嗯？", "是吗？")
@@ -172,6 +174,9 @@ class Backchannel:
             return None
         if silence < self.policy.gap_s or (not unfinished and silence >= self.policy.max_gap_s):
             return None
+        speech = speech_s or (now - self._speech_started if self._speech_started else 0.0)
+        if speech < BACKCHANNEL_QUIET_S:
+            return None
         clean = "".join(ch for ch in (text or "") if ch.isalnum())
         # Very short turns are usually complete greetings or acknowledgements;
         # do not fill their first silence. Unfinished clauses still qualify once
@@ -183,7 +188,6 @@ class Backchannel:
         self._armed = False
         if self._last_at is not None and now - self._last_at < max(0.0, self.policy.refractory_s):
             return None
-        speech = speech_s or (now - self._speech_started if self._speech_started else 0.0)
         phase = self.policy.session_curve.phase(speech)
         target = self._phase_targets[phase]
         if target is None:
@@ -196,7 +200,12 @@ class Backchannel:
                   f"{text[-12:]!r}", flush=True)
         if self._phase_emitted[phase] >= target:
             return None
-        if unfinished:
+        if lang == "zh":
+            excluded = BACKCHANNEL_EXCLUDED[speech >= BACKCHANNEL_GROUP_SPLIT_S]
+            pool = [t for t in (*ZH_AFFIRMATIVE_TOKENS, *ZH_QUESTION_TOKENS)
+                    if t not in excluded and (available is None or t in available)]
+            token = self.rng.choice([t for t in pool if t not in self._recent] or pool) if pool else ""
+        elif unfinished:
             pool = (_TOKENS.get(lang) or _TOKENS["en"])["continuer"]
             pool = [t for t in pool if available is None or t in available]
             token = self.rng.choice([t for t in pool if t not in self._recent] or pool) if pool else ""

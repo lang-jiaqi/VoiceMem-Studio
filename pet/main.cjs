@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage } = require
 const fs = require('node:fs');
 const path = require('node:path');
 const { SIZES, selectPose, fitBounds } = require('./state.cjs');
-let win, tray, mode = 'dot', anchor, dragging, saveTimer;
+let win, tray, mode = 'lie', anchor, dragging, saveTimer;
 const smoke = process.argv.includes('--smoke-test');
 // --ws=... 由 VoiceMem 后端拉起时传进来，原样转交给渲染进程里的 voicemem-link.js。
 // 不传就是原来那只独立桌宠，不会去连任何东西。
@@ -32,7 +32,7 @@ else {
     const area = screen.getPrimaryDisplay().workArea;
     anchor = { x: area.x + area.width - 24, y: area.y + area.height - 24 };
     if (!smoke) { try { const p = JSON.parse(fs.readFileSync(settingsFile())); if (Number.isFinite(p.x) && Number.isFinite(p.y)) anchor = p; } catch {} }
-    win = new BrowserWindow({ ...fitBounds(anchor, SIZES.dot, screen.getDisplayNearestPoint(anchor).workArea),
+    win = new BrowserWindow({ ...fitBounds(anchor, SIZES[mode], screen.getDisplayNearestPoint(anchor).workArea),
       frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, resizable: false,
       maximizable: false, fullscreenable: false, show: false, hasShadow: false,
       webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, offscreen:smoke, backgroundThrottling:!smoke } });
@@ -41,6 +41,18 @@ else {
     win.webContents.on('will-navigate', e => e.preventDefault());
     ipcMain.handle('initial-mode', () => mode);
     ipcMain.on('toggle', toggle);
+    ipcMain.on('activate', (_event, pose) => {
+      if(['sit','lie'].includes(pose)&&mode!==pose)setMode(pose);
+      else if(mode==='dot')setMode('lie');
+    });
+    ipcMain.on('actions', () => Menu.buildFromTemplate([
+      { label: '坐姿', type: 'radio', checked: mode === 'sit', click: () => setMode('sit') },
+      { label: '躺姿', type: 'radio', checked: mode === 'lie', click: () => setMode('lie') },
+      { type: 'separator' },
+      ...[['歪头笑', 'tilt'], ['点头', 'Nod'], ['摇头', 'Shake']].map(([label, action]) => ({
+        label, enabled: mode === 'sit', click: () => win.webContents.send('action', action)
+      }))
+    ]).popup({ window: win }));
     ipcMain.on('collapse', () => setMode('dot'));
     ipcMain.on('quit', () => app.quit());
     ipcMain.on('pointer', (_e, hit) => { if (!dragging) win.setIgnoreMouseEvents(!hit, { forward: true }); });
@@ -144,7 +156,7 @@ else {
         console.log('SMOKE PASS', JSON.stringify(results)); app.exit(0);
       } catch (e) { console.error(e); app.exit(1); }
     } else {
-      if (expanded) setMode(selectPose());
+      if (expanded) setMode('lie');
       win.showInactive();
     }
   });

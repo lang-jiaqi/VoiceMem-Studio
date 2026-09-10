@@ -14,6 +14,12 @@ async function render(mode) {
   }
 }
 api.onMode(render); api.initial().then(render);
+document.querySelector('#actions').hidden = !api.actions;
+document.querySelector('#actions').addEventListener('click', () => api.actions?.());
+api.onAction?.(action => {
+  if (action === 'tilt') window.petRig.tilt();
+  else window.petRig.gesture(action).catch(console.error);
+});
 let gesture, suppressClick = false;
 for (const el of [dot,portrait,live]) {
   el.addEventListener('pointerdown', e => { if (e.button !== 0 || (el===live&&!window.petRig.hitTest(e.clientX,e.clientY))) return; el.setPointerCapture(e.pointerId); gesture = { x:e.screenX,y:e.screenY,moved:false }; api.dragStart(); });

@@ -143,6 +143,8 @@ class Capture:
             cur = st.text.strip()
             busy = bool(is_busy and is_busy())
             input_echo = bool(heard_from_agent() and self._is_echo(cur, heard_from_agent()))
+            if notify_voice := getattr(sock, "voice_activity", None):
+                await notify_voice(st.state == "<speak>" and not input_echo)
             if st.state == "<speak>" and not getattr(st, "speech_end", 0):
                 last_speak_t = time.monotonic()
 
