@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from voicemem.utils.audio.emotion.attribution_qwen_omni import OmniTurnAttributor
+from voicemem.utils.audio.emotion.attribution import TurnAttributor
 from voicemem.utils.audio.emotion.graph_memory import EmotionGraphMemoryStore, format_emotion_graph_context
 from voicemem.utils.audio.emotion.memory_store import EmotionMemoryStore
 from voicemem.utils.audio.emotion.query_terms import build_query_terms
@@ -232,11 +232,11 @@ def run_anomaly_turn(
     left_brain: LeftBrainSearchClient,
     emotion_store: EmotionMemoryStore,
     emotion_graph: EmotionGraphMemoryStore,
-    omni_attributor: OmniTurnAttributor,
+    attributor: TurnAttributor,
     relevance_filter: RightChannelRelevanceFilter | None = None,
     config: FusionConfig | None = None,
 ) -> AnomalyTurnResult:
-    """异常轮：检索 → Omni 归因 → 写情绪图（归因前 reply 上下文供 Omni 使用）。"""
+    """Retrieve context, classify the anomalous turn, and persist supported evidence."""
     cfg = config or FusionConfig()
 
     retrieved = retrieve_for_reply(
@@ -261,7 +261,7 @@ def run_anomaly_turn(
         vad_config=cfg,
     )
 
-    omni_result = omni_attributor.analyze_turn_with_audio(
+    attribution_result = attributor.analyze_turn_with_audio(
         audio_path=audio_path,
         asr_text=asr_text,
         left_memory_block=pre_reply.left_context_summary,
@@ -269,22 +269,22 @@ def run_anomaly_turn(
         turn=turn,
     )
 
-    meta: dict[str, Any] = {"attributor": "qwen_omni"}
-    if omni_result.retrieval_snippet:
-        meta["retrieval_snippet"] = list(omni_result.retrieval_snippet)
+    meta: dict[str, Any] = {"attributor": type(attributor).__name__}
+    if attribution_result.retrieval_snippet:
+        meta["retrieval_snippet"] = list(attribution_result.retrieval_snippet)
 
     attribution = EmotionAttribution(
         turn_id=turn.turn_id,
         session_id=turn.session_id,
         trigger="anomaly",
-        analysis_text=omni_result.analysis_text,
+        analysis_text=attribution_result.analysis_text,
         vad_at_trigger=turn.vad,
         left_context_summary=pre_reply.left_context_summary,
-        emotion=omni_result.emotion,
-        acoustic_evidence=list(omni_result.acoustic_evidence),
-        semantic_evidence=list(omni_result.semantic_evidence),
-        related_nodes=list(omni_result.related_nodes),
-        graph_delta=omni_result.graph_delta,
+        emotion=attribution_result.emotion,
+        acoustic_evidence=list(attribution_result.acoustic_evidence),
+        semantic_evidence=list(attribution_result.semantic_evidence),
+        related_nodes=list(attribution_result.related_nodes),
+        graph_delta=attribution_result.graph_delta,
         user_utterance_index=turn.user_utterance_index,
         metadata=meta,
     )
@@ -298,7 +298,7 @@ def run_anomaly_turn(
     )
 
 
-def build_omni_attribution_context(
+def build_attribution_context(
     *,
     asr_text: str,
     turn: TurnEmotionRecord,
@@ -307,7 +307,7 @@ def build_omni_attribution_context(
     emotion_graph: EmotionGraphMemoryStore | None = None,
     config: FusionConfig | None = None,
 ) -> tuple[str, str]:
-    """为 Omni 归因准备左脑摘要与情绪图上下文（不构筑回复 prompt）。"""
+    """为 emotion classifier 归因准备左脑摘要与情绪图上下文（不构筑回复 prompt）。"""
     cfg = config or FusionConfig()
     query = (asr_text or "").strip()
 
@@ -349,15 +349,15 @@ def run_rightbrain_memory_extract(
     user_id: str,
     left_brain: LeftBrainSearchClient | None,
     emotion_graph: EmotionGraphMemoryStore,
-    omni_attributor: OmniTurnAttributor,
+    attributor: TurnAttributor,
     config: FusionConfig | None = None,
 ) -> EmotionAttribution:
-    """异常轮右脑记忆提取：左脑摘要 + Omni 多模态归因 + 情绪图写入（不含回复 prompt）。
+    """异常轮右脑记忆提取：左脑摘要 + emotion classifier 多模态归因 + 情绪图写入（不含回复 prompt）。
 
     归因 JSON 落盘由调用方 ``EmotionLayer.apply_attribution`` 负责，与 ``run_anomaly_turn`` 一致。
     """
     cfg = config or FusionConfig()
-    left_summary, graph_emotion_context = build_omni_attribution_context(
+    left_summary, graph_emotion_context = build_attribution_context(
         asr_text=asr_text,
         turn=turn,
         user_id=user_id,
@@ -366,7 +366,7 @@ def run_rightbrain_memory_extract(
         config=cfg,
     )
 
-    omni_result = omni_attributor.analyze_turn_with_audio(
+    attribution_result = attributor.analyze_turn_with_audio(
         audio_path=audio_path,
         asr_text=asr_text,
         left_memory_block=left_summary,
@@ -374,22 +374,22 @@ def run_rightbrain_memory_extract(
         turn=turn,
     )
 
-    meta: dict[str, Any] = {"attributor": "qwen_omni", "pipeline": "rightbrain_memory_extract"}
-    if omni_result.retrieval_snippet:
-        meta["retrieval_snippet"] = list(omni_result.retrieval_snippet)
+    meta: dict[str, Any] = {"attributor": type(attributor).__name__, "pipeline": "rightbrain_memory_extract"}
+    if attribution_result.retrieval_snippet:
+        meta["retrieval_snippet"] = list(attribution_result.retrieval_snippet)
 
     attribution = EmotionAttribution(
         turn_id=turn.turn_id,
         session_id=turn.session_id,
         trigger="anomaly",
-        analysis_text=omni_result.analysis_text,
+        analysis_text=attribution_result.analysis_text,
         vad_at_trigger=turn.vad,
         left_context_summary=left_summary,
-        emotion=omni_result.emotion,
-        acoustic_evidence=list(omni_result.acoustic_evidence),
-        semantic_evidence=list(omni_result.semantic_evidence),
-        related_nodes=list(omni_result.related_nodes),
-        graph_delta=omni_result.graph_delta,
+        emotion=attribution_result.emotion,
+        acoustic_evidence=list(attribution_result.acoustic_evidence),
+        semantic_evidence=list(attribution_result.semantic_evidence),
+        related_nodes=list(attribution_result.related_nodes),
+        graph_delta=attribution_result.graph_delta,
         user_utterance_index=turn.user_utterance_index,
         metadata=meta,
     )

@@ -22,19 +22,19 @@ from voicemem import persona
 from voicemem.prompt_config import tts_prompts, context_prompts
 from voicemem.reply import deepseek_reply
 from voicemem.breeze_tts import BreezeMLXTTS
-from harness.turn_taking import backchannel
+from studio.core.utils.turn_taking.initialize import backchannel
 from voicemem import tts_control
 from web.harness import system_prompt
 
 # Actual web prompt assembly, without loading ASR/TTS models or memory DBs.
-tree = ast.parse((Path(os.environ['TEST_REPO']) / 'web/run.py').read_text())
+from evals.studio_helpers import studio_tree, execute
+tree = studio_tree()
 names = {'_rt_persona', '_by_lang', '_speak_instruction', '_tone_note'}
 ns = dict(persona=persona, tts_control=tts_control, SPACE_LANG='zh', MODE='llm_tts',
           system_prompt=system_prompt,
           _SPEAK_BASE=tts_prompts()['base'], _TONE=tts_prompts()['fallback_by_user_emotion'],
           _speak_base_env='')
-exec(compile(ast.Module(body=[n for n in tree.body if getattr(n,'name','') in names],
-                        type_ignores=[]), 'web/run.py', 'exec'), ns)
+execute([n for n in tree.body if getattr(n,'name','') in names], ns)
 system = ns['_rt_persona']('zh')
 wire = []
 original = httpx.AsyncClient
@@ -99,7 +99,7 @@ class PromptConfigTests(unittest.TestCase):
 
     def test_breeze_first_batch_keeps_explicit_override(self):
         with patch.dict(os.environ, {"VOICEMEM_BREEZE_FIRST_FRAMES": "1"}):
-            tts = BreezeMLXTTS(model="test-only", chunk_frames=2)
+            tts = BreezeMLXTTS(model="test-only", chunk_frames=2, first_frames=1)
             self.assertEqual(tts.first_frames, 1)
 
     def test_file_edits_reach_deepseek_and_breeze_and_backchannel(self):
@@ -127,12 +127,13 @@ class PromptConfigTests(unittest.TestCase):
         self.assertEqual(out['fallback'], '自定义基调。自定义焦虑回应。')
         self.assertEqual(out['styles']['zh'][0], '自定义附和语气。')
 
-    def test_harness_environment_prompt_reaches_actual_provider(self):
+    def test_stale_environment_does_not_replace_harness_prompt(self):
         self.env['VOICEMEM_SYSTEM_PROMPT'] = '用简短、温暖、通俗的对话陪伴人类。'
         result = self.run_probe()
         self.assertEqual(result.returncode, 0, result.stderr)
         out = json.loads(result.stdout)
-        self.assertTrue(out['system'].startswith(self.env['VOICEMEM_SYSTEM_PROMPT']))
+        self.assertTrue(out['system'].startswith('你是 VoiceMem Studio'))
+        self.assertNotIn(self.env['VOICEMEM_SYSTEM_PROMPT'], out['system'])
         self.assertIn('语音控制协议', out['system'])
 
     def test_invalid_json_fails_with_filename_instead_of_using_old_defaults(self):

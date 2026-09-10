@@ -35,7 +35,7 @@ flowchart LR
 
 ### Client plane
 
-Owned by `web/voicemem.html` and the AudioWorklets:
+Owned by `studio/web/voicemem.html` and the AudioWorklets:
 
 - microphone permission and browser audio graph;
 - browser acoustic echo cancellation;
@@ -49,7 +49,7 @@ mean that audio was heard.
 
 ### Conversation plane
 
-Owned primarily by `web/run.py`, `web/harness.py`, and `harness/`:
+Owned by `studio/core/voiceagent.py`, its `utils/` modules, and `studio/harness/`:
 
 - turn lifecycle and session wiring;
 - unfinished-utterance handling;
@@ -62,26 +62,58 @@ Owned primarily by `web/run.py`, `web/harness.py`, and `harness/`:
 This plane may use memory results but does not define factual or affective
 storage semantics.
 
-The repository-only `harness/` layer separates four dialogue policy areas:
+The four editable policy files are `studio/harness/{persona,speaking_style,
+reply_modes,turn_taking}/policy.py`. Each folder contains one policy module;
+execution belongs to the corresponding `studio/core/utils/` component. Studio
+uses one prompt per purpose without language variants. `--lang` still selects
+ASR and Memory Space language; the memory library retains its own prompt inputs.
 
-- `reply_modes/` owns the local post-ASR three-way reply router and reserves
-  `memory_cot`, `memory`, and `direct` contracts;
-- `persona/` reserves stable agent identity prompts;
-- `speaking_style/` owns the active context-dependent depth and textual emotion
-  arc instructions;
-- `turn_taking/` owns the session state machine, backchannel curve, backchannel
-  voice cache, and short-acknowledgement and long-work filler timing.
+The local Qwen3-0.6B router still assigns internal `fast`, `medium`, or `slow`
+labels after confirmed ASR. Missing default weights are downloaded into the
+`studio/models/reply-router/Qwen3-0.6B` directory with visible progress.
+Explicit model paths remain caller-owned.
 
-The persona folder remains a scaffold. Reply modes are code-owned contracts
-rather than per-mode prompt files. A local Qwen3-0.6B router assigns internal
-`fast`, `medium`, or `slow` labels after confirmed ASR and maps them to the three
-reply modes; stable mode identifiers are consumed by the turn-taking state
-machine. If the default router is absent, its lazy load downloads the snapshot
-into `models/reply-router/Qwen3-0.6B` and reports visible startup progress;
-explicit `VOICEMEM_THINKING_ROUTER_MODEL` values remain caller-owned.
-The Web composition root injects speaking-style prompts and executes the
-state-machine decisions. Low-level pause detection and browser audio transport
-remain in `web/run.py`.
+`studio/core/core.py` exposes service setup and the chronological controls:
+listen, merge continuation, stop warming, wait on unfinished speech, route,
+interrupt, commit early output or start a reply, and cancel on disconnect.
+`VoiceAgent` composes application utilities. `Conversation` owns per-WebSocket
+state and tasks explicitly; utility methods implement each control without
+moving model inference onto the event loop. GPU and Torch schedulers remain
+process-scoped. Speculative generation captures its memory instance and space
+before scheduling; cancellation also reaps pending route work.
+
+Startup defaults to DeepSeek reply and Breeze TTS.
+Qwen is selectable with `--llm qwen`: `qwen3.6-flash` uses the international
+DashScope OpenAI-compatible endpoint with streamed content and request-scoped
+thinking. Credentials come from `DASHSCOPE_API_KEY` or ignored `.env.qwen`;
+ordinary replies disable thinking, while deep reasoning preserves the router's
+selection. Memory workers and display rewriting use the selected memory model.
+Startup reports missing credentials, dependencies, versions, assets, policies,
+and weights before opening memory.
+Only credentials come from environment; component initialization supplies fixed
+Studio tuning and shared memory model paths. Complete legacy weights are linked
+into `studio/models/`; missing artifacts download there with resumable caching.
+The DeepSeek provider is also passed into VoiceMem's internal extraction,
+annotation, and cleanup workers, so their model and endpoint cannot fall back to
+an OpenAI model name.
+Studio pins Transformers 5.16.1 with Hugging Face Hub 1.x to satisfy
+MLX Audio 0.5.1. The memory package accepts Transformers 4.52.3 through 5.x;
+its recognition and reply contracts remain unchanged.
+Selected model warmup failures prevent serving a silently degraded pipeline.
+`--check` performs inspection only. Model directories contain weights, while
+model classes and factories live in `core/utils/<component>/`.
+
+`studio/core/voicemem.py` is the integration boundary for creating VoiceMem and
+opening its native stream. The current deployment is one process: memory is
+initialized before Studio starts accepting connections. There is no memory RPC
+server or second startup command. Streaming ASR, final ASR, VAD, EOT, and their
+worker/epoch guards remain in VoiceMem because the memory package also uses them.
+`studio/core/utils/asr/` initializes shared recognizers from Studio weight paths.
+
+`studio/web/` owns browser assets, HTTP/WebSocket transport, and the pet bridge.
+`studio/apps/` is available for application integrations. Original `web/run.py`
+and moved provider modules remain thin compatibility entry points; executable
+Studio implementations have one owner under `studio/`.
 
 ### Memory plane
 
@@ -101,8 +133,8 @@ not depend on browser code.
 
 Owned by provider modules and shared schedulers:
 
-- `local_llm.py`: local MLX reply generation and prefix/KV caching;
-- `tts.py`, `breeze_tts.py`, `breeze_fast.py`: speech providers and local
+- `studio/core/utils/llm/local.py`: local MLX reply generation and prefix/KV caching;
+- `studio/core/utils/tts/providers.py`, `component.py`, `cache.py`: speech providers and local
   synthesis support;
 - `utils/gpu_loop.py`: the single process-level MLX execution thread;
 - `utils/torch_lock.py`: serialization for shared Torch/MPS work;
@@ -115,14 +147,14 @@ reply, text, PCM, and timing contracts.
 
 Owned by:
 
-- `web/harness.py`: Studio Web persona, context directives, and dialogue
+- `studio/harness/`: Studio Web persona, context directives, and dialogue
   controls;
 - `prompt/llm_*.md` and `prompt/llm_context.json`: package/default LLM prompt
   inputs;
 - `prompt/tts.json`: TTS tone and backchannel synthesis configuration;
 - `prompt_config.py`: validated prompt loading and caching;
 - `prompt_trace.py`: asynchronous request tracing;
-- `web/logging_utils.py`: runtime log routing;
+- `studio/core/utils/logging_utils/component.py`: runtime log routing;
 - `evals/`: Studio behavioral and latency regressions.
 
 Prompt traces may contain complete conversation and memory context. They are
@@ -140,8 +172,9 @@ browser / application
 ```
 
 Allowed cross-cutting infrastructure includes normalized contracts,
-configuration, locks, schedulers, and logging. The memory package does not
-import from `web` or the repository-only `harness` package.
+configuration, locks, schedulers, and logging. The memory pipeline does not import Studio. Legacy explicit TTS and local-reply
+imports lazily resolve to Studio adapters, preserving provider injection and a
+single provider cache. Plain `import voicemem` does not load Studio or models.
 
 ## 4. Mode and provider model
 
@@ -183,11 +216,11 @@ profile and eval workflow are standardized on Python 3.12.
 | `Turn` | `voicemem/stream.py` | Confirmed user text and prepared memory |
 | `StreamState` | `voicemem/stream.py` | Partial ASR/VAD/EOT state |
 | Gate route | `voicemem/gate.py` | `backchannel`, `shallow`, or `deep` |
-| `Pending` | `web/run.py` | Application-ready confirmed turn |
-| `ReplySink` | `web/run.py` | Hidden speculative output timeline |
-| `TimedAudioChunk` | `voicemem/audio_timing.py` | Optional PCM text alignment |
-| `AudioTimeline` | `web/audio_timeline.py` | One output's text/media clock |
-| `SessionTurn` | `web/session_context.py` | Unpersisted dialogue context |
+| `Pending` | `studio/core/utils/contracts/component.py` | Application-ready confirmed turn |
+| `ReplySink` | `studio/core/utils/contracts/component.py` | Hidden speculative output timeline |
+| `TimedAudioChunk` | `studio/core/utils/tts/audio_timing.py` | Optional PCM text alignment |
+| `AudioTimeline` | `studio/core/utils/audio_timeline/component.py` | One output's text/media clock |
+| `SessionTurn` | `studio/core/utils/session_context/component.py` | Unpersisted dialogue context |
 
 Shared code consumes these meanings rather than provider-native objects.
 
@@ -303,7 +336,7 @@ response becomes authoritative.
 
 The Web demo uses EOT both to start speculative reply work and, after acoustic
 silence plus pause-policy approval, to end the Studio user turn. `VoiceStream` owns the
-immutable audio snapshot and final-ASR refinement; `web/run.py` owns the policy
+immutable audio snapshot and final-ASR refinement; `studio/core/utils/capture/component.py` owns the policy
 that starts LLM/TTS generation from the refined snapshot text. Streaming ASR
 continues to update the browser while that work runs. Resumed speech before turn
 commit cancels the buffered work before any transcript or audio is sent. Once EOT
@@ -314,11 +347,23 @@ cancels the stale reply and starts one reply from the complete turn. `ReplySink`
 replaces its buffered user-transcript event with that final text. Generated speech
 stays buffered until turn confirmation becomes the commit point for playback.
 
-Clearly unfinished voice turns have a separate continuation path. The Web demo
-plays a cached acknowledgement immediately, keeps the turn interruptible, and
+Clearly unfinished voice turns have a separate continuation path. The Studio session
+plays an eligible cached acknowledgement, keeps the turn interruptible, and
 merges resumed speech back into the unfinished text. If silence reaches the
-four-second follow-up deadline, it sends a continuation-specific instruction to
+2.5-second follow-up deadline measured from the last voiced frame, it sends a continuation-specific instruction to
 the reply model so the assistant gently asks the user to finish their thought.
+
+Pause protection and delayed follow-up use separate predicates. Brief planning
+prefaces may keep the existing continuation window, but only explicitly
+incomplete clauses authorize an acknowledgement plus delayed follow-up. Ordinary
+negations, isolated unknown characters, complete word suffixes, and question
+prefaces do not authorize that follow-up. Resumed speech cancels the timer and
+merges the continuation; disconnect cancels pending work. Deferred tasks capture
+their memory instance and space, and discard output if that ownership changes.
+Trailing conjunctions remain incomplete even without an ASR punctuation boundary.
+Follow-up wording acknowledges substantive preceding content when present; bare
+openings receive a brief invitation to continue without invented explanations.
+Speculative reply work is cancelled before entering continuation waiting.
 
 The Web pause gate does not add a second minimum to the configured turn
 confirmation: a complete voice turn remains eligible at the application's EOT
@@ -366,7 +411,7 @@ then sends ambiguous turns with bounded recent Session Context to Qwen3-0.6B
 outside the WebSocket loop under the process Torch lock. The Turn Gate remains a
 speculative retrieval hint and cannot force the final route. Context is included
 in the router cache key, so identical follow-up text in different conversations
-does not reuse a stale decision. Chinese input uses a Chinese routing policy.
+does not reuse a stale decision. All router input uses the same policy and bounded context template.
 Provider-neutral request options carry the required reasoning across async reply
 iteration: `direct` and `memory` use non-thinking generation, while `memory_cot`
 uses high effort. Reasoning content remains private and is never spoken.
@@ -382,7 +427,7 @@ compatibility.
 
 ### Prompt ownership
 
-The Studio Web system prompt and dialogue context live in `web/harness.py`.
+The Studio Web system prompt and dialogue context live in `studio/harness/`.
 Package/default prompt files live in `prompt/llm_*.md` and
 `prompt/llm_context.json`. TTS tone configuration is loaded from
 `prompt/tts.json`.
@@ -394,7 +439,7 @@ the speech loop.
 
 ### Tone and TTS
 
-The reply model may prefix text with a tone tag. `voicemem/tts_control.py` removes
+The reply model may prefix text with a tone tag. `studio/core/utils/tts/control.py` removes
 that control tag, smooths abrupt tone transitions, and converts it into a TTS
 instruction. Control tags are never spoken or stored as assistant text.
 
@@ -404,7 +449,36 @@ provider; local GPU providers can require serialized segments.
 
 ### Spoken backchannels
 
-`harness/turn_taking/backchannel.py` decides whether to emit a short acknowledgement during
+Pause acknowledgements and delayed continuation are separate decisions. Pauses
+with at least four alphanumeric characters can receive a probabilistic cached
+acknowledgement, including expressive statements; ordinary questions are
+excluded unless they invite acknowledgement. Only explicit dangling clauses
+schedule a delayed continuation prompt. Chinese ASR spacing and comma variants
+are normalized for that clause check. Complete turns do not receive a cached
+acknowledgement merely because reply generation is pending.
+Explicit incomplete two-character openings (such as 今天 or 因为) bypass the
+four-character acknowledgement minimum. Introductions such as 我现在是这么想的
+also retain the continuation window. Completed answers and greetings do not.
+The PCM comfort-noise level stays constant during speech and silence.
+Incomplete clauses do not emit pause-time backchannels: their confirmed-turn
+acknowledgement is the single mandatory handoff when a cached clip is available.
+Ordinary eligible pauses use 70/35/50 percent baseline probabilities. One
+acknowledgement is guaranteed during voice turns two to three, with a confirmed
+turn fallback if no eligible pause produced one; available audio and enabled
+backchannels remain prerequisites.
+Self-introduction segments use a shared TTS arc for both DeepSeek and Qwen:
+bright and proud initially, then explicitly sad and slower at the limitation
+clause. Qwen 3.6 additionally receives a model-specific prompt and general voice
+instruction. Instructions are attached to each segment, not spoken as text.
+
+The persona uses an optimistic, proud fictional superintelligence identity with
+the limitation of being unable to physically accompany the user. Identity
+questions use a fixed introduction in the persona prompt. Knowledge and memory
+claims remain grounded; this characterization does not grant additional tools.
+After the first TTS segment, comma boundaries require twelve characters to avoid
+repeated startup overhead on tiny fragments. Sentence endings still flush promptly.
+
+`studio/core/utils/turn_taking/backchannel.py` decides whether to emit a short acknowledgement during
 a user pause and selects a token appropriate to language and context. Audio is
 served from reviewed or prepared clips because generation on the live pause
 window is too late. Backchannels share playback and echo-reference plumbing but
@@ -513,7 +587,7 @@ scheduled. A later UI space change cannot redirect an existing write.
 | Factual and affective memory | Memory Space stores | Persistent |
 | Streaming ASR/VAD/EOT/gate state | `VoiceStream` | Input turn/session |
 | Turn-taking phase, latency estimate, and backchannel policy | `TurnTakingStateMachine` | WebSocket session |
-| Reply router model | `harness/reply_modes` | Process |
+| Reply router model | `studio/core/utils/reply_modes` | Process |
 | Reply mode | Confirmed `Pending` turn | Turn |
 | Early output buffer | `ReplySink` | Speculative assistant output |
 | Short-term dialogue | `SessionBuffer` | WebSocket session + Memory Space |
@@ -551,19 +625,19 @@ network-provider performance require the corresponding native environment.
 | Cross-brain search or ingest | `voicemem/orchestrator.py` |
 | ASR, VAD, EOT, speaker, scene, emotion | `voicemem/utils/audio/` and config |
 | Turn routing | `voicemem/gate.py` and streaming regressions |
-| Studio persona or pause policy | `web/harness.py` |
-| Spoken backchannel behavior | `harness/turn_taking/` and Web playback |
-| Tone-label protocol | `voicemem/tts_control.py`, prompts, and TTS wiring |
-| Reply provider | `voicemem/reply.py` or `local_llm.py`, then config |
-| Three-way reply routing | `harness/reply_modes/` and Web composition root |
-| TTS provider | `voicemem/tts.py` or provider module, then config |
+| Studio persona or pause policy | `studio/harness/` |
+| Spoken backchannel behavior | `studio/core/utils/turn_taking/` and Web playback |
+| Tone-label protocol | `studio/core/utils/tts/control.py`, prompts, and TTS wiring |
+| Reply provider | `voicemem/reply.py` or `studio/core/utils/llm/local.py`, then config |
+| Three-way reply routing | `studio/core/utils/reply_modes/` and Web composition root |
+| TTS provider | `studio/core/utils/tts/providers.py` or provider module, then config |
 | GPU scheduling | `voicemem/utils/gpu_loop.py` |
 | Prompt parsing | `voicemem/prompt_config.py` and `prompt/` schema |
 | Prompt tracing | `voicemem/prompt_trace.py` |
 | Early generation | `ReplySink`, EOT callback, and cancellation path |
 | Capture echo control | Browser mic worklet and server echo guard |
 | Playback timing and heard prefix | Audio timeline and both reply modes |
-| Browser UI and visualization | `web/voicemem.html` |
+| Browser UI and visualization | `studio/web/voicemem.html` |
 | Transport | Application boundary; memory contracts remain stable |
 | Persistent schema | Owning store plus explicit migration and rollback |
 
@@ -583,3 +657,17 @@ Update this document when a change modifies:
 
 Tuning values, local machine observations, incident history, and temporary
 experiments belong in focused evaluation artifacts, not this overview.
+
+## Small-model emotion processing
+
+Audio emotion uses SenseVoiceSmall on CPU. Memory detectors and Studio reuse one
+process-level transcriber; initialization and inference follow the Torch lock.
+The classifier returns localized acoustic labels. It does not load a multimodal
+language model or generate causal explanations from audio. The separate existing
+emotion2vec background classifier remains available in Studio.
+
+The optional fusion interface accepts a provider-neutral `TurnAttributor` via
+`attributor=`. `SmallEmotionAttributor` preserves the result schema with observed
+affect, supplied V/A and transcript retrieval terms; semantic evidence and causal
+graph deltas remain empty. Existing persisted records are not rewritten.
+Retired multimodal adapter modules and their exports have been removed.

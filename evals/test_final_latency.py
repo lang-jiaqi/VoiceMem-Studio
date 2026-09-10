@@ -16,6 +16,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from evals.studio_helpers import studio_tree, studio_source, execute
 
 
 class FinalAsrTests(unittest.IsolatedAsyncioTestCase):
@@ -115,10 +116,10 @@ class FinalAsrTests(unittest.IsolatedAsyncioTestCase):
 
 class WarmupTests(unittest.TestCase):
     def test_warmup_decodes_and_respects_disabled_option(self):
-        tree = ast.parse((ROOT / "web/run.py").read_text())
+        tree = studio_tree()
         fn = next(n for n in tree.body if getattr(n, "name", "") == "_warm_final_asr")
         ns = dict(os=os, time=time)
-        exec(compile(ast.Module(body=[fn], type_ignores=[]), "warmup", "exec"), ns)
+        execute([fn], ns)
         calls = []
         model = types.SimpleNamespace(transcribe=lambda pcm: calls.append(len(pcm)))
         vm = types.SimpleNamespace(utils=types.SimpleNamespace(get=lambda name: model))

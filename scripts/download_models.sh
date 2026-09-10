@@ -14,12 +14,9 @@
 # 下完这些整条链路不再需要网络（除了回复模型那次 API 调用）。不下也能跑——
 # 代码会回退到 HF id，首次用到时 transformers 自动拉。
 #
-# 不在这里的两样：
+# Reply adapters are downloaded separately:
 #   · 回复模型 —— PEFT adapter（180MB），挂在 Qwen/Qwen3.6-35B-A3B 上，基座另取。
 #     加 --reply-adapter 拉，见下面。
-#   · 情绪归因用的 Qwen2.5-Omni —— 目前没有发布微调版，代码默认用官方
-#     Qwen/Qwen2.5-Omni-3B，首次用到时自动拉。有自己的微调版就
-#     export VOICEMEM_OMNI_MODEL=/你的/路径 指过去。
 #
 # 用法（从仓库根目录）:
 #   bash scripts/download_models.sh                  # 拉 models/ 那一套
@@ -38,8 +35,12 @@ for arg in "$@"; do
 done
 
 REPO="${VOICEMEM_MODELS_REPO:-zhifeixie/VoiceMem_Default_Models_Env}"
-# 注意：仓库名里写着 Qwen25_omni，但内容是 Qwen3.6-35B 的回复 adapter。
-ADAPTER_REPO="${VOICEMEM_REPLY_ADAPTER_REPO:-${VOICEMEM_SLM_REPO:-zhifeixie/VoiceMem_SLM_Qwen25_omni}}"
+# Custom reply adapters are opt-in and have no bundled large-model default.
+ADAPTER_REPO="${VOICEMEM_REPLY_ADAPTER_REPO:-${VOICEMEM_SLM_REPO:-}}"
+if [ "${WANT_SLM}" = "1" ] && [ -z "${ADAPTER_REPO}" ]; then
+  echo "--reply-adapter requires VOICEMEM_REPLY_ADAPTER_REPO" >&2
+  exit 1
+fi
 mkdir -p "${DEST}"
 
 if [ "${VOICEMEM_FROM_UPSTREAM:-0}" != "1" ]; then

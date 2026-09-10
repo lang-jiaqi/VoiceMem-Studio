@@ -219,8 +219,10 @@ asyncio.run(main())
 演示代码在仓库里（pip 装的包只有库本身），先确认已经克隆并进入仓库目录。
 
 ```bash
-python web/run.py
+python web/run.py --mode llm_tts --space demo-zh --lang zh --confirm_ms 200 --verbose
 ```
+
+默认使用 DeepSeek 回复；启动检查和模型自动下载见 [Studio 说明](studio/README.md)。
 
 然后访问：
 
@@ -233,8 +235,8 @@ Demo 默认把终端输出（含 Python logging 和 Uvicorn 的日志）保存�
 启动时终端会打印实际路径。指定文件或临时关闭如下。
 
 ```bash
-python web/run.py --log-file results/logs/debug.log
-python web/run.py --no-file-log
+python -m studio --log-file results/logs/debug.log
+python -m studio --no-file-log
 ```
 
 回复模型的上下文由当前输入、本次会话尚未入库的对话和检索记忆组成。每轮对话先
@@ -293,7 +295,7 @@ VoiceMem 不把所有记忆放进同一个检索数据库，而是将记忆拆�
 
 同一套流程在人工编辑后形成 **ChatMem-Bench**，评测语音模型是否能够在长期沉淀中形成对用户的理解。
 
-VoiceMem 家族开源模型包括 **Qwen2.5-Omni、Qwen3-Omni 和 Step-Audio2-Mini**。这些模型可以在对话时接受并理解 VoiceMem 提供的记忆信息。
+VoiceMem 家族开源模型包括 **Qwen3-Omni 和 Step-Audio2-Mini**。这些模型可以在对话时接受并理解 VoiceMem 提供的记忆信息。
 
 <p align="center">
   <img src="docs/images/fig-opd.webp" alt="VoiceMem OPD 流程" width="90%">
@@ -501,7 +503,7 @@ A quick overview of VoiceMem:
 
 * 💬 **09/01/2026 · [v0.0.2](https://github.com/xzf-thu/VoiceMem/releases/tag/v0.0.2)** — Fixed the memory event-date path, removed a redundant right-brain memory class, and opened up the speech synthesis layer.
 * 🎉 **08/27/2026 · [v0.0.1](https://github.com/xzf-thu/VoiceMem/releases/tag/v0.0.1)** — Released the first version of **VoiceMem** and our **Technical Report**.
-* 🤖 **08/21/2026** — Open-sourced the **VoiceMem model family** (Qwen2.5-Omni / Qwen3-Omni / Step-Audio2-Mini), able to read and use the memory VoiceMem provides.
+* 🤖 **08/21/2026** — Open-sourced the **VoiceMem model family** (Qwen3-Omni / Step-Audio2-Mini), able to read and use the memory VoiceMem provides.
 * 🛠️ **08/21/2026** — Released **VoiceMem Utils**, all default local models packaged for out-of-the-box use.
 * 📦 **08/20/2026** — Open-sourced **ChatMem-400K**, built with a three-stage OPD pipeline.
 
@@ -664,7 +666,7 @@ asyncio.run(main())
 The demo lives in the repo (the pip package ships the library only) — make sure you have cloned it and are in the repo root.
 
 ```bash
-python web/run.py
+python -m studio
 ```
 
 Then open:
@@ -679,8 +681,8 @@ line per record, tagged stdout or stderr. The resolved path is printed at
 startup. To choose a path or disable file logging:
 
 ```bash
-python web/run.py --log-file results/logs/debug.log
-python web/run.py --no-file-log
+python -m studio --log-file results/logs/debug.log
+python -m studio --no-file-log
 ```
 
 Reply context combines the current input, turns from this session that are not
@@ -743,7 +745,7 @@ We built **ChatMem-400K** through a three-stage OPD training pipeline:
 
 After human editing, the same pipeline produces **ChatMem-Bench**, which evaluates whether a voice model can build a long-term understanding of the user over time.
 
-The open-source VoiceMem model family includes **Qwen2.5-Omni, Qwen3-Omni, and Step-Audio2-Mini**. These models can receive and understand memory information provided by VoiceMem during conversations.
+The open-source VoiceMem model family includes **Qwen3-Omni, and Step-Audio2-Mini**. These models can receive and understand memory information provided by VoiceMem during conversations.
 
 <p align="center">
   <img src="docs/images/fig-opd.webp" alt="VoiceMem OPD Pipeline" width="90%">

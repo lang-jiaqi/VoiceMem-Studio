@@ -16,14 +16,14 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from evals.studio_helpers import studio_tree, studio_source, execute
 
 
 def session_namespace():
-    tree = ast.parse((ROOT / "web/run.py").read_text())
-    session = next(n for n in tree.body if getattr(n, "name", "") == "llm_tts_session")
+    tree = studio_tree()
     names = {"prewarm_local", "stop_prewarm", "hearing", "close_session",
              "start_early", "drop_early"}
-    functions = [n for n in session.body if getattr(n, "name", "") in names]
+    functions = [n for n in tree.body if getattr(n, "name", "") in names]
     async def route_pending(pending, memory_vm=None, history=None):
         return pending
 
@@ -44,8 +44,8 @@ def session_namespace():
         ReplySink=lambda *a: types.SimpleNamespace(send=None, send_audio=None),
         AudioTimeline=lambda **kw: object(),
         sock=types.SimpleNamespace(send_json=None), send_audio=None)
-    exec(compile(ast.Module(body=functions, type_ignores=[]),
-                 str(ROOT / "web/run.py"), "exec"), ns)
+    execute(functions, ns)
+    ns["agent"] = ns["self"]
     return ns
 
 
@@ -135,16 +135,12 @@ class SchedulingTests(unittest.IsolatedAsyncioTestCase):
         await self.ns["close_session"]()
 
     def test_normal_reply_invalidates_warm_before_early_commit_or_new_generation(self):
-        tree = ast.parse((ROOT / "web/run.py").read_text())
-        session = next(n for n in tree.body if getattr(n, "name", "") == "llm_tts_session")
-        loop = next(n for n in session.body if isinstance(n, ast.AsyncFor))
-        stop = next(i for i, n in enumerate(loop.body) if isinstance(n, ast.Expr)
-                    and isinstance(n.value, ast.Call)
-                    and isinstance(n.value.func, ast.Name)
-                    and n.value.func.id == "stop_prewarm")
-        commit_branch = next(i for i, n in enumerate(loop.body)
-                             if isinstance(n, ast.If) and "pending.early_ok" in ast.unparse(n.test))
-        self.assertLess(stop, commit_branch)
+        tree = ast.parse((ROOT / "studio/core/core.py").read_text())
+        loop = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFor))
+        calls = [ast.unparse(n) for n in loop.body]
+        stop = calls.index("session.stop_prewarm()")
+        commit = next(i for i, text in enumerate(calls) if "session.commit_early(" in text)
+        self.assertLess(stop, commit)
 
 
 class QueuedWarmTests(unittest.IsolatedAsyncioTestCase):

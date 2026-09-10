@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from harness.reply_modes import (
+from studio.core.utils.reply_modes.initialize import (
     FAST,
     MEDIUM,
     SLOW,

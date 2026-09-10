@@ -32,12 +32,9 @@ dependencies = [
     # ── 音频链路 ──
     "torch",
     "torchaudio",         # funasr 内部 import 它，但自己没声明
-    "torchvision",        # transformers 加载 Qwen2.5-Omni 要 Qwen2VLVideoProcessor，
-                          # 它 import torchvision。缺了不报错，只是情绪归因器**静默**
-                          # 退回纯声学象限——"我喜欢草莓"会判成悲伤，右脑整个不准。
-    "transformers==4.52.3",
-    "accelerate",         # 情绪归因 from_pretrained(device_map="auto") 要它，
-                          # 缺了同样是静默退化，不是报错。
+    "torchvision",
+    "transformers>=4.52.3,<6",
+    "accelerate",
     "funasr",             # 流式 ASR（默认）
     "modelscope",         # funasr 取模型用
     "sherpa-onnx",        # VAD + 声纹 + 回退 ASR（纯 onnx）
@@ -54,6 +51,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+studio = [
+    "transformers==5.16.1",
+    "mlx==0.32.2",
+    "mlx-audio==0.5.1",
+    "mlx-lm",
+    "onnxruntime",
+    "huggingface-hub>=1.5,<2",
+]
+
 rtc = [
     "av>=14",
 ]
@@ -62,9 +68,6 @@ rtc = [
 # 权重不在 wheel 里，用 `bash scripts/download_models.sh --reply-adapter` 拉。
 slm = [
     "peft",               # 加载 QLoRA adapter
-    "qwen-omni-utils",    # Qwen-Omni 的多模态输入预处理
-    "audioread",          # qwen-omni-utils 顶层就 import 它，但自己没声明；
-                          # 缺了 `import qwen_omni_utils` 直接 ModuleNotFoundError。
 ]
 
 # 只有这两条命令。其余场景各自 pip，不再单开 extra——名字对不上内容的 extra
@@ -78,7 +81,8 @@ Repository = "https://github.com/lang-jiaqi/Voicemem_open"
 Issues = "https://github.com/lang-jiaqi/Voicemem_open/issues"
 
 [tool.setuptools.packages.find]
-include = ["voicemem*"]
+include = ["voicemem*", "studio*"]
+exclude = ["studio.models*"]
 
 [tool.setuptools.data-files]
 "prompt" = [
@@ -97,3 +101,5 @@ include = ["voicemem*"]
 # pip 装完照 README 跑第一个例子就是 LibsndfileError——那是别人对这个项目的
 # 第一印象。voicemem.sample_audio() 会先找仓库里的 assets/，没有再回落到这份。
 "*" = ["data/*.txt", "*.txt", "assets/*.wav"]
+
+"studio.web" = ["*.html", "*.js", "images/*.webp"]

@@ -718,8 +718,14 @@ class VoiceStream:
         final = asyncio.create_task(self._final_text_async(pcm))
         flush = asyncio.ensure_future(self.asr_worker.flush())
         try:
-            # 仍等待完整音频复核，不因某份 partial 抢先就牺牲句尾准确率。
-            text = await final
+            # The streaming worker already has the last stable characters. Give
+            # the offline refiner a short head start, but never make the user
+            # wait on a slow final pass just to release the turn.
+            text = None
+            try:
+                text = await asyncio.wait_for(final, timeout=0.08)
+            except asyncio.TimeoutError:
+                text = None
             if text and text.strip():
                 if flush.done() and not flush.cancelled():
                     self._text = flush.result() or self._text
@@ -733,7 +739,7 @@ class VoiceStream:
                     source = "完整复核（绕过流式积压）"
             else:
                 self._text = (await flush) or self._text
-                source = "流式兜底（复核无有效文本）"
+                source = "流式收尾（离线复核超时或无文本）"
             if ASR_DEBUG:
                 print(f"[asr-final] {source} · ASR收尾 {(time.monotonic()-started)*1000:.0f}ms",
                       flush=True)

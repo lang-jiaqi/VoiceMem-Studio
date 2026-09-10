@@ -234,14 +234,7 @@ class VoiceprintRegistry:
         }
 
 
-# ── Emotion 映射（情绪标签 → VoiceMem affect 词表）──────────────────────────
-# 这张表最初是照着 emotion2vec 的固定九分类词表配的，只覆盖那九个词的中英
-# 文写法。paper_emotion_detector.py 接入后，标签来源换成了 Qwen2.5-Omni
-# 自由生成的情绪词——不再是九个词的封闭集合（比如"happiness"/"frustration"/
-# "anxiety"这类同义变体都可能出现），精确字符串匹配会大量落空，affect 字段
-# 悄悄变回 None。兜底：精确匹配不中时，先过 anchor_router.normalize_emotion()
-# 的关键词模糊匹配（右脑锚点已经在用的同一套 8 类归一化），再从归一化结果
-# 映射到 affect 词表，兼容任意措辞的自由生成标签。
+# Normalize acoustic and injected emotion labels before mapping to affect.
 _EMO_TO_AFFECT: dict[str, str] = {
     "开心": "excited",  "快乐": "excited",  "happy": "excited",
     "悲伤": "sad",      "难过": "sad",       "sad": "sad",

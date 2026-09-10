@@ -37,6 +37,26 @@ def event(data):
 
 
 class DeepSeekTests(unittest.IsolatedAsyncioTestCase):
+    async def test_qwen_stream_uses_dashscope_options(self):
+        requests = []
+        def handle(request):
+            requests.append(json.loads(request.content))
+            self.assertEqual(str(request.url), "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions")
+            return httpx.Response(200, stream=Body(event({"choices": [{"delta": {"content": "好"}}]}) + b"data: [DONE]\n\n"))
+        original = httpx.AsyncClient
+        with patch("httpx.AsyncClient", side_effect=lambda **kw: original(transport=httpx.MockTransport(handle), **kw)):
+            provider = deepseek_reply(model="qwen3.6-flash", api_key="fixture", base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1", protocol="qwen")
+            try:
+                for effort in ("none", "high"):
+                    with reply_request_options(reasoning_effort=effort):
+                        self.assertEqual([x async for x in provider("你好")], ["好"])
+                    self.assertEqual(requests[-1]["enable_thinking"], effort == "high")
+                    self.assertNotIn("thinking", requests[-1])
+                    self.assertNotIn("reasoning_effort", requests[-1])
+                    self.assertTrue(requests[-1]["stream"])
+            finally:
+                await provider.aclose()
+
     async def test_request_is_non_thinking_stream_and_preserves_history(self):
         body = Body(b": keepalive\n\n" + event({"choices": []}) +
                     event({"choices": [{"delta": {"reasoning_content": "not spoken"}}]}) +
@@ -199,12 +219,8 @@ class DeepSeekTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(callable(_reply_factory("deepseek", {"api_key": "test-only"})))
 
     def test_demo_cli_supports_deepseek_without_loading_models(self):
-        import argparse
-        tree = ast.parse((ROOT / "web/run.py").read_text())
-        fn = next(n for n in tree.body if getattr(n, "name", "") == "_parse")
-        ns = {"argparse": argparse, "os": os}
-        exec(compile(ast.Module(body=[fn], type_ignores=[]), "web/run.py", "exec"), ns)
-        args = ns["_parse"](["--mode", "llm_tts", "--llm", "deepseek"])
+        from studio.core.utils.cli.component import parse_args
+        args = parse_args(["--mode", "llm_tts", "--llm", "deepseek"])
         self.assertEqual(args.llm, "deepseek")
 
 

@@ -67,7 +67,7 @@ class ReplyContextBundle:
 @dataclass
 class AnomalyTurnResult:
     retrieval: FusionRetrievalResult
-    #: 归因前 reply 上下文（供 Omni）；最终回复用 ``TurnProcessResult.reply_context``。
+    #: Context supplied to the attributor; final replies use TurnProcessResult.reply_context.
     reply_prompt: ReplyContextPrompt
     attribution: EmotionAttribution
     pre_attribution_reply: ReplyContextPrompt | None = None

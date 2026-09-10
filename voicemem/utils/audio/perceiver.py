@@ -321,9 +321,9 @@ class AudioPerceiver:
     def _emotion_detector(self):
         with self._lock:
             if "emotion_detector" not in self._cache:
-                # 韵律 VAD + 负面显著轮次 Qwen2.5-Omni 归因；接口 detect(audio_path)->str。
-                from voicemem.utils.audio.emotion.paper_emotion_detector import PaperAlignedEmotionDetector
-                self._cache["emotion_detector"] = PaperAlignedEmotionDetector()
+                # Share the small acoustic classifier with the Studio voice path.
+                from voicemem.utils.audio.emotion.detector import SmallEmotionDetector
+                self._cache["emotion_detector"] = SmallEmotionDetector()
         return self._cache["emotion_detector"]
 
     def _music_store(self):
@@ -624,7 +624,7 @@ class AudioPerceiver:
                         person_id, speaker, stable_voiceprint, vec, text, session_id,
                     )
 
-            # ── 情绪识别（韵律 VAD + 负显著轮 Qwen2.5-Omni 归因）───────────
+            # Acoustic emotion classification.
             # 只在调用方没显式传 emotion 时才自动检测填充。
             if self._enable_emotion and not emotion:
                 try:

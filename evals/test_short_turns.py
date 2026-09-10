@@ -19,9 +19,10 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "web")]
-from echo_guard import UtteranceGuard, is_echo
-from harness.reply_modes import DIRECT, MEMORY
-from harness.turn_taking import Backchannel, TurnTakingStateMachine
+from evals.studio_helpers import studio_tree, studio_source, execute
+from studio.core.utils.echo_guard.component import UtteranceGuard, is_echo
+from studio.core.utils.reply_modes.initialize import DIRECT, MEMORY
+from studio.core.utils.turn_taking.initialize import Backchannel, TurnTakingStateMachine
 from voicemem import gate
 from voicemem.stream import VoiceStream, StreamState
 from web.harness import PauseGate, backchannel_policy, is_unfinished
@@ -92,11 +93,11 @@ class ShortSpeechTests(unittest.IsolatedAsyncioTestCase):
 
 
 def anticipate_namespace():
-    tree = ast.parse((ROOT / "web/run.py").read_text())
+    tree = studio_tree()
     names = {"anticipate", "Pending", "_is_echo", "_is_backchannel", "_barge_text",
              "_is_explicit_interrupt", "_has_barge_content", "_has_strong_final_barge"}
     ns = dict(asyncio=asyncio, base64=base64, json=json, time=time,
-              PauseGate=PauseGate, backchannel_policy=backchannel_policy, is_unfinished=is_unfinished,
+              open_stream=lambda memory, **kw: memory.stream(**kw), PauseGate=PauseGate, backchannel_policy=backchannel_policy, is_unfinished=is_unfinished,
               Backchannel=Backchannel, TurnTakingStateMachine=TurnTakingStateMachine,
               DIRECT=DIRECT, MEMORY=MEMORY,
               dataclass=dataclasses.dataclass, gate=gate, UtteranceGuard=UtteranceGuard,
@@ -112,8 +113,7 @@ def anticipate_namespace():
               STRANGER_MIN_TURNS=1, ACTIVE_SPACE="test", _eot=lambda: None,
               space_language=lambda _: "zh", _replaying_now=lambda: False,
               _replay_id=lambda *a: "", save_turn_audio=lambda *a: "")
-    exec(compile(ast.Module(body=[n for n in tree.body if getattr(n, "name", "") in names],
-                            type_ignores=[]), str(ROOT / "web/run.py"), "exec"), ns)
+    execute([n for n in tree.body if getattr(n, "name", "") in names], ns)
     return ns
 
 
@@ -151,8 +151,8 @@ class AnticipateTests(unittest.IsolatedAsyncioTestCase):
         stream = types.SimpleNamespace(feed=feed, confirm_s=.2,
                                        refine_current_snapshot=refine_current_snapshot)
         ns["vm"] = types.SimpleNamespace(stream=lambda **kw: stream)
-        with patch("harness.turn_taking.backchannel.emitting", return_value=False), \
-             patch("harness.turn_taking.backchannel.Backchannel.offer", return_value=None):
+        with patch("studio.core.utils.turn_taking.backchannel.emitting", return_value=False), \
+             patch("studio.core.utils.turn_taking.backchannel.Backchannel.offer", return_value=None):
             async for pending in ns["anticipate"](
                     Sock(), is_busy=lambda: playback["busy"],
                     said=lambda: playback["text"], on_speech=stop,
@@ -174,7 +174,7 @@ class AnticipateTests(unittest.IsolatedAsyncioTestCase):
             async def receive(self):
                 return next(messages)
 
-        with patch("harness.turn_taking.backchannel.emitting", return_value=False):
+        with patch("studio.core.utils.turn_taking.backchannel.emitting", return_value=False):
             turns = [turn async for turn in ns["anticipate"](
                 Sock(), on_filler_done=completed.append)]
         self.assertEqual(turns, [])

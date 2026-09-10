@@ -17,21 +17,22 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from evals.studio_helpers import studio_tree, studio_source, execute
 
 
 def display_namespace():
     names = {"ReplySink", "_early_reply_compatible", "_send_reply_display",
              "voicemem_llm_tts", "_voicemem_llm_tts"}
-    tree = ast.parse((ROOT / "web/run.py").read_text())
+    tree = studio_tree()
     code = ast.Module(body=[n for n in tree.body if getattr(n, "name", "") in names],
                       type_ignores=[])
-    ns = dict(asyncio=asyncio, threading=threading, time=time,
+    ns = dict(asyncio=asyncio, threading=threading, time=time, MEMORY_COT="memory_cot",
               _REPLY_DISPLAY_LOCK=threading.Lock(), ACTIVE_SPACE="test", vm=object(),
               gate=types.SimpleNamespace(needs_memory=lambda _: True),
               note_hits=lambda _: None, audio_of=None, hit_cluster=None,
               utils=types.SimpleNamespace(hits_payload=lambda *a, **kw: {}),
               fill_tags=lambda *a, **kw: {"emotion": "平静"}, MIC_RATE=24000)
-    exec(compile(code, str(ROOT / "web/run.py"), "exec"), ns)
+    execute(code.body, ns)
     return ns
 
 
@@ -127,14 +128,15 @@ class DisplayTests(unittest.IsolatedAsyncioTestCase):
         }])
 
     def test_pipeline_does_not_build_display_before_generation(self):
-        tree = ast.parse((ROOT / "web/run.py").read_text())
+        tree = studio_tree()
         fn = next(n for n in tree.body if getattr(n, "name", "") == "_voicemem_llm_tts")
         called = {n.func.id for n in ast.walk(fn)
                   if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        called.update(n.func.attr for n in ast.walk(fn)
+                      if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute))
         self.assertNotIn("fill_tags", called)
         self.assertNotIn("note_hits", called)
-        self.assertIn("await send_audio(pcm)\n                    if first_audio_ready",
-                      (ROOT / "web/run.py").read_text())
+        self.assertRegex(studio_source(), r"await send_audio\(pcm\)\n\s+if first_audio_ready")
 
     async def test_real_pipeline_sends_audio_before_slow_display(self):
         ns = self.ns

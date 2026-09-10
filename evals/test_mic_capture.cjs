@@ -9,7 +9,7 @@ const context = {
   AudioWorkletProcessor:class {constructor(){this.port={postMessage:m=>messages.push(m)};}},
   registerProcessor:(_, cls)=>{Capture=cls;},
 };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../web/mic-capture-worklet.js'),'utf8'),context);
+vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../studio/web/mic-capture-worklet.js'),'utf8'),context);
 let seed = 817;
 const noise = () => {seed=(Math.imul(seed,1664525)+1013904223)>>>0;return (seed/2**32-.5)*.4;};
 const rms = a => Math.sqrt(a.reduce((s,x)=>s+x*x,0)/a.length);
@@ -44,6 +44,6 @@ const sent=messages.filter(m=>m.type==='mic');
 assert.equal(sent.length,4);
 assert(sent.every(m=>m.samples.length===480),'capture batches must be 20ms');
 console.log('20ms capture and silent output PASS');
-const html=fs.readFileSync(path.join(__dirname,'../web/voicemem.html'),'utf8');
+const html=fs.readFileSync(path.join(__dirname,'../studio/web/voicemem.html'),'utf8');
 for(const match of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) new vm.Script(match[1]);
 console.log('demo JavaScript syntax PASS');

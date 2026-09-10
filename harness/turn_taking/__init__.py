@@ -1,39 +1,12 @@
-"""Session-level backchannel frequency and filler handoff timing."""
+"""Compatibility exports for the Studio turn-taking policy and execution."""
+import importlib
+import sys
 
-from . import backchannel
-from .backchannel import Backchannel, BackchannelPolicy, BackchannelVoice
-from .filler import (
-    FillerPlan,
-    LONG_WORK_FILLER,
-    SHORT_ACK,
-    generate_filler,
-    run_overlapped_handoff,
-    short_ack_plan,
-    wait_for_filler_and_output,
-)
-from .frequency import SessionFrequencyCurve
-from .state_machine import (
-    HandoffDecision,
-    HandoffKind,
-    TurnPhase,
-    TurnTakingStateMachine,
-)
-
-__all__ = [
-    "FillerPlan",
-    "Backchannel",
-    "BackchannelPolicy",
-    "BackchannelVoice",
-    "LONG_WORK_FILLER",
-    "SHORT_ACK",
-    "SessionFrequencyCurve",
-    "HandoffDecision",
-    "HandoffKind",
-    "TurnPhase",
-    "TurnTakingStateMachine",
-    "generate_filler",
-    "run_overlapped_handoff",
-    "short_ack_plan",
-    "wait_for_filler_and_output",
-    "backchannel",
-]
+for child, target in {
+    'backchannel': 'studio.core.utils.turn_taking.backchannel',
+    'filler': 'studio.core.utils.turn_taking.filler',
+    'frequency': 'studio.harness.turn_taking.policy',
+    'state_machine': 'studio.core.utils.turn_taking.component',
+}.items():
+    sys.modules[f'{__name__}.{child}'] = importlib.import_module(target)
+sys.modules[__name__] = importlib.import_module('studio.core.utils.turn_taking.initialize')

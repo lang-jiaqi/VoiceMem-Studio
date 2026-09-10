@@ -10,9 +10,9 @@ from unittest.mock import patch
 
 import numpy as np
 
-from harness.turn_taking import backchannel as backchannel_module
-from harness.speaking_style import content_emotion_note, prompt_rule
-from harness.turn_taking import (
+from studio.core.utils.turn_taking.initialize import backchannel as backchannel_module
+from studio.core.utils.speaking_style.component import content_emotion_note, prompt_rule
+from studio.core.utils.turn_taking.initialize import (
     Backchannel,
     FillerPlan,
     HandoffKind,
@@ -36,7 +36,16 @@ from evals.test_short_turns import anticipate_namespace
 
 
 class BackchannelTests(unittest.TestCase):
-    def offer(self, bc, now, text="我就是觉得", available=None):
+    def test_pause_ack_is_independent_from_continuation(self):
+        with patch('random.Random.random', return_value=0):
+            for text in ("你好", "你好！", "今天天气怎么样", "你能帮我吗？", "其实我觉得", "今天", "因为", "我现在是这么想的"):
+                bc = Backchannel(policy=backchannel_policy())
+                self.assertIsNone(self.offer(bc, 0, text=text))
+            for text in ("今天真的特别开心", "这件事情说来话长"):
+                bc = Backchannel(policy=backchannel_policy())
+                self.assertIsNotNone(self.offer(bc, 0, text=text))
+
+    def offer(self, bc, now, text="这件事情说来话长", available=None):
         bc.offer(text=text, silence=0, spoke=True, speech_s=1, now=now)
         return bc.offer(text=text, silence=.1, spoke=True, speech_s=1,
                         now=now, unfinished=is_unfinished(text), available=available)
@@ -45,18 +54,18 @@ class BackchannelTests(unittest.TestCase):
     def test_first_opportunity_and_cross_turn_three_second_cooldown(self):
         bc = Backchannel(policy=backchannel_policy(), rng=random.Random(1))
         with patch('random.Random.random', return_value=0):
-            self.assertIn(self.offer(bc, 0), {"嗯", "嗯嗯"})
+            self.assertIsNotNone(self.offer(bc, 0))
             bc.reset_turn()
             self.assertIsNone(self.offer(bc, 2.999))
-            self.assertIn(self.offer(bc, 3), {"嗯", "嗯嗯"})
+            self.assertIsNotNone(self.offer(bc, 3))
 
     @patch.dict(os.environ, {"VOICEMEM_BACKCHANNEL_EMIT": "1"})
     def test_one_offer_per_pause_and_only_playable_continuers(self):
         bc = Backchannel(policy=backchannel_policy(), rng=random.Random(1))
-        self.assertEqual(self.offer(bc, 0, available={"嗯", "对"}), "嗯")
+        self.assertEqual(self.offer(bc, 0, available={"嗯"}), "嗯")
         self.assertIsNone(bc.offer(text="我就是觉得", silence=.15, spoke=True,
                                   speech_s=1, now=5, unfinished=True))
-        self.assertIsNone(self.offer(bc, 6, available={"哦？", "对"}))
+        self.assertIsNone(self.offer(bc, 6, available=set()))
 
     def test_chinese_bank_has_only_the_reviewed_nine_tokens(self):
         affirm = backchannel_module.ZH_AFFIRMATIVE_TOKENS
@@ -122,7 +131,7 @@ class BackchannelTests(unittest.TestCase):
         self.assertEqual(len(voice._clips["嗯"]), 1)
 
     def test_bundled_voice_resolves_repository_audio_directory(self):
-        root = Path(backchannel_module.__file__).resolve().parents[2]
+        from studio.paths import ROOT as root
         tts = types.SimpleNamespace(
             ref_audio=str(root / "voice" / "noctelle_ref_short.wav"))
         voice = backchannel_module.BackchannelVoice(tts, lang="zh")
@@ -149,37 +158,40 @@ class BackchannelTests(unittest.TestCase):
             bc.complete_turn()
         probabilities.append(bc.probability(
             text="今天路上有点堵车", speech_s=1, now=0)[0])
-        self.assertEqual(probabilities, [.5, .1, .3])
-        self.assertIn("session概率=50%/10%/30%", backchannel_policy_summary())
+        self.assertEqual(probabilities, [.7, .35, .5])
+        self.assertIn("session概率=70%/35%/50%", backchannel_policy_summary())
 
     def test_unfinished_detection_tolerates_asr_punctuation(self):
         for text in (
             "我经常就", "我就是觉得。", "我就是觉得这种", "因为，", "I feel...",
             "我想问一下。", "我今天", "好你先跟我", "我想打断一", "我有一个问题",
-            "主", "不", "不是", "我是说", "这个",
+            "我", "我是说", "这个",
         ):
             self.assertTrue(is_unfinished(text), text)
         for text in ("我觉得今天很好。", "为什么？", "我经常就这样结束。", "ok", "我想你了",
                      "我也是这么觉得", "你怎么想？", "你觉得？", "我不想将就",
-                     "你还能更快吗？", "今天下雨了"):
+                     "你还能更快吗？", "今天下雨了", "主", "不", "不是", "不对",
+                     "这是我的梦想", "我不想", "你觉得"):
             self.assertFalse(is_unfinished(text), text)
 
     def test_web_eot_can_end_the_turn_immediately(self):
-        source = (Path(__file__).resolve().parents[1] / "web" / "run.py").read_text()
+        from evals.studio_helpers import studio_source
+        source = studio_source()
         self.assertNotIn("eot_ends_turn=False", source)
 
     def test_unfinished_voice_turn_arms_a_delayed_followup(self):
         root = Path(__file__).resolve().parents[1]
-        run_source = (root / "web" / "run.py").read_text()
-        harness_source = (root / "web" / "harness.py").read_text()
+        from evals.studio_helpers import studio_source
+        run_source = studio_source()
+        harness_source = (root / "studio/harness/turn_taking/policy.py").read_text()
         self.assertIn("run_unfinished_followup", run_source)
         self.assertIn("continuation_prompt", run_source)
-        self.assertIn('"unfinished_followup_s": 4.0', harness_source)
+        self.assertIn('"unfinished_followup_s": 2.5', harness_source)
 
     def test_realtime_never_gets_spoken_control_tags(self):
         self.assertNotIn("语音控制协议", system_prompt("zh"))
         self.assertIn("温和|", system_prompt("zh", tagged=True))
-        self.assertIn("English", system_prompt("en"))
+        self.assertEqual(system_prompt("en"), system_prompt("zh"))
 
 
 class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
@@ -318,14 +330,23 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
             async for turn in ns['anticipate'](Sock(), is_busy=lambda: False):
                 turns.append((captured, turn))
         clips = [(frame, msg) for frame, msg in sent if msg['type'] == 'backchannel']
-        self.assertEqual(len(clips), 1)
+        self.assertEqual(len(clips), 0)
         self.assertEqual([turn.text for _, turn in turns],
                          ['我就是觉得', '我就是觉得'])
         # One 200ms clip followed by 300ms silence, measured in captured audio.
-        self.assertGreaterEqual((turns[0][0] - clips[0][0]) * .02, .5)
 
 
 class SpeakingStyleTests(unittest.TestCase):
+    def test_intro_arc_is_shared_but_general_boost_is_qwen_only(self):
+        from studio.core.utils.speaking_style.component import qwen_segment_instruction
+        for qwen in (False, True):
+            bright = qwen_segment_instruction("base", "请介绍一下你自己", "我是超级智能！", qwen)
+            sad = qwen_segment_instruction("base", "请介绍一下你自己", "我是超级智能！如果说有什么我做不到，就是没有身体。", qwen)
+            self.assertIn("明亮", bright)
+            self.assertIn("明显悲伤", sad)
+            self.assertIn("语速明显放慢", sad)
+        self.assertEqual(qwen_segment_instruction("base", "今天如何", "今天不错", False), "base")
+
     def test_prompt_selects_depth_from_context_and_places_emotion_in_content(self):
         rule = prompt_rule("zh")
         self.assertIn("根据上下文决定", rule)

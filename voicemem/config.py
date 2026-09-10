@@ -213,6 +213,14 @@ def _check_keys(config: dict) -> None:
 
 def _reply_factory(provider, cfg):
     """reply：openai -> 内置流式 provider；custom -> 直接用 config.fn 那个函数。"""
+    if provider == "qwen":
+        from voicemem.reply import deepseek_reply
+        key = cfg.get("api_key") or os.environ.get("DASHSCOPE_API_KEY")
+        if not key:
+            raise ValueError("Qwen 回复需要 DASHSCOPE_API_KEY")
+        return deepseek_reply(model=cfg.get("model", "qwen3.6-flash"), api_key=key, protocol="qwen",
+                            base_url=cfg.get("base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+                            system=cfg.get("system"))
     if provider == "deepseek":
         from voicemem.reply import deepseek_reply
         return deepseek_reply(model=cfg.get("model"), api_key=cfg.get("api_key"),
@@ -229,7 +237,7 @@ def _reply_factory(provider, cfg):
                 "直接传函数更省事：VoiceMem(reply=fn)"
             )
         return fn
-    _bad("reply", provider, ["openai", "deepseek", "custom"])
+    _bad("reply", provider, ["openai", "deepseek", "qwen", "custom"])
 
 
 def build_kwargs(config: dict) -> dict:
@@ -299,8 +307,20 @@ def build_kwargs(config: dict) -> dict:
     #    也透传给 VoiceMem 参数，保持和顶层一致）。──
     if "llm" in config:
         provider, cfg = _split(config["llm"])
-        if provider not in (None, "openai"):
-            _bad("llm", provider, ["openai"])
+        if provider not in (None, "openai", "deepseek", "qwen"):
+            _bad("llm", provider, ["openai", "deepseek", "qwen"])
+        if provider == "qwen":
+            cfg = {"model": "qwen3.6-flash", "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", **cfg}
+            cfg.setdefault("api_key", os.environ.get("DASHSCOPE_API_KEY", ""))
+        if provider == "deepseek":
+            # VoiceMem uses an OpenAI-compatible client for internal workers.
+            # Give it a DeepSeek model and endpoint instead of the OpenAI default.
+            cfg = {"model": "deepseek-v4-flash",
+                   "base_url": "https://api.deepseek.com",
+                   **cfg}
+            if cfg.get("model", "").startswith("gpt-"):
+                cfg["model"] = "deepseek-v4-flash"
+            cfg.setdefault("api_key", os.environ.get("DEEPSEEK_API_KEY", ""))
         if cfg.get("model"):
             # 只落在 MODELS 上，不再顺手写 env：查过了，OPENAI_MODEL 没有任何
             # 第三方库读（openai SDK / mem0 都不读），写它纯粹是让全局状态多一份

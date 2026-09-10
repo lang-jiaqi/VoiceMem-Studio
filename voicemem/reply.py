@@ -123,18 +123,25 @@ def openai_reply(model: str | None = None, api_key: str | None = None,
         msgs.append({"role": "user",
                      "content": f"{memory_context}\n\n{text}" if memory_context else text})
         request = {"model": resolve_model(model, "reply"), "stream": True, "messages": msgs}
+        if str(request["model"]).startswith("qwen"):
+            options = _REQUEST_OPTIONS.get() or ReplyRequestOptions()
+            request["extra_body"] = {"enable_thinking": options.reasoning_effort != "none"}
         record_request("llm", "openai", request)
         stream = await client.chat.completions.create(**request)
-        async for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+        try:
+            async for chunk in stream:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if delta:
+                    yield delta
+        finally:
+            await stream.close()
 
     return fn
 
 
 def deepseek_reply(model: str | None = None, api_key: str | None = None,
-                   base_url: str | None = None, system: str | None = None) -> Callable:
+                   base_url: str | None = None, system: str | None = None,
+                   protocol: str = "deepseek") -> Callable:
     """DeepSeek 流式语音回复：独立凭据，不改变后台记忆整理的厂商配置。"""
     key = api_key or os.environ.get("DEEPSEEK_API_KEY")
     if not key:
@@ -200,9 +207,12 @@ def deepseek_reply(model: str | None = None, api_key: str | None = None,
         request = {"model": model, "messages": messages, "stream": True,
                    "thinking": {"type": "disabled" if effort == "none" else "enabled"},
                    "max_tokens": max_tokens}
-        if effort != "none":
+        if protocol == "qwen":
+            request.pop("thinking")
+            request["enable_thinking"] = effort != "none"
+        elif effort != "none":
             request["reasoning_effort"] = effort
-        record_request("llm", "deepseek", request)
+        record_request("llm", protocol, request)
         last_error = None
         for attempt in range(2):
             if client is None:

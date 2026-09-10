@@ -44,8 +44,8 @@ def default_utils(base_url, memory_root):
         from voicemem.leftbrain.cognitive_graph.annotator import CognitiveAnnotator, CognitiveAnnotatorConfig
         return CognitiveAnnotator(CognitiveAnnotatorConfig(base_url=base_url))
     def emotion():
-        from voicemem.utils.audio.emotion.paper_emotion_detector import PaperAlignedEmotionDetector
-        return PaperAlignedEmotionDetector()
+        from voicemem.utils.audio.emotion.detector import SmallEmotionDetector
+        return SmallEmotionDetector()
     def voiceprint():
         from voicemem.utils.audio.voiceprint.speaker_encoder import SpeakerEncoder
         return SpeakerEncoder(device="cpu")

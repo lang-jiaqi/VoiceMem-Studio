@@ -265,10 +265,10 @@ class FunASRStreamingASR:
 class Transcriber:
     """SenseVoiceSmall 出最终文本（中英），比流式 ASR 更准，锁定一轮时用这个。"""
 
-    def __init__(self, device: str) -> None:
+    def __init__(self, device: str, model: str | None = None) -> None:
         from funasr import AutoModel        # 懒 import：只有用非流式精转写才需要 funasr
         from voicemem.utils.common.paths import hf_model
-        _name = hf_model("emotion", "FunAudioLLM/SenseVoiceSmall", "asr")
+        _name = model or hf_model("emotion", "FunAudioLLM/SenseVoiceSmall", "asr")
         self.model = AutoModel(model=_name, hub="hf",
                                device=device, disable_update=True,
                                trust_remote_code=False)

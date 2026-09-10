@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
-const html = fs.readFileSync(path.join(__dirname, '../web/voicemem.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '../studio/web/voicemem.html'), 'utf8');
 const start = html.indexOf('function finishBackchannel(src){');
 const end = html.indexOf('\n}', start) + 2;
 const playEnd = html.indexOf('\n}', html.indexOf('function playBackchannel(m){')) + 2;

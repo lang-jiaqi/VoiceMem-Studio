@@ -52,7 +52,7 @@ http://127.0.0.1:8787/?pet=1
 想换端口/换成打包好的 .app：
 
 ```bash
-VOICEMEM_PET_CMD="open -a /Applications/Noctelle.app --args" python web/run.py
+VOICEMEM_PET_CMD="open -a /Applications/Noctelle.app --args" python -m studio
 ```
 
 ## 文件

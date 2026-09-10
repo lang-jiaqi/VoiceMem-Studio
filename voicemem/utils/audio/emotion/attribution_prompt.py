@@ -206,7 +206,7 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
             last_err = e
 
     snippet = (balanced or balanced_closed or tail)[:600]
-    msg = f"invalid JSON in Omni attribution response: {last_err}; snippet={snippet!r}"
+    msg = f"invalid JSON in emotion attribution response: {last_err}; snippet={snippet!r}"
     raise ValueError(msg) from last_err
 
 

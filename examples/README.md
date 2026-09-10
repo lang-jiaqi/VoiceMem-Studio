@@ -58,7 +58,7 @@ python examples/03_simple_agent_with_voicemem_memory.py
 ```
 
 麦克风 → voicemem 边听边预取记忆 → OpenAI 带着记忆回答 → OpenAI TTS 出声，
-**你一开口它就闭嘴**。想看 web 版（带脑图和记忆面板）用 `python web/run.py`。
+**你一开口它就闭嘴**。想看 web 版（带脑图和记忆面板）用 `python -m studio`。
 
 ## 04 · 全开源，一张 L40S
 

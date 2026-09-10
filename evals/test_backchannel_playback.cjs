@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const html = fs.readFileSync(path.join(__dirname, '../web/voicemem.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '../studio/web/voicemem.html'), 'utf8');
 const start = html.indexOf('let playCtx=null');
 const end = html.indexOf('/* --- 麦克风', start);
 assert(start >= 0 && end > start);
@@ -64,6 +64,11 @@ const pcm = Buffer.alloc(2400 * 2).toString('base64');
 context.playBackchannel({pcm, sample_rate: 24000});
 const backchannel = sources[0];
 const expectedEnd = backchannel.startedAt + 0.1 / backchannel.playbackRate.value;
+
+context.pausePlaybackForBarge();
+assert.equal(backchannel.stopCalls, 0, 'candidate pause must preserve the acknowledgement');
+context.resumePlaybackAfterBarge();
+assert.equal(backchannel.stopCalls, 0, 'candidate resume must preserve the acknowledgement');
 
 context.stopPlayback('interrupted');
 assert.equal(backchannel.stopCalls, 0, 'interruption must not stop a backchannel');

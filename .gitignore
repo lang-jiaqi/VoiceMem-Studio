@@ -60,3 +60,10 @@ voicemem_memoryspace/myvoicemem/*
 cache/
 
 
+
+# Studio model weights, including reused local snapshots.
+/studio/models/
+
+# Studio persistence implementation is source, not runtime memory.
+!studio/core/utils/memory/
+!studio/core/utils/memory/*.py

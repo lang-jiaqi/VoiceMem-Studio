@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from voicemem.utils.audio.emotion.attribution_qwen_omni import OmniTurnAttributor
+from voicemem.utils.audio.emotion.attribution import TurnAttributor
 from voicemem.utils.audio.emotion.graph_memory import EmotionGraphMemoryStore
 from voicemem.utils.audio.emotion.layer import EmotionLayer, EmotionLayerResult
 from voicemem.utils.audio.emotion.memory_store import EmotionMemoryStore
@@ -42,7 +42,7 @@ def process_user_turn(
     left_brain: LeftBrainSearchClient | None = None,
     emotion_store: EmotionMemoryStore | None = None,
     emotion_graph: EmotionGraphMemoryStore | None = None,
-    omni_attributor: OmniTurnAttributor | None = None,
+    attributor: TurnAttributor | None = None,
     relevance_filter: RightChannelRelevanceFilter | None = None,
     persona_provider: PersonaProvider | None = None,
     fusion_config: FusionConfig | None = None,
@@ -63,10 +63,10 @@ def process_user_turn(
             left_brain is None
             or emotion_store is None
             or emotion_graph is None
-            or omni_attributor is None
+            or attributor is None
         ):
             raise ValueError(
-                "needs_attribution=True 时需要 left_brain、emotion_store、emotion_graph、omni_attributor"
+                "needs_attribution=True 时需要 left_brain、emotion_store、emotion_graph、attributor"
             )
         if not audio_path:
             raise ValueError("needs_attribution=True 时需要 audio_path")
@@ -79,7 +79,7 @@ def process_user_turn(
             left_brain=left_brain,
             emotion_store=emotion_store,
             emotion_graph=emotion_graph,
-            omni_attributor=omni_attributor,
+            attributor=attributor,
             relevance_filter=relevance_filter,
             config=fusion_config,
         )
