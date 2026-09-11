@@ -223,6 +223,7 @@ python web/run.py --mode llm_tts --space demo-zh --lang zh --confirm_ms 200 --ve
 ```
 
 默认使用 DeepSeek 回复；启动检查和模型自动下载见 [Studio 说明](studio/README.md)。
+Linux/NVIDIA Docker 与 macOS 原生 MLX 的安装和启动见 [部署说明](docker/README.md)。
 
 然后访问：
 
@@ -664,6 +665,7 @@ asyncio.run(main())
 ### Interactive Demo with VoiceMem
 
 The demo lives in the repo (the pip package ships the library only) — make sure you have cloned it and are in the repo root.
+See the [deployment guide](docker/README.md) for Linux/NVIDIA Docker and native Apple Silicon MLX setup.
 
 ```bash
 python -m studio

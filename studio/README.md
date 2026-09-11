@@ -29,6 +29,9 @@ studio/
 
 ## 启动
 
+Linux/NVIDIA 的完整 Docker 部署及 Mac 原生部署见 [部署说明](../docker/README.md)。
+Linux 在 `.env` 配置好 API Key 后可直接执行 `docker compose up -d --build`。
+
 安装好对应的 Python 3.12 环境后，在项目根目录启动。Linux / NVIDIA 使用：
 
 ```bash
@@ -75,7 +78,7 @@ source .venv-cuda/bin/activate
 python -m pip install -e '.[studio-cuda]'
 ```
 
-Docker 暂未打包；这里验证的是本机进程。
+以上为本机 Python 环境；Docker 部署不需要在宿主机安装这些依赖。
 
 ### macOS / Apple Silicon MLX
 
@@ -130,7 +133,7 @@ VoiceMem 库自身的多语言默认 prompt 保留。四秒追问只针对明确
 离线回归覆盖状态和协议；真实音色、麦克风与端到端延时需要完整原生模型环境验收。
 
 MLX uses `transformers==5.16.1`, Hub 1.x, and `mlx-audio==0.5.1`.
-CUDA uses Torch 2.6.0, `transformers==4.57.3`, Hub 0.x, and `qwen-tts==0.1.1`.
+CUDA uses Torch 2.8.0, `transformers==4.57.3`, Hub 0.x, and `qwen-tts==0.1.1`.
 Install the matching extra in its own environment; do not combine both extras.
 
 情绪识别使用共享的 SenseVoiceSmall CPU 实例，保留情绪标签，不再生成多模态情绪原因。

@@ -17,6 +17,7 @@ out/
 .env
 .env.*
 !.env.example
+/compose.override.yaml
 .venv/
 .venv-cuda/
 .claude/

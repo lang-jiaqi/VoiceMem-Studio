@@ -1,0 +1,81 @@
+# syntax=docker/dockerfile:1
+FROM python:3.12-slim-bookworm AS breeze-source
+
+ARG BREEZE_REV=aa62e893bf047360008f050eb50761069daec4f3
+ARG DEBIAN_MIRROR=https://deb.debian.org/debian
+RUN sed -i -e "s|http://deb.debian.org/debian$|${DEBIAN_MIRROR}|" \
+       -e 's|http://deb.debian.org/debian-security|https://deb.debian.org/debian-security|' \
+       /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+RUN git init /src \
+    && git -C /src remote add origin https://github.com/Sorbett/breeze-tts.git \
+    && git -C /src fetch --depth 1 origin "${BREEZE_REV}" \
+    && git -C /src checkout --detach FETCH_HEAD \
+    && test "$(git -C /src rev-parse HEAD)" = "${BREEZE_REV}"
+
+FROM python:3.12-slim-bookworm
+
+ARG DEBIAN_MIRROR=https://deb.debian.org/debian
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TOKENIZERS_PARALLELISM=false \
+    STUDIO_BACKEND=cuda \
+    STUDIO_DEVICE=cuda:0 \
+    STUDIO_TTS_DEVICE=cuda:0 \
+    STUDIO_MODELS_DIR=/opt/voicemem-studio/studio/models \
+    BREEZE_CODE_DIR=/opt/breeze-tts \
+    BREEZE_MODEL_DIR=/opt/voicemem-studio/studio/models/tts/breeze-tts-2 \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    TORCHINDUCTOR_CACHE_DIR=/home/studio/.cache/torch/inductor
+
+RUN sed -i -e "s|http://deb.debian.org/debian$|${DEBIAN_MIRROR}|" \
+       -e 's|http://deb.debian.org/debian-security|https://deb.debian.org/debian-security|' \
+       /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+       build-essential ca-certificates ffmpeg libgomp1 libportaudio2 libsndfile1 sox \
+    && rm -rf /var/lib/apt/lists/*
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --upgrade pip setuptools wheel ninja \
+    && python -m pip install \
+       torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0
+
+COPY --from=breeze-source /src/breeze_infer /opt/breeze-tts/breeze_infer
+COPY --from=breeze-source /src/models /opt/breeze-tts/models
+COPY --from=breeze-source /src/configs /opt/breeze-tts/configs
+COPY --from=breeze-source /src/LICENSE /opt/breeze-tts/LICENSE
+
+WORKDIR /opt/voicemem-studio
+COPY pyproject.toml README.md LICENSE ./
+COPY voicemem/ ./voicemem/
+COPY studio/ ./studio/
+COPY prompt/llm_system_zh.md prompt/llm_system_en.md \
+     prompt/llm_tone_rule_zh.md prompt/llm_tone_rule_en.md \
+     prompt/llm_context.json prompt/tts.json ./prompt/
+COPY voice/noctelle_ref_short.wav voice/noctelle_ref_short.txt ./voice/
+COPY voice/backchannel/ ./voice/backchannel/
+COPY docker/smoke_check.py ./docker/smoke_check.py
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install -e '.[studio-cuda]' \
+    && python -m pip check
+
+RUN groupadd --gid 10001 studio \
+    && useradd --uid 10001 --gid studio --create-home studio \
+    && mkdir -p studio/models voicemem_memoryspace results prompt/logs /home/studio/.cache/studio \
+    && ln -s /home/studio/.cache/studio cache \
+    && chown -R studio:studio studio/models voicemem_memoryspace results prompt/logs /home/studio/.cache
+
+ENV STUDIO_DESKTOP_PET=0
+USER studio
+RUN python docker/smoke_check.py
+EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30m --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/', timeout=3).close()"]
+ENTRYPOINT ["python", "-m", "studio"]
+CMD ["--verbose"]

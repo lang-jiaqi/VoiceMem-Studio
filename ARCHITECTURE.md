@@ -106,13 +106,41 @@ The DeepSeek provider is also passed into VoiceMem's internal extraction,
 annotation, and cleanup workers, so their model and endpoint cannot fall back to
 an OpenAI model name.
 The MLX extra pins Transformers 5.16.1 with Hugging Face Hub 1.x to satisfy
-MLX Audio 0.5.1. The separate CUDA extra pins Torch 2.6.0, Transformers 4.57.3,
+MLX Audio 0.5.1. The separate CUDA extra pins Torch 2.8.0, Transformers 4.57.3,
 Hub 0.x and qwen-tts 0.1.1 for the native Breeze streaming runtime.
 The memory package accepts Transformers 4.52.3 through 5.x;
 its recognition and reply contracts remain unchanged.
 Selected model warmup failures prevent serving a silently degraded pipeline.
 `--check` performs inspection only. Model directories contain weights, while
 model classes and factories live in `core/utils/<component>/`.
+
+### Deployment boundary
+
+Linux/NVIDIA deployment uses `compose.yaml` and `docker/Dockerfile.cuda` to run
+the same Studio entry point and in-process Breeze provider. The image pins the
+independent Breeze source revision and CUDA dependency profile. The default
+image tag is `voicemem-studio:torch2.8-cu128`, with Torch/TorchAudio 2.8.0,
+TorchVision 0.23.0 and CUDA 12.8 validated during the build. The host retains
+ownership of its NVIDIA driver. Model weights are acquired at runtime.
+Only GPU 0 is exposed to the container. The process
+runs as a non-root user with an init process; memory, results, request logs,
+model weights and compiler/download caches live in separate persistent volumes.
+The harness directory and TTS JSON are read-only configuration mounts, loaded on restart.
+Credentials are runtime configuration, never image build inputs. Build-context
+filters exclude private traces, memory, recordings, checkpoints and host environments.
+The default published port is loopback-only; exposing the application requires
+deployment-level HTTPS and access control. HTTP health becomes available only
+after the existing model warmup completes.
+
+Apple Silicon retains native MLX deployment through the existing launch script;
+`scripts/setup_studio_mlx.sh` prepares the matching environment without replacing
+an existing environment or credential file. No Metal-in-Linux-container path or
+host inference proxy is added. Neither deployment changes memory semantics,
+provider contracts, speech segmentation or model scheduling.
+The native setup also installs the locked desktop-pet dependencies. Headless
+containers disable spawning Electron through `STUDIO_DESKTOP_PET=0` while
+retaining the upstream pet-observer WebSocket and events. Native launches keep
+the upstream automatic pet lifecycle by default.
 
 `studio/core/voicemem.py` is the integration boundary for creating VoiceMem and
 opening its native stream. The current deployment is one process: memory is

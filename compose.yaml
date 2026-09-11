@@ -1,0 +1,69 @@
+name: voicemem-studio
+
+services:
+  studio:
+    image: voicemem-studio:torch2.8-cu128
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cuda
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    shm_size: 1gb
+    env_file:
+      - path: ${STUDIO_ENV_FILE:-.env}
+        required: true
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      STUDIO_BACKEND: cuda
+      STUDIO_DEVICE: cuda:0
+      STUDIO_TTS_DEVICE: cuda:0
+      STUDIO_DESKTOP_PET: "0"
+      STUDIO_MODELS_DIR: /opt/voicemem-studio/studio/models
+      BREEZE_CODE_DIR: /opt/breeze-tts
+      BREEZE_MODEL_DIR: /opt/voicemem-studio/studio/models/tts/breeze-tts-2
+      CUDA_VISIBLE_DEVICES: "0"
+    ports:
+      - "${STUDIO_BIND_HOST:-127.0.0.1}:${STUDIO_PORT:-8787}:8787"
+    volumes:
+      - type: bind
+        source: ./studio/harness
+        target: /opt/voicemem-studio/studio/harness
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./prompt/tts.json
+        target: /opt/voicemem-studio/prompt/tts.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - models:/opt/voicemem-studio/studio/models
+      - memory:/opt/voicemem-studio/voicemem_memoryspace
+      - results:/opt/voicemem-studio/results
+      - prompt-logs:/opt/voicemem-studio/prompt/logs
+      - cache:/home/studio/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
+volumes:
+  models:
+  memory:
+  results:
+  prompt-logs:
+  cache:

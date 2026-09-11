@@ -28,6 +28,8 @@ class PetSupervisor:
 
     def ensure_running(self, ws_url: str) -> None:
         """Start the pet process once and reuse it on later requests."""
+        if os.environ.get('STUDIO_DESKTOP_PET', '1').strip().lower() in {'0', 'false', 'off', 'no'}:
+            return
         with self._lock:
             if self.alive():
                 return
