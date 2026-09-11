@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 BACKCHANNEL_QUIET_S = 2.0
 BACKCHANNEL_GROUP_SPLIT_S = 6.0
+BACKCHANNEL_EARLY_MAX = 2
 BACKCHANNEL_EXCLUDED = ({"哦", "哦哦"}, {"是吗？"})
 
 CONTROLS = {

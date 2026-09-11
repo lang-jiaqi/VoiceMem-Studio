@@ -18,9 +18,10 @@ DEBUG = False
 
 from studio.harness.turn_taking.policy import (BackchannelPolicy, SessionFrequencyCurve, _ASK, _INVITE, _DISCLOSE)
 from studio.harness.turn_taking.policy import (
-    BACKCHANNEL_QUIET_S, BACKCHANNEL_GROUP_SPLIT_S, BACKCHANNEL_EXCLUDED)
+    BACKCHANNEL_QUIET_S, BACKCHANNEL_GROUP_SPLIT_S, BACKCHANNEL_EARLY_MAX,
+    BACKCHANNEL_EXCLUDED)
 
-ZH_AFFIRMATIVE_TOKENS = ("哦", "哦哦", "嗯嗯", "嗯", "对", "明白")
+ZH_AFFIRMATIVE_TOKENS = ("哦", "哦哦", "嗯嗯", "嗯", "啊", "对", "明白")
 ZH_QUESTION_TOKENS = ("哦？", "嗯？", "是吗？")
 ZH_SYNTHESIS_TEXT = {
     token: token if token.endswith("？") else f"{token}。"
@@ -28,7 +29,7 @@ ZH_SYNTHESIS_TEXT = {
 }
 ZH_VARIANTS = {
     **{token: 2 for token in ZH_AFFIRMATIVE_TOKENS},
-    **{token: 5 for token in ("哦", "嗯嗯", "嗯")},
+    **{token: 5 for token in ("哦", "嗯嗯", "嗯", "啊")},
     **{token: 1 for token in ZH_QUESTION_TOKENS},
 }
 
@@ -37,13 +38,13 @@ ZH_VARIANTS = {
 # or dismay makes a cached clip sound emotionally wrong when context is noisy.
 _TOKENS = {
     "zh": {
-        "continuer":  ["嗯", "嗯嗯"],
+        "continuer":  ["嗯", "嗯嗯", "啊"],
         "support":    ["嗯", "嗯嗯", "明白"],
         "agree":      ["嗯", "对", "明白"],
         "surprise":   list(ZH_QUESTION_TOKENS),
         "assess_good":["嗯嗯", "对"],
         "assess_bad": ["嗯", "明白"],
-        "neutral":    ["嗯", "嗯嗯", "哦", "哦哦", "对", "明白"],
+        "neutral":    ["嗯", "嗯嗯", "啊", "哦", "哦哦", "对", "明白"],
     },
     "en": {
         "continuer":  ["mm-hmm", "mmm", "uh-huh"],
@@ -189,6 +190,9 @@ class Backchannel:
         if self._last_at is not None and now - self._last_at < max(0.0, self.policy.refractory_s):
             return None
         phase = self.policy.session_curve.phase(speech)
+        if (speech < BACKCHANNEL_GROUP_SPLIT_S
+                and sum(self._phase_emitted[:2]) >= BACKCHANNEL_EARLY_MAX):
+            return None
         target = self._phase_targets[phase]
         if target is None:
             target = self.policy.session_curve.draw_target(speech, self.rng.random())
@@ -202,8 +206,9 @@ class Backchannel:
             return None
         if lang == "zh":
             excluded = BACKCHANNEL_EXCLUDED[speech >= BACKCHANNEL_GROUP_SPLIT_S]
-            pool = [t for t in (*ZH_AFFIRMATIVE_TOKENS, *ZH_QUESTION_TOKENS)
-                    if t not in excluded and (available is None or t in available)]
+            source = available if available is not None else (*ZH_AFFIRMATIVE_TOKENS,
+                                                               *ZH_QUESTION_TOKENS)
+            pool = sorted(t for t in source if t not in excluded)
             token = self.rng.choice([t for t in pool if t not in self._recent] or pool) if pool else ""
         elif unfinished:
             pool = (_TOKENS.get(lang) or _TOKENS["en"])["continuer"]
@@ -253,8 +258,9 @@ class BackchannelVoice:
     def _path(self, token: str, style_idx: int):
         import hashlib
         spoken = self._spoken_text(token)
+        styles = _STYLES[self.lang]
         key = (f"{self.voice_id}|{self.lang}|{token}|{spoken}|{style_idx}|"
-               f"{_STYLES[self.lang][style_idx]}")
+               f"{styles[style_idx % len(styles)]}")
         h = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
         return _cache_root() / f"{h}.pcm"
 
@@ -313,6 +319,22 @@ class BackchannelVoice:
                 return wav.readframes(wav.getnframes())
         except OSError:
             return b""
+
+    @staticmethod
+    def _bundled_job(name: str):
+        """Parse OK_<token>[_N].wav into its token and zero-based variant."""
+        if not name.startswith("OK_") or not name.endswith(".wav"):
+            return None
+        token = name[3:-4]
+        head, sep, suffix = token.rpartition("_")
+        if sep and head and suffix.isdigit() and int(suffix) >= 2:
+            return head, int(suffix) - 1
+        return (token, 0) if token else None
+
+    def _bundled_jobs(self):
+        from studio.paths import ROOT as root
+        return [job for path in sorted((root / "voice/backchannel").glob("OK_*.wav"))
+                if (job := self._bundled_job(path.name))]
 
     def _tokens(self) -> list[str]:
         seen, out = set(), []
@@ -401,9 +423,14 @@ class BackchannelVoice:
         t0 = _t.time()
         root = _cache_root()
         root.mkdir(parents=True, exist_ok=True)
-        tokens = self._tokens() if tokens is None else list(tokens)
-        jobs = [(token, i) for token in tokens
-                for i in self._style_indices(token, variants)]
+        reviewed = cache_only and self._uses_bundled_voice() and tokens is None and variants is None
+        if reviewed:
+            jobs = self._bundled_jobs()
+            tokens = list(dict.fromkeys(token for token, _ in jobs))
+        else:
+            tokens = self._tokens() if tokens is None else list(tokens)
+            jobs = [(token, i) for token in tokens
+                    for i in self._style_indices(token, variants)]
         if cache_only and self._uses_bundled_voice():
             # The checked-in WAV directory is the user's reviewed selection.
             # Missing files intentionally disable variants even if an older
@@ -434,15 +461,13 @@ class BackchannelVoice:
         n = 0
         for token in tokens:
             clips = []
-            for i in self._style_indices(token, variants):
-                if (token, i) not in active_jobs:
-                    continue
-                style = _STYLES[self.lang][i]
+            for _, i in (job for job in jobs if job[0] == token):
                 path = self._path(token, i)
                 try:
                     if path.is_file() and path.stat().st_size > 0:
                         clips.append(self._normalize(path.read_bytes()))
                     elif not cache_only:
+                        style = _STYLES[self.lang][i]
                         pcm = await self._synth_one(token, style)
                         if pcm:
                             path.write_bytes(pcm)

@@ -121,7 +121,7 @@ def backchannel_policy_summary() -> str:
     policy = backchannel_policy()
     curve = policy.session_curve
     return (
-        f"单轮次数=前段2次80%/1次20%，中段1次80%/0次20%，"
+        f"单轮次数=前段2次80%/1次20%，中段1次80%/0次20%，前6s总计≤2次，"
         f"后段1/2/3次各30%/0次10%，末段2次80%/0次20% "
         f"分段={curve.opening_s:g}s/{curve.recovery_s:g}s/{curve.late_s:g}s "
         f"停顿窗口={policy.gap_s * 1000:.0f}~{policy.max_gap_s * 1000:.0f}ms "

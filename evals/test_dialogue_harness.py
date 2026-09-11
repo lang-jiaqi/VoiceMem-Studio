@@ -66,12 +66,12 @@ class BackchannelTests(unittest.TestCase):
         self.assertEqual(self.offer(bc, 1, text="我就是觉得", available={"嗯"}), "嗯")
         self.assertIsNone(self.offer(bc, 6, available=set()))
 
-    def test_chinese_bank_has_only_the_reviewed_nine_tokens(self):
+    def test_chinese_bank_has_only_the_reviewed_ten_tokens(self):
         affirm = backchannel_module.ZH_AFFIRMATIVE_TOKENS
         questions = backchannel_module.ZH_QUESTION_TOKENS
         self.assertEqual(
             (*affirm, *questions),
-            ("哦", "哦哦", "嗯嗯", "嗯", "对", "明白", "哦？", "嗯？", "是吗？"),
+            ("哦", "哦哦", "嗯嗯", "嗯", "啊", "对", "明白", "哦？", "嗯？", "是吗？"),
         )
         active = {token for group in backchannel_module._TOKENS["zh"].values()
                   for token in group}
@@ -79,7 +79,7 @@ class BackchannelTests(unittest.TestCase):
 
     def test_natural_continuers_have_extra_audio_variants(self):
         voice = backchannel_module.BackchannelVoice(object(), lang="zh")
-        for token in ("哦", "嗯嗯", "嗯"):
+        for token in ("哦", "嗯嗯", "嗯", "啊"):
             self.assertEqual(list(voice._style_indices(token)), list(range(5)))
         self.assertEqual(list(voice._style_indices("对")), [0, 1])
         self.assertEqual(list(voice._style_indices("嗯？")), [0])
@@ -107,14 +107,14 @@ class BackchannelTests(unittest.TestCase):
         self.assertEqual(voice._spoken_text("哦哦"), "哦哦。")
         self.assertEqual(voice._spoken_text("是吗？"), "是吗？")
 
-    def test_chinese_bank_has_exactly_fifteen_recorded_variants(self):
+    def test_chinese_bank_has_exactly_seventeen_recorded_variants(self):
         voice = backchannel_module.BackchannelVoice(object(), lang="zh")
         tokens = (*backchannel_module.ZH_AFFIRMATIVE_TOKENS,
                   *backchannel_module.ZH_QUESTION_TOKENS)
         jobs = [(token, i) for token in tokens
                 for i in voice._style_indices(token, variants=2)]
-        self.assertEqual(len(jobs), 15)
-        self.assertEqual(len({voice._bundled_filename(*job) for job in jobs}), 15)
+        self.assertEqual(len(jobs), 17)
+        self.assertEqual(len({voice._bundled_filename(*job) for job in jobs}), 17)
 
     def test_clip_trim_rejects_a_loud_hard_boundary(self):
         tone = np.full(round(24000 * .9), 4000, dtype=np.int16)
@@ -143,12 +143,31 @@ class BackchannelTests(unittest.TestCase):
         voice = backchannel_module.BackchannelVoice(tts, lang="zh")
         self.assertTrue(voice._uses_bundled_voice())
         self.assertTrue(voice._bundled_pcm("哦", 1))
-        expected = {p.name for p in (root / "voice/backchannel").glob("OK_*.wav")}
-        loaded = {voice._bundled_filename(token, i)
-                  for token in voice._tokens()
-                  for i in voice._style_indices(token)
-                  if voice._bundled_pcm(token, i)}
-        self.assertEqual(loaded, expected)
+        expected = list((root / "voice/backchannel").glob("OK_*.wav"))
+        with tempfile.TemporaryDirectory() as cache, patch(
+                "studio.core.utils.turn_taking.backchannel._cache_root",
+                return_value=Path(cache)):
+            count = asyncio.run(voice.prime(cache_only=True))
+        self.assertEqual(count, len(expected))
+        self.assertEqual(sum(map(len, voice._clips.values())), len(expected))
+
+    def test_bundled_filename_parser_accepts_new_tokens_and_variants(self):
+        parse = backchannel_module.BackchannelVoice._bundled_job
+        self.assertEqual(parse("OK_好呀.wav"), ("好呀", 0))
+        self.assertEqual(parse("OK_好呀_7.wav"), ("好呀", 6))
+
+    def test_new_reviewed_token_is_available_before_and_after_six_seconds(self):
+        with patch('random.Random.random', return_value=0):
+            for speech_s in (2.1, 6.1):
+                policy = backchannel_policy()
+                policy.refractory_s = 0
+                bc = Backchannel(policy=policy)
+                bc.offer(text="我还在继续说", silence=0, spoke=True,
+                         speech_s=speech_s, now=0)
+                self.assertEqual(bc.offer(
+                    text="我还在继续说", silence=.15, spoke=True,
+                    speech_s=speech_s, now=.1, unfinished=True,
+                    available={"新附和"}), "新附和")
 
     @patch.dict(os.environ, {"VOICEMEM_BACKCHANNEL_EMIT": "1"})
     def test_end_ack_and_in_speech_backchannel_share_cooldown(self):
@@ -174,6 +193,24 @@ class BackchannelTests(unittest.TestCase):
                              [1, 2, 2, 3, 3])
             self.assertEqual([curve.draw_target(10, roll) for roll in (0, .799, .8, .99)],
                              [2, 2, 0, 0])
+
+    def test_first_six_seconds_have_a_shared_two_clip_cap(self):
+        policy = backchannel_policy()
+        policy.refractory_s = 0
+        bc = Backchannel(policy=policy)
+
+        def offer(now, speech_s):
+            bc.offer(text="我就是觉得", silence=0, spoke=True,
+                     speech_s=speech_s, now=now)
+            return bc.offer(text="我就是觉得", silence=.15, spoke=True,
+                            speech_s=speech_s, now=now, unfinished=True,
+                            available={"嗯"})
+
+        with patch('random.Random.random', return_value=0):
+            self.assertEqual(offer(0, 2.1), "嗯")
+            self.assertEqual(offer(.1, 2.2), "嗯")
+            self.assertIsNone(offer(.2, 3.1))
+            self.assertEqual(offer(.3, 6), "嗯")
 
     def test_late_phase_has_its_own_quota_and_resets(self):
         bc = Backchannel(policy=backchannel_policy())
