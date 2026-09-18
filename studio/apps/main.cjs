@@ -116,17 +116,25 @@ async function openStudio(url, ownGeneration) {
   pet?.close();
   previous?.destroy();
   lockNavigation(window, destination => runtime.sameOrigin(destination, url));
-  let choosingMode = true;
-  window.webContents.on('did-navigate', (_event, destination) => {
-    const pathname = new URL(destination).pathname;
-    const home = ['/', '/index.html', '/ui/', '/ui/index.html'].includes(pathname);
-    if (home === choosingMode) return;
-    choosingMode = home;
+  let choosingMode = true, preparedMode = true;
+  const homeOf = destination => ['/', '/index.html', '/ui/', '/ui/index.html'].includes(new URL(destination).pathname);
+  function prepareMode(home) {
+    if (home === preparedMode) return;
+    preparedMode = home;
     if (window.isFullScreen()) window.setFullScreen(false);
     if (window.isMaximized()) window.unmaximize();
     window.setMinimumSize(home ? 480 : 1080, home ? 380 : 680);
     window.setSize(home ? 680 : 1440, home ? 430 : 920);
     window.center();
+  }
+  window.webContents.on('will-navigate', (_event, destination) => {
+    if (runtime.sameOrigin(destination, url)) prepareMode(homeOf(destination));
+  });
+  window.webContents.on('did-navigate', (_event, destination) => {
+    const home = homeOf(destination);
+    if (home === choosingMode) return;
+    choosingMode = home;
+    prepareMode(home);
     if (home) pet?.close(); else void showPet();
   });
   window.webContents.on('page-title-updated', event => event.preventDefault());
