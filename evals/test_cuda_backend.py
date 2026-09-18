@@ -28,6 +28,7 @@ class BackendConfigTests(unittest.TestCase):
                                  (backend, device, device))
                 self.assertEqual((args.mode, args.llm, args.space, args.lang, args.port),
                                  ('llm_tts', 'deepseek', 'studio-zh', 'zh', 8787))
+                self.assertEqual(args.memory_llm, 'deepseek')
 
     def test_explicit_space_still_overrides_default(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -68,21 +69,44 @@ class BackendConfigTests(unittest.TestCase):
 
     def test_credentials_follow_provider(self):
         with patch.dict(os.environ, {}, clear=True):
-            for provider, key in [('deepseek', 'DEEPSEEK_API_KEY'), ('openai', 'OPENAI_API_KEY'),
-                                  ('qwen', 'DASHSCOPE_API_KEY')]:
-                args = parse_args(['--backend', 'cuda', '--llm', provider])
-                self.assertEqual(set(required_credentials(args)), {key})
-            args = parse_args(['--mode', 'realtime'])
-            self.assertEqual(set(required_credentials(args)), {'OPENAI_API_KEY'})
+            args = parse_args(['--backend', 'cuda', '--memory-llm', 'qwen', '--llm', 'deepseek'])
+            credentials = required_credentials(args)
+            self.assertEqual([(item[1], item[2], item[3]) for item in credentials], [
+                ('qwen', 'VoiceMem 记忆处理', False),
+                ('deepseek', 'Studio 可见回复', False),
+            ])
+            self.assertIn('DASHSCOPE_API_KEY', credentials[0][0])
+            self.assertIn('DEEPSEEK_API_KEY', credentials[1][0])
+            self.assertEqual(len(required_credentials(args, 'memory')), 1)
+        with patch.dict(os.environ, {
+            'VOICEMEM_MEMORY_API_KEY': 'memory-test',
+            'VOICEMEM_STUDIO_API_KEY': 'reply-test',
+        }, clear=True):
+            args = parse_args(['--memory-llm', 'openai', '--llm', 'deepseek'])
+            self.assertTrue(all(item[3] for item in required_credentials(args)))
+        with patch.dict(os.environ, {'DEEPSEEK_API_KEY': 'memory-test'}, clear=True):
+            local = parse_args(['--backend', 'mlx', '--llm', 'local'])
+            self.assertEqual(local.memory_llm, 'deepseek')
+            self.assertEqual(len(required_credentials(local)), 1)
 
     def test_cuda_model_list_excludes_mlx_and_includes_codec(self):
         with patch.dict(os.environ, {}, clear=True):
             cuda = models(parse_args(['--backend', 'cuda']))
             mlx = models(parse_args(['--backend', 'mlx']))
+            memory = models(parse_args(['--backend', 'mlx']), 'memory')
         self.assertFalse(any('mlx' in item.repository.lower() for item in cuda))
         breeze = next(item for item in cuda if item.name == 'Breeze CUDA')
         self.assertIn('audio_tokenizer/*.safetensors', breeze.required)
         self.assertTrue(any('Breeze-TTS-2-mlx' in item.directory for item in mlx))
+        self.assertFalse(any(item.name.startswith(('Breeze', '三级回复', '本地回复')) for item in memory))
+
+    def test_visible_reply_keeps_its_key_and_endpoint_separate_from_memory(self):
+        from studio.core.utils.llm.initialize import create
+        with patch('voicemem.reply.openai_reply', return_value=lambda *args, **kwargs: None) as factory:
+            create('system', 'openai', 'studio-test-key')
+        _, kwargs = factory.call_args
+        self.assertEqual(kwargs['api_key'], 'studio-test-key')
+        self.assertEqual(kwargs['base_url'], 'https://api.openai.com/v1')
 
 
 class CudaStreamTests(unittest.IsolatedAsyncioTestCase):

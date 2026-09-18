@@ -6,12 +6,12 @@ import sys
 
 
 def select_provider(backend, read=input):
-    """Choose a reply provider before loading models or opening memory."""
+    """Choose the provider shared by memory and visible replies."""
     providers = [("deepseek", "DeepSeek"), ("qwen", "Qwen / DashScope"),
                  ("openai", "OpenAI")]
     if backend == "mlx":
         providers.append(("local", "本地模型 / MLX"))
-    print("\n选择回复 API（密钥沿用环境变量或 .env）：", flush=True)
+    print("\n选择 API（VoiceMem 记忆与 Studio 回复共用）：", flush=True)
     for index, (_, label) in enumerate(providers, 1):
         print(f"  {index}. {label}", flush=True)
     while True:
@@ -43,7 +43,10 @@ def parse_args(argv=None):
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--llm", choices=("deepseek", "qwen", "openai", "local"),
-                        help="省略时在交互终端选择 API；非交互启动默认 deepseek")
+                        help="Studio 可见回复 API；省略时在交互终端选择")
+    parser.add_argument("--memory-llm", choices=("deepseek", "qwen", "openai"),
+                        default=os.environ.get("VOICEMEM_MEMORY_PROVIDER") or None,
+                        help="VoiceMem 记忆整理 API；默认跟随 --llm")
     parser.add_argument("--memory_root", default="")
     parser.add_argument("--spec_min_chars", type=int, default=6)
     parser.add_argument("--gamble_ms", type=int, default=200)
@@ -52,10 +55,14 @@ def parse_args(argv=None):
     parser.add_argument("--log-file", default="")
     parser.add_argument("--no-file-log", action="store_true")
     parser.add_argument("--check", action="store_true", help="只检查环境、凭据和模型，不启动或下载")
+    parser.add_argument("--prepare-stage", choices=("memory",), default="",
+                        help="只检查并下载 VoiceMem 基础模型，然后退出")
     args = parser.parse_args(argv)
+    interactive = argv is None and sys.stdin.isatty() and not args.check and args.mode == "llm_tts"
     if args.llm is None:
-        args.llm = (select_provider(args.backend) if argv is None and sys.stdin.isatty()
-                    and not args.check and args.mode == "llm_tts" else "deepseek")
+        args.llm = args.memory_llm or (select_provider(args.backend) if interactive else "deepseek")
+    if args.memory_llm is None:
+        args.memory_llm = args.llm if args.llm != "local" else "deepseek"
     args.device = args.device or ("cuda:0" if args.backend == "cuda" else "cpu")
     args.tts_device = args.tts_device or args.device
     if args.backend == "cuda" and args.llm == "local" and args.mode == "llm_tts":

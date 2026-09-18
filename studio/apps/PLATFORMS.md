@@ -39,16 +39,20 @@ Windows 的 Docker 路线需要已运行的 Docker Desktop、启用 WSL2 后端�
 本机模型路径必须属于实际运行后端的文件系统：Windows、WSL 和容器路径不是同一个命名空间，不能直接混用。
 远程模式的模型和 API Key 留在服务器，不能拿客户端目录代替服务器配置。
 
-`npm start` 在终端选择 API 并以隐藏输入读取本次运行的密钥；当前“配置设置”仍只编辑服务连接与已有 Docker 启动选项，不提供通用 `.env` 或模型管理界面。
+`npm start` 在终端只选择一次 API 并以隐藏输入读取一次密钥，VoiceMem 记忆处理和 Studio 回复共用这套配置；当前“配置设置”仍只编辑服务连接与已有 Docker 启动选项，不提供通用 `.env` 或模型管理界面。
 
 ## 源码 App 启动流程
 
 ```text
-npm start → 终端选择 API / 输入 Key
+npm start → 选择一次 API / 输入一次 Key
+          → 检查并下载记忆、感知、转写模型
           ├─ Mac 本机：启动受控的原生 MLX 后端
           └─ Windows 本机：通过 wsl.exe 启动 WSL2/CUDA 后端
-          → 检查 / 下载 / 预热 → 风格选择页 → 主界面 + 桌宠
+          → 检查并下载回复、TTS 模型 → 严格预热
+          → 创建风格选择页 → 主界面 + 桌宠
 ```
+
+准备和等待期间只使用终端，不创建本地连接/状态窗口。启动失败时显示原生错误框并退出。
 
 自动识别平台不等于自动安装系统组件。缺少 WSL、驱动、Docker 或 MLX 环境时应准确提示，
 不擅自提权、修改系统配置或新建第二套模型目录。
@@ -59,7 +63,7 @@ Mac 的启动适配应传入 `STUDIO_DESKTOP_PET=0`，桌宠由 App 唯一管理
 ## 当前实现与待验证边界
 
 - 已实现：共享 App + 桌宠、配置文案、Windows/macOS 打包配置、连接现有服务、Linux/WSL 禁止自动拉起桌宠。
-- 已实现代码并做模拟测试：`npm start` 的 provider/密钥终端步骤、Mac MLX 受控进程和 Windows `wsl.exe` CUDA 受控进程；App 退出时结束自己启动的进程。
+- 已实现代码并做模拟测试：`npm start` 的单次 provider/密钥终端步骤、VoiceMem 模型准备、Mac MLX 受控进程和 Windows `wsl.exe` CUDA 受控进程；App 退出时结束自己启动的进程。
 - 已实现代码并做模拟测试：Windows Docker CLI 本机 named-pipe 检查和 Compose 启动；只启动已有镜像和配置。
   不自动启动 Docker Desktop 本身，不构建、拉取或重建容器。
 - 尚未实现：安装包内置 Python/模型环境、图形化 API/模型配置界面。

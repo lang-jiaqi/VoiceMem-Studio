@@ -83,8 +83,10 @@ moving model inference onto the event loop. GPU and Torch schedulers remain
 process-scoped. Speculative generation captures its memory instance and space
 before scheduling; cancellation also reaps pending route work.
 
-Interactive startup without `--llm` asks for DeepSeek, Qwen, OpenAI, or an
-MLX-local reply model before loading inference. Explicit `--llm`, `--check`,
+Interactive startup without `--llm` asks once for DeepSeek, Qwen, OpenAI, or an
+MLX-local reply model before loading inference. Remote selections are shared by
+VoiceMem memory work and visible Studio replies; the local reply option uses
+DeepSeek for memory work. Explicit `--llm`, `--check`,
 realtime mode, and non-interactive commands never prompt. Non-interactive startup
 defaults to DeepSeek reply, Breeze TTS, and the `studio-zh` Memory Space.
 An explicit `--space` selects another existing or new space; stored language and
@@ -162,7 +164,12 @@ Docker backend. macOS uses native MLX or a remote service. Both clients share
 the same Web UI and observer contracts. The backend root serves the shared
 frontend from `studio/apps/ui/`, with assets under `/ui/`. Its first page reuses the original mode-selection homepage, with labeled
 image cards linking to the technical or digital-human visual style. Display
-settings live inside each style. `/legacy` retains the previous Studio renderer;
+settings live inside each style. The component settings tab presents the fixed
+input, memory, reply, speech, and pet components as a draggable canvas. Only
+normalized card positions are stored in browser local storage; components cannot
+be removed. `/api/components` supplies non-secret provider and readiness labels.
+API keys never enter the renderer and remain configurable through the single
+`npm start` terminal prompt. `/legacy` retains the previous Studio renderer;
 `/classic` retains the older demo. The desktop opens this same root and keeps its
 connection configuration window hidden on a successful startup; connection errors
 reveal configuration. Desktop clients require the updated backend assets.
@@ -192,16 +199,28 @@ application-data directory, not in the backend's memory or credential files.
 
 The source desktop entry (`npm start`) first verifies its locked Electron, PixiJS,
 and Pixi Live2D files. Missing files trigger `npm ci --include=dev`; a complete
-installation performs no package-manager or network work. It then owns an optional local backend lifecycle.
-Before Electron starts it asks for the reply provider and reads the matching API
-key with masked terminal input. The key is inherited only by Electron and the
-backend process; it is not written to desktop settings or command arguments.
+installation performs no package-manager or network work. The managed install
+explicitly enables lifecycle scripts so a user-level npm `ignore-scripts`
+setting cannot leave Electron without its platform binary. It then owns an optional local backend lifecycle.
+Before Electron starts it asks once for a provider and reads one matching API
+key with masked terminal input. Remote selections and their key are shared by
+VoiceMem memory work and visible Studio replies. The local MLX reply selection
+uses the same single prompt for the DeepSeek key required by memory work and
+conversation titles. A
+short-lived preparation process checks and acquires the shared memory,
+perception, and transcription models. Keys are inherited only by preparation,
+Electron, and the backend process; they are not written to desktop settings or
+command arguments.
 Electron starts `.venv/bin/python` with the MLX backend on macOS, or invokes
 `.venv-cuda/bin/python` through `wsl.exe` with the CUDA backend on Windows. Both
-paths bind loopback port 8787, disable the backend-owned pet, wait for the shared
-Web page, and then open the style selector. The app stops this owned process on
-exit. Missing Python, WSL, driver, dependency, or model prerequisites produce a
-startup error; the desktop entry does not install or modify system components.
+paths bind loopback port 8787, disable the backend-owned pet, acquire the
+remaining reply and speech models, run strict warmups, wait for the shared Web
+page, and only then create and show the style selector. Managed startup never
+creates the local connection/status window; preparation progress stays in the
+terminal, and startup failures use a native error dialog. The app stops this
+owned process on exit. Missing Python, WSL, driver, or dependency prerequisites produce a startup
+error; model artifacts are checked and downloaded with resumable provider
+caches. The desktop entry does not install or modify system components.
 
 On Windows, an opt-in configuration setting can also start an existing local NVIDIA
 Compose service through a local Docker named pipe. Docker Desktop must already

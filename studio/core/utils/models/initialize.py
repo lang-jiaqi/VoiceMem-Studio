@@ -5,8 +5,8 @@ BUNDLE = 'zhifeixie/VoiceMem_Default_Models_Env'
 HF = ('config.json', '*.safetensors')
 
 
-def models(args):
-    """List every model needed by the selected voice and memory path."""
+def models(args, stage="all"):
+    """List models for VoiceMem preparation or the complete Studio path."""
     shared = [
         Model('E5 记忆向量', 'embedding', 'intfloat/multilingual-e5-small',
               HF + ('tokenizer.json',), ('*.json', '*.safetensors', '*.model', '1_Pooling/*')),
@@ -40,6 +40,8 @@ def models(args):
     if args.eot:
         shared.append(Model('Smart Turn EOT', 'eot', 'pipecat-ai/smart-turn-v3',
                             ('smart-turn-v3.2-cpu.onnx',), ('smart-turn-v3.2-cpu.onnx',)))
+    if stage == "memory":
+        return shared
     if args.mode == 'llm_tts':
         shared.extend([
             Model('三级回复路由', 'reply-router/Qwen3-0.6B', 'Qwen/Qwen3-0.6B',
@@ -62,9 +64,9 @@ def models(args):
     return shared
 
 
-def acquire_all(args):
+def acquire_all(args, stage="all"):
     from studio.paths import MODELS, ROOT
-    for model in models(args):
+    for model in models(args, stage):
         # Bundled ONNX artifacts retain their category prefix in the upstream repo.
         if model.repository == BUNDLE:
             if model.ready(MODELS):

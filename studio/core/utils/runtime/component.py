@@ -60,8 +60,17 @@ def configure(self, args):
     self._LAST_TONE = {'tag': ''}
     self._HISTORY_CHARS = 200
     self._SESSION_CONTEXT = SessionBuffer(text_limit=self._HISTORY_CHARS)
-    from studio.core.utils.llm.initialize import configuration
+    from studio.core.utils.llm.initialize import configuration, credential
     provider = args.llm if args.mode == "llm_tts" else "openai"
+    memory_provider = args.memory_llm
+    memory_key = credential(memory_provider, "memory")
+    reply_key = credential(provider, "reply")
+    if memory_key:
+        os.environ["VOICEMEM_MEMORY_API_KEY"] = memory_key
+    if reply_key:
+        os.environ["VOICEMEM_STUDIO_API_KEY"] = reply_key
+    memory_llm = configuration(memory_provider)
+    memory_llm["config"]["api_key"] = memory_key
     self.CONFIG = {
         "mode": "multi_modal", "memory_root": args.memory_root,
         "space": args.space, "embedding": {"provider": "local"},
@@ -70,8 +79,7 @@ def configure(self, args):
                   "tts": {"provider": "breeze_cuda" if args.backend == "cuda" else "breeze_mlx", "config": {}},
                   "realtime": {"provider": "openai", "config": {"model": "gpt-realtime"}}},
     }
-    # Memory extraction and cleanup must use the same provider as visible reply.
-    self.CONFIG["llm"] = self.CONFIG["reply"]["llm"]
+    self.CONFIG["llm"] = memory_llm
     self.REPLY = self.CONFIG["reply"]
     self._LOCAL_LLM = None
     self._SPACES: dict = {}

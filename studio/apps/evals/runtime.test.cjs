@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
+const { EventEmitter } = require('node:events');
 const r = require('../runtime.cjs');
 
 async function temporary(t) {
@@ -42,8 +43,13 @@ test('managed npm launch validates its project and provider', () => {
   assert.equal(r.managedLaunch({}), null);
   assert.deepEqual(r.managedLaunch({
     VOICEMEM_DESKTOP_PROJECT_ROOT: '/fixture/project',
+    VOICEMEM_DESKTOP_MEMORY_PROVIDER: 'qwen',
+    VOICEMEM_DESKTOP_REPLY_PROVIDER: 'deepseek',
+  }), { projectDir: '/fixture/project', memoryProvider: 'qwen', replyProvider: 'deepseek' });
+  assert.deepEqual(r.managedLaunch({
+    VOICEMEM_DESKTOP_PROJECT_ROOT: '/fixture/project',
     VOICEMEM_DESKTOP_MANAGED_PROVIDER: 'qwen',
-  }), { projectDir: '/fixture/project', provider: 'qwen' });
+  }), { projectDir: '/fixture/project', memoryProvider: 'qwen', replyProvider: 'qwen' });
   assert.throws(() => r.managedLaunch({
     VOICEMEM_DESKTOP_PROJECT_ROOT: '/fixture/project',
     VOICEMEM_DESKTOP_MANAGED_PROVIDER: 'unknown',
@@ -56,14 +62,13 @@ test('managed macOS backend uses MLX and keeps credentials out of arguments', as
   const python = path.join(directory, '.venv/bin/python');
   await fs.mkdir(path.dirname(python), { recursive: true });
   await fs.writeFile(python, 'fixture');
-  const specification = await r.managedBackendCommand(directory, 'deepseek', {
-    platform: 'darwin', env: { DEEPSEEK_API_KEY: 'test-secret' },
+  const specification = await r.managedBackendCommand(directory, 'qwen', 'deepseek', {
+    platform: 'darwin', env: { DASHSCOPE_API_KEY: 'memory-secret', DEEPSEEK_API_KEY: 'reply-secret' },
   });
   assert.equal(specification.file, path.join(await fs.realpath(directory), '.venv/bin/python'));
   assert.ok(specification.args.includes('mlx'));
-  assert.deepEqual(specification.args.slice(2, 6), ['--backend', 'mlx', '--llm', 'deepseek']);
-  assert.equal(specification.args.includes('test-secret'), false);
-  assert.equal(specification.env.DEEPSEEK_API_KEY, 'test-secret');
+  assert.deepEqual(specification.args.slice(2, 8), ['--backend', 'mlx', '--memory-llm', 'qwen', '--llm', 'deepseek']);
+  assert.equal(specification.args.includes('memory-secret') || specification.args.includes('reply-secret'), false);
   assert.equal(specification.env.STUDIO_DESKTOP_PET, '0');
 });
 
@@ -71,8 +76,8 @@ test('managed Windows backend starts WSL CUDA without changing Docker', async t 
   const directory = await temporary(t);
   for (const file of ['compose.yaml', 'pyproject.toml']) await fs.writeFile(path.join(directory, file), 'fixture');
   const calls = [];
-  const specification = await r.managedBackendCommand(directory, 'qwen', {
-    platform: 'win32', env: { DASHSCOPE_API_KEY: 'test-secret' },
+  const specification = await r.managedBackendCommand(directory, 'openai', 'qwen', {
+    platform: 'win32', env: { OPENAI_API_KEY: 'memory-secret', DASHSCOPE_API_KEY: 'reply-secret' },
     run: async (file, args) => { calls.push({ file, args }); return '/mnt/c/VoiceMem-Studio'; },
   });
   assert.deepEqual(calls, [{ file: 'wsl.exe', args: ['wslpath', '-a', await fs.realpath(directory)] }]);
@@ -81,9 +86,31 @@ test('managed Windows backend starts WSL CUDA without changing Docker', async t 
     '--cd', '/mnt/c/VoiceMem-Studio', '--exec', '/mnt/c/VoiceMem-Studio/.venv-cuda/bin/python',
   ]);
   assert.ok(specification.args.includes('cuda'));
-  assert.ok(specification.env.WSLENV.split(':').includes('DASHSCOPE_API_KEY/u'));
-  assert.equal(specification.args.includes('test-secret'), false);
+  assert.ok(specification.args.includes('openai'));
+  assert.ok(specification.env.WSLENV.split(':').includes('DASHSCOPE_API_KEY'));
+  assert.ok(specification.env.WSLENV.split(':').includes('OPENAI_API_KEY'));
+  assert.ok(specification.env.WSLENV.split(':').includes('VOICEMEM_MEMORY_API_KEY'));
+  assert.equal(specification.args.includes('memory-secret') || specification.args.includes('reply-secret'), false);
   assert.equal(calls.some(call => call.file === 'docker'), false);
+});
+
+test('VoiceMem preparation finishes before Electron startup continues', async t => {
+  const directory = await temporary(t);
+  const root = await fs.realpath(directory);
+  for (const file of ['compose.yaml', 'pyproject.toml']) await fs.writeFile(path.join(directory, file), 'fixture');
+  const python = path.join(root, '.venv/bin/python');
+  await fs.mkdir(path.dirname(python), { recursive: true }); await fs.writeFile(python, 'fixture');
+  let specification;
+  await r.prepareManagedMemory(directory, 'deepseek', {
+    platform: 'darwin', env: { DEEPSEEK_API_KEY: 'memory-secret' },
+    spawnImpl(file, args, options) {
+      specification = { file, args, options }; const child = new EventEmitter(); child.killed = false;
+      child.kill = () => { child.killed = true; }; setImmediate(() => child.emit('exit', 0, null)); return child;
+    },
+  });
+  assert.equal(specification.file, python);
+  assert.deepEqual(specification.args.slice(-2), ['--prepare-stage', 'memory']);
+  assert.equal(specification.options.stdio, 'inherit');
 });
 
 test('Docker startup preserves compose overrides and uses the published port', async t => {

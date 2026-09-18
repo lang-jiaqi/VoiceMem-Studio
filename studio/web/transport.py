@@ -43,7 +43,13 @@ def _openai_client():
 
     global client
     if client is None:
-        client = AsyncOpenAI()
+        key = os.environ.get("VOICEMEM_STUDIO_API_KEY")
+        base_url = (os.environ.get("VOICEMEM_STUDIO_BASE_URL") or
+                    "https://api.openai.com/v1") if key else None
+        client = AsyncOpenAI(
+            api_key=key or os.environ.get("OPENAI_API_KEY"),
+            base_url=base_url,
+        )
     return client
 
 from voicemem.utils.audio.stream_io import resample  # noqa: E402,F401
@@ -64,14 +70,18 @@ _TITLE_SYSTEM = (
     "抓真正聊到的事情。整段都只是打招呼时，才叫「随便聊聊」。"
 )
 
-def make_title_generator(reply=None):
-    """Build a small title call using the configured Studio reply provider."""
+def make_title_generator(reply=None, fallback=None):
+    """Build a title call from the reply provider or its remote fallback."""
     if isinstance(reply, dict):
         segment = reply.get("llm", reply) or {}
         provider = segment.get("provider")
         cfg = segment.get("config") or {}
     else:
         provider, cfg = None, {}
+    if provider == "local" and isinstance(fallback, dict):
+        segment = fallback.get("llm", fallback) or {}
+        provider = segment.get("provider")
+        cfg = segment.get("config") or {}
 
     deepseek = str(provider or "").lower() == "deepseek"
     model = (cfg.get("model") or
@@ -82,13 +92,20 @@ def make_title_generator(reply=None):
     async def generate(text: str) -> str:
         nonlocal client
         if client is None:
-            if deepseek or provider == "qwen":
-                key = cfg.get("api_key") or os.environ.get("DASHSCOPE_API_KEY" if provider == "qwen" else "DEEPSEEK_API_KEY")
+            if provider in {"deepseek", "qwen", "openai"}:
+                key = (cfg.get("api_key") or os.environ.get("VOICEMEM_STUDIO_API_KEY") or
+                       os.environ.get("DASHSCOPE_API_KEY" if provider == "qwen" else
+                                      "DEEPSEEK_API_KEY" if deepseek else "OPENAI_API_KEY"))
                 if not key:
-                    raise ValueError("生成标题需要 DEEPSEEK_API_KEY")
+                    raise ValueError("生成标题需要 Studio 回复 API Key")
+                base_url = cfg.get("base_url") or {
+                    "deepseek": "https://api.deepseek.com",
+                    "qwen": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                    "openai": "https://api.openai.com/v1",
+                }[provider]
                 client = AsyncOpenAI(
                     api_key=key,
-                    base_url=(cfg.get("base_url") or "https://api.deepseek.com").rstrip("/"),
+                    base_url=base_url.rstrip("/"),
                 )
             else:
                 client = _openai_client()
@@ -165,7 +182,7 @@ def hits_payload(result, has_audio=None, cluster_of=None):
     }
 
 def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None,
-              set_lang=None, title=None, pet_port=8787):
+              set_lang=None, title=None, components=None, pet_port=8787):
     """Build the browser API and WebSocket routes using injected session callbacks."""
     app = FastAPI()
     title = title or make_title_generator()
@@ -230,6 +247,11 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
     @app.get("/api/memories")
     def api_memories() -> dict:
         return snapshot() if snapshot else {"left": [], "right": []}
+
+    @app.get("/api/components")
+    def api_components() -> dict:
+        """Expose non-secret runtime labels for the component settings canvas."""
+        return components() if components else {}
 
     @app.post("/api/lang")
     async def api_lang(req: Request) -> dict:

@@ -4,14 +4,15 @@ from voicemem import VoiceMem
 def open_memory(config):
     """Create memory with Studio reply/TTS/ASR injected through existing contracts."""
     from voicemem.config import build_kwargs
-    from studio.core.utils.llm.initialize import create as reply_model
+    from studio.core.utils.llm.initialize import create as reply_model, credential
     from studio.core.utils.tts.initialize import create as speech_model
     from studio.core.utils.asr.initialize import streaming, final
     segment = config["reply"]["llm"]
     memory_config = {k: v for k, v in config.items() if k not in {"reply", "tts"}}
     kwargs = build_kwargs(memory_config)
     language = config.get("memory_language", "zh")
-    kwargs.update(reply=reply_model(segment["config"]["system"], segment["provider"]),
+    kwargs.update(reply=reply_model(segment["config"]["system"], segment["provider"],
+                                   credential(segment["provider"], "reply")),
                   tts=speech_model, asr=lambda: streaming(language), asr_final=final)
     return VoiceMem(**kwargs)
 

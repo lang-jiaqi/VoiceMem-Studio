@@ -25,7 +25,10 @@ function provideDependencies(directory) {
 test('missing App runtime dependencies trigger one locked dev install', async t => {
   const apps = await temporary(t), calls = [];
   const installed = dependencies.ensureDependencies({
-    apps, env: { npm_execpath: '/fixture/npm-cli.js', NODE_ENV: 'production' },
+    apps, env: {
+      npm_execpath: '/fixture/npm-cli.js', NODE_ENV: 'production',
+      NPM_CONFIG_IGNORE_SCRIPTS: 'true', NPM_CONFIG_OMIT: 'dev',
+    },
     run: (file, args, options) => {
       calls.push({ file, args, options });
       provideDependencies(apps);
@@ -36,10 +39,13 @@ test('missing App runtime dependencies trigger one locked dev install', async t 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].file, process.execPath);
   assert.deepEqual(calls[0].args, [
-    '/fixture/npm-cli.js', 'ci', '--include=dev', '--no-audit', '--no-fund',
+    '/fixture/npm-cli.js', 'ci', '--include=dev', '--ignore-scripts=false', '--no-audit', '--no-fund',
   ]);
   assert.equal(calls[0].options.cwd, apps);
   assert.equal(calls[0].options.env.npm_config_omit, '');
+  assert.equal(calls[0].options.env.npm_config_ignore_scripts, 'false');
+  assert.equal('NPM_CONFIG_OMIT' in calls[0].options.env, false);
+  assert.equal('NPM_CONFIG_IGNORE_SCRIPTS' in calls[0].options.env, false);
 });
 
 test('complete App runtime dependencies skip npm install', async t => {

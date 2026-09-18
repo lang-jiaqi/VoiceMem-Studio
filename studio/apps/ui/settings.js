@@ -1,7 +1,7 @@
 /* Device-local display preferences, shared across the two independent pages. */
 (()=>{
 'use strict';
-const KEY='voicemem.display',UI_BASE=1.2,CONTENT_BASE=.75;
+const KEY='voicemem.display',COMPONENT_KEY='voicemem.components.layout.v1',UI_BASE=1.2,CONTENT_BASE=.75;
 let prefs={lang:'zh-CN',uiLevel:1,contentLevel:1,schema:2};
 try{
  const saved=JSON.parse(localStorage.getItem(KEY)||'null');
@@ -25,6 +25,23 @@ const pairs=[
 ];
 const en=new Map(pairs),zh=new Map(pairs.map(([a,b])=>[b,a]));
 [['风格','Style'],['语言与字体','Language & Type'],['组件','Components'],['组件画板','Component canvas']].forEach(([a,b])=>{en.set(a,b);zh.set(b,a);});
+[
+ ['拖动整理，点击组件查看配置','Drag to arrange. Select a component to view its settings'],
+ ['恢复布局','Reset layout'],['语音输入','Voice input'],['麦克风与流式识别','Microphone and streaming recognition'],
+ ['记忆系统','Memory system'],['记忆检索与整理','Memory retrieval and organization'],
+ ['回复模型','Response model'],['流式模型回复','Streaming model response'],
+ ['语音合成','Speech synthesis'],['Breeze 本地语音','Local Breeze voice'],
+ ['桌宠','Desktop pet'],['跟随回复状态','Follows response state'],['组件配置','Component settings'],
+ ['关闭组件配置','Close component settings'],['运行状态','Status'],['已就绪','Ready'],
+ ['服务商','Provider'],['API Key','API Key'],['已安全配置','Configured securely'],['未配置','Not configured'],
+ ['不需要','Not required'],['配置方式','Configuration'],['启动终端','Startup terminal'],
+ ['后端','Backend'],['模式','Mode'],['流式输入','Streaming input'],['模型','Model'],
+ ['管理方式','Managed in'],['App 菜单','App menu'],['固定组件','Fixed component'],
+ ['所有核心组件都会保留，只能调整位置。','All core components stay available; only their positions can change.'],
+ ['重新配置 API','Reconfigure API'],['完成','Done'],
+ ['退出 App 后重新运行 npm start，在终端选择服务商并输入一次 Key。VoiceMem 与 Studio 会共用这次配置。','Quit the app and run npm start again. Choose a provider and enter one key; VoiceMem and Studio will share it.'],
+ ['拖动组件','Drag component'],['本机','Local'],['本地模型','Local model'],['启动配置','Startup config'],
+].forEach(([a,b])=>{en.set(a,b);zh.set(b,a);});
 // Existing English chrome gets a Chinese equivalent too.
 zh.set('Technical','科技风');zh.set('Chat','对话记录');zh.set('info','事实记忆');zh.set('emo&persona','情绪与人格');zh.set('Speaker ID','说话人 ID');
 function t(value){
@@ -76,6 +93,89 @@ function controls(){
  language.onchange=()=>{prefs.lang=language.value;apply();};uiScale.oninput=()=>{prefs.uiLevel=Number(uiScale.value)/100;apply();};contentScale.oninput=()=>{prefs.contentLevel=Number(contentScale.value)/100;apply();};
  section.querySelector('#resetDisplay').onclick=()=>{prefs={lang:'zh-CN',uiLevel:1,contentLevel:1,schema:2};apply();};return section;
 }
+const COMPONENTS=[
+ {id:'input',title:'语音输入',description:'麦克风与流式识别'},
+ {id:'memory',title:'记忆系统',description:'记忆检索与整理'},
+ {id:'reply',title:'回复模型',description:'流式模型回复'},
+ {id:'speech',title:'语音合成',description:'Breeze 本地语音'},
+ {id:'pet',title:'桌宠',description:'跟随回复状态'},
+];
+const DEFAULT_COMPONENT_LAYOUT={
+ input:{x:.03,y:.12},memory:{x:.27,y:.57},reply:{x:.51,y:.12},speech:{x:.75,y:.57},pet:{x:.99,y:.12},
+};
+const COMPONENT_LINKS=[['input','memory'],['memory','reply'],['reply','speech'],['speech','pet']];
+function providerName(value){const labels={deepseek:'DeepSeek',qwen:'Qwen',openai:'OpenAI',local:'本地模型',breeze_mlx:'Breeze MLX',breeze_cuda:'Breeze CUDA'};return labels[value]||value||'启动配置';}
+function componentLayout(){
+ let saved={};try{saved=JSON.parse(localStorage.getItem(COMPONENT_KEY)||'{}')||{};}catch{}
+ return Object.fromEntries(COMPONENTS.map(item=>{const value=saved[item.id]||DEFAULT_COMPONENT_LAYOUT[item.id];return[item.id,{x:Math.min(1,Math.max(0,Number(value.x)||0)),y:Math.min(1,Math.max(0,Number(value.y)||0))}];}));
+}
+function setupComponentBoard(board){
+ let layout=componentLayout(),runtime={},selected='',loaded=false;
+ board.innerHTML=`<div class="component-board-head"><div><strong>组件画板</strong><span>拖动整理，点击组件查看配置</span></div><button type="button" class="component-reset">恢复布局</button></div>
+ <svg class="component-links" aria-hidden="true"><defs><marker id="componentArrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 8 4 0 8Z"></path></marker></defs>${COMPONENT_LINKS.map(([a,b])=>`<path data-from="${a}" data-to="${b}" marker-end="url(#componentArrow)"></path>`).join('')}</svg>
+ <div class="component-nodes">${COMPONENTS.map(item=>`<article class="component-node component-${item.id}" data-component="${item.id}"><button type="button" class="component-drag" aria-label="拖动组件" title="拖动组件"><span></span><span></span><span></span><span></span><span></span><span></span></button><button type="button" class="component-open"><span class="component-copy"><strong>${item.title}</strong><small>${item.description}</small></span><span class="component-state"><i></i><b>本机</b></span></button></article>`).join('')}</div>
+ <aside class="component-editor" aria-live="polite" hidden><header><div><small>组件配置</small><h3></h3></div><button type="button" class="component-editor-close" aria-label="关闭组件配置">×</button></header><div class="component-editor-body"></div><footer><button type="button" class="component-reconfigure" hidden>重新配置 API</button><button type="button" class="component-done">完成</button></footer></aside>`;
+ const nodes=new Map([...board.querySelectorAll('.component-node')].map(node=>[node.dataset.component,node]));
+ const editor=board.querySelector('.component-editor');
+ function saveLayout(){try{localStorage.setItem(COMPONENT_KEY,JSON.stringify(layout));}catch{}}
+ function updateLinks(){
+  const bounds=board.getBoundingClientRect();
+  for(const path of board.querySelectorAll('.component-links path')){
+   const from=nodes.get(path.dataset.from)?.getBoundingClientRect(),to=nodes.get(path.dataset.to)?.getBoundingClientRect();
+   if(!from||!to||!bounds.width)continue;
+   const x1=from.right-bounds.left,y1=from.top+from.height/2-bounds.top,x2=to.left-bounds.left,y2=to.top+to.height/2-bounds.top;
+   const bend=Math.max(24,Math.abs(x2-x1)*.45);path.setAttribute('d',`M${x1} ${y1} C${x1+bend} ${y1},${x2-bend} ${y2},${x2} ${y2}`);
+  }
+ }
+ function positionNodes(){
+  for(const [id,node] of nodes){const x=Math.max(0,board.clientWidth-node.offsetWidth),y=Math.max(0,board.clientHeight-node.offsetHeight);node.style.left=`${layout[id].x*x}px`;node.style.top=`${layout[id].y*y}px`;}
+  updateLinks();
+ }
+ function componentBadge(id){
+  if(id==='input')return runtime.backend?.toUpperCase()||'本机';
+  if(id==='memory')return providerName(runtime.memory?.provider);
+  if(id==='reply')return providerName(runtime.reply?.provider);
+  if(id==='speech')return providerName(runtime.speech?.provider||'breeze_mlx');
+  return 'App';
+ }
+ function updateBadges(){for(const [id,node] of nodes)node.querySelector('.component-state b').textContent=componentBadge(id);}
+ function field(label,value,secret=false){return `<div class="component-field"><span>${label}</span><strong class="${secret?'component-secret':''}">${value}</strong></div>`;}
+ function renderEditor(id){
+  selected=id;for(const [key,node] of nodes)node.classList.toggle('selected',key===id);
+  const item=COMPONENTS.find(value=>value.id===id);if(!item)return;
+  editor.querySelector('h3').textContent=item.title;
+  let rows=field('运行状态','已就绪');
+  if(id==='input')rows+=field('后端',runtime.backend?.toUpperCase()||'本机')+field('模式','流式输入');
+  if(id==='memory')rows+=field('服务商',providerName(runtime.memory?.provider))+field('API Key',runtime.memory?.configured?'••••••••••••':'未配置',true)+field('模式',runtime.space||'Memory Space');
+  if(id==='reply')rows+=field('服务商',providerName(runtime.reply?.provider))+field('API Key',runtime.reply?.provider==='local'?'不需要':runtime.reply?.configured?'••••••••••••':'未配置',true)+field('模式',runtime.mode||'llm_tts');
+  if(id==='speech')rows+=field('模型',providerName(runtime.speech?.provider||'breeze_mlx'))+field('后端',runtime.backend?.toUpperCase()||'本机');
+  if(id==='pet')rows+=field('管理方式','App 菜单')+field('模式','跟随回复状态');
+  const api=['memory','reply'].includes(id);
+  editor.querySelector('.component-editor-body').innerHTML=`${rows}<div class="component-lock"><strong>固定组件</strong><p>所有核心组件都会保留，只能调整位置。</p></div>${api?'<p class="component-reconfigure-note" hidden>退出 App 后重新运行 npm start，在终端选择服务商并输入一次 Key。VoiceMem 与 Studio 会共用这次配置。</p>':''}`;
+  const configure=editor.querySelector('.component-reconfigure');configure.hidden=!api;configure.onclick=()=>{const note=editor.querySelector('.component-reconfigure-note');if(note)note.hidden=false;configure.hidden=true;};
+  editor.hidden=false;board.classList.add('editing');editor.querySelector('.component-editor-close').focus();
+ }
+ function closeEditor(){selected='';editor.hidden=true;board.classList.remove('editing');for(const node of nodes.values())node.classList.remove('selected');}
+ for(const [id,node] of nodes){
+  node.querySelector('.component-open').onclick=()=>renderEditor(id);
+  const handle=node.querySelector('.component-drag');let drag;
+  handle.onpointerdown=event=>{if(event.button!==0)return;event.preventDefault();const rect=node.getBoundingClientRect();drag={dx:event.clientX-rect.left,dy:event.clientY-rect.top};handle.setPointerCapture(event.pointerId);node.classList.add('dragging');};
+  handle.onpointermove=event=>{if(!drag)return;const rect=board.getBoundingClientRect(),maxX=Math.max(1,board.clientWidth-node.offsetWidth),maxY=Math.max(1,board.clientHeight-node.offsetHeight);const left=Math.min(maxX,Math.max(0,event.clientX-rect.left-drag.dx)),top=Math.min(maxY,Math.max(0,event.clientY-rect.top-drag.dy));layout[id]={x:left/maxX,y:top/maxY};node.style.left=`${left}px`;node.style.top=`${top}px`;updateLinks();};
+  const end=event=>{if(!drag)return;drag=undefined;node.classList.remove('dragging');if(handle.hasPointerCapture(event.pointerId))handle.releasePointerCapture(event.pointerId);saveLayout();};
+  handle.onpointerup=end;handle.onpointercancel=end;
+  handle.onkeydown=event=>{const steps={ArrowLeft:[-.025,0],ArrowRight:[.025,0],ArrowUp:[0,-.04],ArrowDown:[0,.04]};if(!steps[event.key])return;event.preventDefault();const [x,y]=steps[event.key];layout[id]={x:Math.min(1,Math.max(0,layout[id].x+x)),y:Math.min(1,Math.max(0,layout[id].y+y))};positionNodes();saveLayout();};
+ }
+ board.querySelector('.component-reset').onclick=()=>{layout=JSON.parse(JSON.stringify(DEFAULT_COMPONENT_LAYOUT));saveLayout();positionNodes();};
+ editor.querySelector('.component-editor-close').onclick=closeEditor;editor.querySelector('.component-done').onclick=closeEditor;
+ async function refresh(){
+  if(loaded)return;loaded=true;
+  try{const response=await fetch('/api/components',{cache:'no-store'});if(response.ok)runtime=await response.json();}catch{}
+  updateBadges();if(selected)renderEditor(selected);
+ }
+ const activate=()=>{requestAnimationFrame(()=>{positionNodes();void refresh();});};
+ if(window.ResizeObserver)new ResizeObserver(positionNodes).observe(board);else window.addEventListener('resize',positionNodes);
+ return{activate};
+}
 function openSettings(){
  opener=document.activeElement;
  if(!dialog){dialog=document.createElement('dialog');dialog.className='settings-page';dialog.setAttribute('aria-labelledby','settingsTitle');
@@ -93,8 +193,9 @@ function openSettings(){
  <section class="settings-panel settings-empty" id="settingsHarness" role="tabpanel" aria-label="Harness"></section>
  <section class="settings-panel" id="settingsComponents" role="tabpanel"><div class="component-board" aria-label="组件画板"></div></section></div>`;
  dialog.querySelector('#settingsDisplay').append(controls());document.body.append(dialog);
+ const componentApi=setupComponentBoard(dialog.querySelector('.component-board'));
  const tabs=[...dialog.querySelectorAll('.settings-tabs button')],panels=[...dialog.querySelectorAll('.settings-panel')];
- function showPanel(index){tabs.forEach((tab,i)=>{const on=i===index;tab.setAttribute('aria-selected',String(on));tab.tabIndex=on?0:-1;panels[i].classList.toggle('on',on);});}
+ function showPanel(index){tabs.forEach((tab,i)=>{const on=i===index;tab.setAttribute('aria-selected',String(on));tab.tabIndex=on?0:-1;panels[i].classList.toggle('on',on);});if(index===3)componentApi.activate();}
  tabs.forEach((tab,i)=>{tab.tabIndex=i?-1:0;tab.onclick=()=>showPanel(i);tab.onkeydown=e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();const next=e.key==='Home'?0:e.key==='End'?tabs.length-1:(i+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;showPanel(next);tabs[next].focus();};});
  dialog.querySelector('#closeSettings').onclick=()=>dialog.close();dialog.addEventListener('close',()=>{document.dispatchEvent(new Event('settings-close'));opener?.focus();});
  const current=dialog.querySelector('.mode-'+document.body.dataset.style);current?.setAttribute('aria-current','page');current?.addEventListener('click',e=>{e.preventDefault();dialog.close();});

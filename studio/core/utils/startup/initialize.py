@@ -1,32 +1,38 @@
 """Inspect all startup requirements before importing models or opening memory."""
 from importlib import metadata
-import os
 import platform
 import sys
 from studio.paths import ROOT, MODELS
 from studio.core.utils.models.initialize import models
 
 
-def required_credentials(args):
-    """Use the same provider selection as the memory and visible reply factories."""
-    provider = args.llm if args.mode == 'llm_tts' else 'openai'
-    credential = {'deepseek': 'DEEPSEEK_API_KEY', 'qwen': 'DASHSCOPE_API_KEY'}.get(provider, 'OPENAI_API_KEY')
-    return {credential: f'{provider} 回复与记忆处理'}
+def required_credentials(args, stage="all"):
+    """Describe separate memory and visible-reply credentials without values."""
+    from studio.core.utils.llm.initialize import credential, credential_name
+    entries = [(args.memory_llm, 'memory', 'VoiceMem 记忆处理')]
+    if stage != 'memory':
+        provider = args.llm if args.mode == 'llm_tts' else 'openai'
+        if provider != 'local':
+            entries.append((provider, 'reply', 'Studio 可见回复'))
+    return [
+        (f'{"VOICEMEM_MEMORY_API_KEY" if purpose == "memory" else "VOICEMEM_STUDIO_API_KEY"}'
+         f' / {credential_name(provider)}', provider, label, bool(credential(provider, purpose)))
+        for provider, purpose, label in entries
+    ]
 
 
-def inspect(args):
+def inspect(args, stage="all"):
     """Report missing prerequisites together, without printing any secret value."""
     errors = []
     print(f'[startup] Python {platform.python_version()} · {platform.machine()} · {sys.executable}', flush=True)
     if sys.version_info[:2] != (3, 12):
         errors.append('Studio 需要 Python 3.12，请切换原有 Studio 环境')
-    required_keys = required_credentials(args)
+    required_keys = required_credentials(args, stage)
     print(f'[startup] backend={args.backend} · Studio={args.device} · Breeze={args.tts_device}', flush=True)
-    for name, purpose in required_keys.items():
-        present = bool(os.environ.get(name, '').strip())
-        print(f'[startup] {name}: {"已找到" if present else "缺失"}（{purpose}）', flush=True)
+    for name, provider, purpose, present in required_keys:
+        print(f'[startup] {name}: {"已找到" if present else "缺失"}（{purpose}：{provider}）', flush=True)
         if not present:
-            errors.append(f'缺少环境变量 {name}（{purpose}）；请让启动终端继承该凭据')
+            errors.append(f'缺少 {purpose} API Key（{provider}）；请在启动终端输入或写入 .env')
     packages = {name: None for name in (
         'numpy', 'torch', 'torchaudio', 'torchvision', 'fastapi', 'uvicorn',
         'websockets', 'openai', 'httpx', 'mem0ai', 'sentence-transformers',
@@ -37,7 +43,7 @@ def inspect(args):
     if args.backend == 'cuda':
         if platform.system() != 'Linux':
             errors.append('CUDA backend 需要 Linux + NVIDIA GPU')
-        if args.mode == 'llm_tts':
+        if args.mode == 'llm_tts' and stage != 'memory':
             packages['qwen-tts'] = '0.1.1'
             from studio.core.utils.tts.cuda import source_directory
             source = source_directory()
@@ -60,7 +66,7 @@ def inspect(args):
                 errors.append('本地 Breeze CUDA 需要 torch>=2.6，请安装 .[studio-cuda]')
         except (ImportError, RuntimeError, OSError) as exc:
             errors.append(f'CUDA 检查失败：{type(exc).__name__}')
-    elif args.mode == 'llm_tts':
+    elif args.mode == 'llm_tts' and stage != 'memory':
         packages.update({'mlx': '0.32.2', 'mlx-audio': '0.5.1', 'mlx-lm': None})
         if platform.system() != 'Darwin' or platform.machine() != 'arm64':
             errors.append('Breeze MLX 需要原生 Apple Silicon macOS 环境')
@@ -77,7 +83,7 @@ def inspect(args):
     assets = ['studio/web/voicemem.html', 'studio/web/index.html',
               'studio/web/mic-capture-worklet.js', 'studio/web/pcm-player-worklet.js',
               'studio/web/images/background.webp', 'prompt/tts.json']
-    if args.mode == 'llm_tts':
+    if args.mode == 'llm_tts' and stage != 'memory':
         assets += ['voice/noctelle_ref_short.wav', 'voice/noctelle_ref_short.txt']
     for relative in assets:
         path = ROOT / relative
@@ -106,7 +112,7 @@ def inspect(args):
             raise ValueError('WORK_FILLER_TIMEOUT_S must be finite and positive')
     except Exception as exc:
         errors.append(f'Prompt/控制配置无效：{type(exc).__name__}: {exc}')
-    for model in models(args):
+    for model in models(args, stage):
         ready = model.ready(MODELS)
         reusable = any(type(model)(model.name, old, model.repository, model.required).ready(ROOT / 'models')
                        for old in model.legacy or (model.directory,))

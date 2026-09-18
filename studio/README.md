@@ -56,7 +56,7 @@ python -m studio --verbose
 ```
 
 直接使用 Python 入口且未覆盖配置时，Linux 自动选择 CUDA，Mac 自动选择 MLX。
-交互终端未指定 `--llm` 时先选择回复 API；`--check`、显式 `--llm` 和非交互命令不询问。
+交互终端未指定 provider 时只选择一次 API，VoiceMem 记忆处理和 Studio 可见回复共用该服务；选择本地 MLX 回复时，记忆处理默认使用 DeepSeek。`--check`、显式参数和非交互命令不询问。
 非交互默认 DeepSeek、中文、
 `studio-zh` 记忆空间和 `8787` 端口，CUDA 默认只使用 `cuda:0`。
 原来的 `python web/run.py` 仍使用同一入口。需要其他记忆空间时加 `--space 空间名`；
@@ -105,9 +105,12 @@ cp -n .env.example .env
 
 启动依次检查凭据、依赖版本、资源、四份 policy 和模型清单；缺项集中打印并退出。
 自动加载仓库根目录 `.env`，已导出的环境变量优先；兼容 `.env.qwen`。
-DeepSeek 模式的回复和记忆处理都使用 `DEEPSEEK_API_KEY`，不再要求额外 OpenAI key。
-`--llm openai` / `--mode realtime` 使用 `OPENAI_API_KEY`；`--llm qwen` 使用
-`DASHSCOPE_API_KEY`。`--llm local` 仅支持 MLX。
+默认情况下，记忆处理和可见回复共用 `--llm`；`--memory-llm` 仍可供非交互部署显式覆盖。
+`--memory-llm` 支持 DeepSeek、Qwen、OpenAI；`--llm` 还在 MLX 后端支持本地模型。
+标准环境变量仍为 `DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY` 和 `OPENAI_API_KEY`；桌面入口
+远程回复模式把一次输入的 Key 同时传给 `VOICEMEM_MEMORY_API_KEY` 和
+`VOICEMEM_STUDIO_API_KEY`；本地 MLX 回复只把它用于记忆处理和对话标题。
+`--prepare-stage memory` 只检查和下载 VoiceMem 基础模型后退出，桌面入口会自动调用。
 
 下面是可选覆盖项，正常启动无需设置：
 
@@ -127,7 +130,7 @@ DeepSeek 模式的回复和记忆处理都使用 `DEEPSEEK_API_KEY`，不再要�
 中断后再次启动会复用下载缓存。选中的模型预热失败会阻止服务启动。
 参考录音和审核后的附和素材保留在 `voice/`，不会自动生成替代声音。
 
-当前入口在同一进程中先初始化 VoiceMem，再开放 Studio 服务；没有独立的记忆 RPC
+当前入口在同一进程中先初始化 VoiceMem，再开放 Studio 服务；启动前准备不会创建独立的记忆 RPC
 服务。`core/voicemem.py` 直接调用原生流式接口，保留线程、取消与投机检索边界。
 Memory Spaces、录音、日志和原有模型目录保留。旧 provider 导入仅兼容转发。
 

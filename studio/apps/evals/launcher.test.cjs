@@ -10,22 +10,54 @@ const { promisify } = require('node:util');
 const launch = require('../launch.cjs');
 
 test('npm start selects a provider and passes its credential without printing it', async () => {
-  let printed = '';
+  let printed = ''; const prepared = [], choices = ['qwen'], secrets = ['shared-secret'];
   const output = { write(value) { printed += value; } };
   const env = await launch.launchEnvironment({
-    platform: 'darwin', env: {}, input: Readable.from(['qwen\n']), output,
-    askSecret: async () => 'dashscope-test-secret',
+    platform: 'darwin', env: {}, input: Readable.from([]), output,
+    askChoice: async () => choices.shift(), askSecret: async () => secrets.shift(),
+    prepareMemory: async value => prepared.push(value),
   });
-  assert.equal(env.VOICEMEM_DESKTOP_MANAGED_PROVIDER, 'qwen');
-  assert.equal(env.DASHSCOPE_API_KEY, 'dashscope-test-secret');
+  assert.equal(env.VOICEMEM_DESKTOP_MEMORY_PROVIDER, 'qwen');
+  assert.equal(env.VOICEMEM_DESKTOP_REPLY_PROVIDER, 'qwen');
+  assert.equal(env.VOICEMEM_MEMORY_API_KEY, 'shared-secret');
+  assert.equal(env.VOICEMEM_STUDIO_API_KEY, 'shared-secret');
+  assert.equal(env.DASHSCOPE_API_KEY, 'shared-secret');
   assert.equal(path.basename(env.VOICEMEM_DESKTOP_PROJECT_ROOT), 'VoiceMem-Studio');
-  assert.equal(printed.includes('dashscope-test-secret'), false);
+  assert.equal(prepared.length, 1); assert.equal(prepared[0].provider, 'qwen');
+  assert.equal(prepared[0].env.VOICEMEM_MEMORY_API_KEY, 'shared-secret');
+  assert.equal(choices.length, 0); assert.equal(secrets.length, 0);
+  assert.equal(printed.includes('shared-secret'), false);
 });
 
 test('provider menu only offers local MLX on macOS', () => {
   assert.equal(launch.selectProvider('4', 'darwin').id, 'local');
   assert.equal(launch.selectProvider('local', 'win32'), undefined);
   assert.equal(launch.selectProvider('', 'win32').id, 'deepseek');
+});
+
+test('local Studio replies ask once for the DeepSeek memory key', async () => {
+  const choices = ['local'], prompts = [];
+  const env = await launch.launchEnvironment({
+    platform: 'darwin', env: {}, input: Readable.from([]), output: { write() {} },
+    askChoice: async () => choices.shift(), askSecret: async prompt => { prompts.push(prompt); return 'memory-key'; },
+  });
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /DEEPSEEK_API_KEY/);
+  assert.equal(env.VOICEMEM_DESKTOP_MEMORY_PROVIDER, 'deepseek');
+  assert.equal(env.VOICEMEM_DESKTOP_REPLY_PROVIDER, 'local');
+  assert.equal(env.VOICEMEM_MEMORY_API_KEY, 'memory-key');
+  assert.equal(env.VOICEMEM_STUDIO_API_KEY, undefined);
+});
+
+test('failed VoiceMem preparation does not ask for another API key', async () => {
+  const choices = [];
+  await assert.rejects(launch.launchEnvironment({
+    platform: 'darwin', env: {}, input: Readable.from([]), output: { write() {} },
+    askChoice: async purpose => { choices.push(purpose); return 'deepseek'; },
+    askSecret: async () => 'memory-key',
+    prepareMemory: async () => { throw new Error('preparation failed'); },
+  }), /preparation failed/);
+  assert.deepEqual(choices, ['shared']);
 });
 
 test('API key input is masked and returns the entered value', async () => {
@@ -47,6 +79,7 @@ test('configuration page omits the removed descriptive copy', async () => {
   assert.doesNotMatch(html, /与你熟悉的|桌面工作区|连接设置|class="side-note"|class="eyebrow"/);
   const main = await fs.readFile(path.join(__dirname, '../main.cjs'), 'utf8');
   assert.match(main, /label: '配置设置'/);
+  assert.match(main, /if \(!managed\) await showLauncher\(false\)/);
 });
 
 test('Windows exposes Docker startup while macOS keeps the native MLX path', async () => {

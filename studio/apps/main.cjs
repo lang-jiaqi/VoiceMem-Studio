@@ -13,7 +13,7 @@ const icon = path.join(__dirname, 'assets/icon.png');
 let launcher, studio, current = { ...runtime.DEFAULTS }, attempt, generation = 0, activeOrigin = '';
 let status = { kind: 'idle', message: '连接已运行的服务，或启动本机 Docker。' };
 let writes = Promise.resolve();
-let quitting = false;
+let quitting = false, managedMode = false;
 let pet, petEnabled = true, ownedBackend;
 const microphoneGrants = new Set();
 
@@ -133,7 +133,10 @@ async function openStudio(url, ownGeneration) {
   window.webContents.on('render-process-gone', () => {
     if (studio === window && !quitting) {
       publish('error', '界面进程已退出，请重新连接。');
-      void showLauncher();
+      if (managedMode) {
+        dialog.showErrorBox('VoiceMem Studio 界面已退出', '请查看启动终端中的详细日志，然后重新运行 npm start。');
+        app.quit();
+      } else void showLauncher();
     }
   });
   window.on('closed', () => {
@@ -204,9 +207,11 @@ async function connectManaged(config) {
   try {
     ownedBackend?.stop();
     publish('connecting', `正在启动本机 ${process.platform === 'darwin' ? 'MLX' : 'WSL2/CUDA'} 后端…`);
-    const backend = await runtime.startManagedBackend(config.projectDir, config.provider, {
-      signal: control.signal,
-    });
+    const backend = await runtime.startManagedBackend(
+      config.projectDir, config.memoryProvider, config.replyProvider, {
+        signal: control.signal,
+      },
+    );
     ownedBackend = backend;
     let ready = false;
     const exitWatch = backend.exited.then(result => {
@@ -215,10 +220,11 @@ async function connectManaged(config) {
       if (!quitting && studio && !studio.isDestroyed()) {
         studio.destroy();
         publish('error', backendExitError(result).message);
-        void showLauncher();
+        dialog.showErrorBox('VoiceMem Studio 后端已退出', `${backendExitError(result).message}\n\n请查看启动终端中的详细日志。`);
+        app.quit();
       }
     });
-    publish('connecting', `正在准备 ${config.provider} 后端，首次模型预热可能需要几分钟…`);
+    publish('connecting', `正在准备 Studio ${config.replyProvider} 回复与语音模型，首次预热可能需要几分钟…`);
     await Promise.race([
       runtime.waitForStudio(backend.url, {
         signal: control.signal,
@@ -234,7 +240,8 @@ async function connectManaged(config) {
     ownedBackend?.stop();
     ownedBackend = undefined;
     publish('error', error.message || '本机后端启动失败。');
-    void showLauncher();
+    dialog.showErrorBox('VoiceMem Studio 启动失败', `${error.message || '本机后端启动失败。'}\n\n请查看启动终端中的详细日志。`);
+    app.quit();
   } finally {
     if (ownGeneration === generation) attempt = undefined;
   }
@@ -270,11 +277,12 @@ else {
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.on('activate', () => {
     if (studio && !studio.isDestroyed()) studio.show();
-    else void showLauncher();
+    else if (!managedMode) void showLauncher();
   });
   app.whenReady().then(async () => {
     nativeTheme.themeSource = 'dark';
     let configError, managed;
+    managedMode = Boolean(process.env.VOICEMEM_DESKTOP_PROJECT_ROOT);
     try {
       managed = runtime.managedLaunch(process.env);
       current = managed ? { ...runtime.DEFAULTS } : await runtime.loadSettings(configurationFile);
@@ -321,7 +329,12 @@ else {
         publish('idle', '已取消本机后端启动。');
       } else publish('idle', '已取消等待；已经启动的 Docker 服务不会被停止。');
     });
-    await showLauncher(false);
+    if (configError && managedMode) {
+      dialog.showErrorBox('VoiceMem Studio 启动配置无效', configError);
+      app.quit();
+      return;
+    }
+    if (!managed) await showLauncher(false);
     if (configError) { publish('error', configError); void showLauncher(); }
     else if (managed) void connectManaged(managed);
     else void connect(current, false);

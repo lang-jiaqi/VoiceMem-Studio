@@ -6,6 +6,7 @@ const { setTimeout: delay } = require('node:timers/promises');
 
 const DEFAULTS = Object.freeze({ serverUrl: 'http://127.0.0.1:8787', autoStartDocker: false, projectDir: '' });
 const MANAGED_PROVIDERS = new Set(['deepseek', 'qwen', 'openai', 'local']);
+const MEMORY_PROVIDERS = new Set(['deepseek', 'qwen', 'openai']);
 const PROVIDER_CREDENTIALS = Object.freeze({
   deepseek: 'DEEPSEEK_API_KEY', qwen: 'DASHSCOPE_API_KEY',
   openai: 'OPENAI_API_KEY', local: 'OPENAI_API_KEY',
@@ -86,32 +87,36 @@ function command(file, args, { cwd, signal, timeoutMs = 60000, spawnImpl = spawn
 
 function managedLaunch(env = process.env) {
   const projectDir = String(env.VOICEMEM_DESKTOP_PROJECT_ROOT || '').trim();
-  const provider = String(env.VOICEMEM_DESKTOP_MANAGED_PROVIDER || '').trim().toLowerCase();
-  if (!projectDir && !provider) return null;
-  if (!path.isAbsolute(projectDir) || !MANAGED_PROVIDERS.has(provider)) {
+  const legacy = String(env.VOICEMEM_DESKTOP_MANAGED_PROVIDER || '').trim().toLowerCase();
+  const memoryProvider = String(env.VOICEMEM_DESKTOP_MEMORY_PROVIDER || legacy).trim().toLowerCase();
+  const replyProvider = String(env.VOICEMEM_DESKTOP_REPLY_PROVIDER || legacy).trim().toLowerCase();
+  if (!projectDir && !memoryProvider && !replyProvider) return null;
+  if (!path.isAbsolute(projectDir) || !MEMORY_PROVIDERS.has(memoryProvider)
+      || !MANAGED_PROVIDERS.has(replyProvider)) {
     throw new Error('App 本机后端启动配置无效，请重新运行 npm start。');
   }
-  return { projectDir, provider };
+  return { projectDir, memoryProvider, replyProvider };
 }
 
 function appendWslEnvironment(env, names) {
   const entries = String(env.WSLENV || '').split(':').filter(Boolean);
-  for (const name of names) {
-    if (!entries.some(entry => entry.split('/')[0] === name)) entries.push(`${name}/u`);
-  }
+  for (const name of names)
+    if (!entries.some(entry => entry.split('/')[0] === name)) entries.push(name);
   return entries.join(':');
 }
 
-async function managedBackendCommand(directory, provider, {
-  platform = process.platform, env = process.env, signal, run = command,
+async function managedBackendCommand(directory, memoryProvider, replyProvider, {
+  platform = process.platform, env = process.env, signal, run = command, prepareStage = '',
 } = {}) {
-  if (!MANAGED_PROVIDERS.has(provider)) throw new Error(`不支持的回复 API：${provider}`);
-  if (platform === 'win32' && provider === 'local') throw new Error('本地 MLX 模型只支持 Apple Silicon macOS。');
+  if (!MEMORY_PROVIDERS.has(memoryProvider)) throw new Error(`不支持的 VoiceMem API：${memoryProvider}`);
+  if (!MANAGED_PROVIDERS.has(replyProvider)) throw new Error(`不支持的 Studio 回复 API：${replyProvider}`);
+  if (platform === 'win32' && replyProvider === 'local') throw new Error('本地 MLX 模型只支持 Apple Silicon macOS。');
   if (!['darwin', 'win32'].includes(platform)) throw new Error('App 本机后端只支持 Windows 和 macOS。');
   const root = await validateProject(directory);
   const backend = platform === 'darwin' ? 'mlx' : 'cuda';
-  const args = ['-m', 'studio', '--backend', backend, '--llm', provider,
+  const args = ['-m', 'studio', '--backend', backend, '--memory-llm', memoryProvider, '--llm', replyProvider,
     '--host', '127.0.0.1', '--port', '8787', '--verbose'];
+  if (prepareStage) args.push('--prepare-stage', prepareStage);
   const childEnv = { ...env, STUDIO_DESKTOP_PET: '0', PYTHONUNBUFFERED: '1' };
   if (platform === 'darwin') {
     const python = path.resolve(root, env.STUDIO_PYTHON || '.venv/bin/python');
@@ -128,19 +133,21 @@ async function managedBackendCommand(directory, provider, {
   if (!linuxRoot) throw new Error('WSL2 无法解析 VoiceMem-Studio 项目路径。');
   const relativePython = String(env.STUDIO_WSL_PYTHON || '.venv-cuda/bin/python').replace(/\\/g, '/');
   const python = relativePython.startsWith('/') ? relativePython : `${linuxRoot}/${relativePython}`;
-  const credential = PROVIDER_CREDENTIALS[provider];
+  const credentials = [PROVIDER_CREDENTIALS[memoryProvider], PROVIDER_CREDENTIALS[replyProvider]].filter(Boolean);
   childEnv.WSLENV = appendWslEnvironment(childEnv,
-    [credential, 'STUDIO_DESKTOP_PET', 'PYTHONUNBUFFERED']);
+    [...credentials, 'VOICEMEM_MEMORY_API_KEY', 'VOICEMEM_STUDIO_API_KEY',
+      'STUDIO_DESKTOP_PET', 'PYTHONUNBUFFERED']);
   return {
     file: 'wsl.exe', args: ['--cd', linuxRoot, '--exec', python, ...args],
     cwd: root, env: childEnv, url: DEFAULTS.serverUrl,
   };
 }
 
-async function startManagedBackend(directory, provider, {
+async function startManagedBackend(directory, memoryProvider, replyProvider, {
   signal, platform = process.platform, env = process.env, run = command, spawnImpl = spawn,
 } = {}) {
-  const specification = await managedBackendCommand(directory, provider, { signal, platform, env, run });
+  const specification = await managedBackendCommand(directory, memoryProvider, replyProvider,
+    { signal, platform, env, run });
   signal?.throwIfAborted();
   let child;
   try {
@@ -161,6 +168,35 @@ async function startManagedBackend(directory, provider, {
   if (signal) signal.addEventListener('abort', abort, { once: true });
   void exited.then(() => signal?.removeEventListener('abort', abort));
   return { ...specification, child, exited, stop };
+}
+
+async function prepareManagedMemory(directory, provider, {
+  signal, platform = process.platform, env = process.env, run = command, spawnImpl = spawn,
+} = {}) {
+  const specification = await managedBackendCommand(directory, provider, provider, {
+    signal, platform, env, run, prepareStage: 'memory',
+  });
+  signal?.throwIfAborted();
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = action => value => {
+      if (settled) return;
+      settled = true; signal?.removeEventListener('abort', abort); action(value);
+    };
+    let child;
+    try {
+      child = spawnImpl(specification.file, specification.args, {
+        cwd: specification.cwd, env: specification.env, shell: false,
+        windowsHide: true, stdio: 'inherit',
+      });
+    } catch (error) { reject(new Error(`无法准备 VoiceMem：${error.message}`)); return; }
+    const abort = () => { if (!child.killed) child.kill(platform === 'win32' ? undefined : 'SIGTERM'); };
+    signal?.addEventListener('abort', abort, { once: true });
+    child.once('error', finish(error => reject(new Error(`无法准备 VoiceMem：${error.message}`))));
+    child.once('exit', finish((code, exitSignal) => code === 0 ? resolve() : reject(new Error(
+      `VoiceMem 准备失败${code === null ? '' : `，状态码 ${code}`}${exitSignal ? `（${exitSignal}）` : ''}。`,
+    ))));
+  });
 }
 
 function publishedUrl(output) {
@@ -223,4 +259,4 @@ async function waitForStudio(url, { signal, timeoutMs = 180000, intervalMs = 150
 
 module.exports = { DEFAULTS, serverUrl, settings, sameOrigin, audioPermission, loadSettings, saveSettings,
   validateProject, command, managedLaunch, appendWslEnvironment, managedBackendCommand,
-  startManagedBackend, publishedUrl, startDocker, probe, waitForStudio };
+  startManagedBackend, prepareManagedMemory, publishedUrl, startDocker, probe, waitForStudio };

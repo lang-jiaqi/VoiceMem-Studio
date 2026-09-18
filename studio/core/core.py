@@ -41,16 +41,42 @@ async def converse(agent, socket):
 def build_app(agent):
     """Bind realtime or text/speech sessions and memory controls to the server."""
     from studio.web import transport
+    from studio.core.utils.llm.initialize import credential
+
     async def session(socket):
         if agent.MODE == 'realtime':
             await agent.realtime_session(socket)
         else:
             await converse(agent, socket)
+
+    def components():
+        memory = agent.CONFIG["llm"]
+        reply = agent.REPLY["llm"]
+        memory_provider = memory["provider"]
+        reply_provider = reply["provider"]
+        return {
+            "backend": agent.ARGS.backend,
+            "mode": agent.MODE,
+            "space": agent.ACTIVE_SPACE,
+            "memory": {
+                "provider": memory_provider,
+                "configured": bool(credential(memory_provider, "memory")),
+            },
+            "reply": {
+                "provider": reply_provider,
+                "configured": reply_provider == "local" or
+                bool(credential(reply_provider, "reply")),
+            },
+            "speech": {"provider": agent.REPLY["tts"]["provider"]},
+        }
+
     return transport.build_app(
         agent.MODE, session, lambda *a, **k: agent.vm.classify(*a, **k),
         agent.memory_snapshot, agent.audio_of,
         spaces=(agent.list_spaces, agent.create_space, agent.use_space, lambda: agent.ACTIVE_SPACE),
-        set_lang=agent.set_lang, title=transport.make_title_generator(agent.REPLY),
+        set_lang=agent.set_lang,
+        title=transport.make_title_generator(agent.REPLY, agent.CONFIG["llm"]),
+        components=components,
         pet_port=agent.ARGS.port,
     )
 
@@ -64,11 +90,15 @@ def main(argv=None):
         args = parse_args(argv)
         prepare(args)
         from .utils.startup.initialize import inspect
-        inspect(args)
+        stage = args.prepare_stage or 'all'
+        inspect(args, stage)
         if args.check:
             return
         from .utils.models.initialize import acquire_all
-        acquire_all(args)
+        acquire_all(args, stage)
+        if args.prepare_stage:
+            print('[startup] VoiceMem 基础模型准备完成。', flush=True)
+            return
         from studio.paths import ROOT
         if not args.no_file_log:
             from .utils.logging_utils.component import setup_file_logging

@@ -18,6 +18,16 @@ function installCommand(env = process.env) {
   return { file: process.platform === 'win32' ? 'npm.cmd' : 'npm', args: [] };
 }
 
+function installEnvironment(env) {
+  const child = { ...env };
+  for (const key of Object.keys(child)) {
+    if (['npm_config_ignore_scripts', 'npm_config_omit'].includes(key.toLowerCase())) delete child[key];
+  }
+  child.npm_config_ignore_scripts = 'false';
+  child.npm_config_omit = '';
+  return child;
+}
+
 function ensureDependencies({ apps = path.resolve(__dirname, '..'), env = process.env, run = spawnSync } = {}) {
   const missing = missingDependencies(apps);
   if (!missing.length) {
@@ -29,8 +39,8 @@ function ensureDependencies({ apps = path.resolve(__dirname, '..'), env = proces
   }
   console.log(`[desktop] Missing ${missing.map(([name]) => name).join(', ')}; installing locked App dependencies…`);
   const npm = installCommand(env);
-  const result = run(npm.file, [...npm.args, 'ci', '--include=dev', '--no-audit', '--no-fund'], {
-    cwd: apps, env: { ...env, npm_config_omit: '' }, stdio: 'inherit', shell: false,
+  const result = run(npm.file, [...npm.args, 'ci', '--include=dev', '--ignore-scripts=false', '--no-audit', '--no-fund'], {
+    cwd: apps, env: installEnvironment(env), stdio: 'inherit', shell: false,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`npm ci 安装 App 依赖失败，状态码 ${result.status ?? 'unknown'}。`);
@@ -44,4 +54,4 @@ if (require.main === module) {
   catch (error) { console.error(`[desktop] ${error.message}`); process.exitCode = 1; }
 }
 
-module.exports = { required, missingDependencies, installCommand, ensureDependencies };
+module.exports = { required, missingDependencies, installCommand, installEnvironment, ensureDependencies };
