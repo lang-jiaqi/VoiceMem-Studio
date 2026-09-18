@@ -9,6 +9,7 @@ const { PassThrough, Readable } = require('node:stream');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const launch = require('../launch.cjs');
+const { shouldShowPet } = require('../desktop-visibility.cjs');
 
 test('npm start selects a provider and passes its credential without printing it', async () => {
   let printed = ''; const prepared = [], choices = ['qwen'], secrets = ['shared-secret'];
@@ -157,6 +158,25 @@ test('Windows exposes Docker startup while macOS keeps the native MLX path', asy
     assert.equal(byId('docker-options').open, platform === 'win32');
     assert.match(byId('platform-hint').textContent, platform === 'win32' ? /WSL2/ : platform === 'darwin' ? /SSH.*HTTPS/ : /只部署后端/);
   }
+});
+
+test('conversation pages omit top mode links and the pet appears only in the background', async () => {
+  const [technical, digital, main] = await Promise.all([
+    fs.readFile(path.join(__dirname, '../ui/technical.html'), 'utf8'),
+    fs.readFile(path.join(__dirname, '../ui/digital.html'), 'utf8'),
+    fs.readFile(path.join(__dirname, '../main.cjs'), 'utf8'),
+  ]);
+  assert.doesNotMatch(technical, /class="app-nav"|\u8fd4\u56de\u9996\u9875|\u6570\u5b57\u4eba \u2197/);
+  assert.doesNotMatch(digital, /class="style-nav"|>\u9996\u9875<|\u79d1\u6280\u98ce \u2197/);
+  assert.match(main, /followFrontendVisibility\(window\)/);
+  assert.match(main, /label: '\u540e\u53f0\u663e\u793a\u684c\u5ba0'/);
+
+  const window = value => ({ isDestroyed: () => false, isFocused: () => value });
+  assert.equal(shouldShowPet(true, window(false), undefined), true);
+  assert.equal(shouldShowPet(true, window(true), undefined), false);
+  assert.equal(shouldShowPet(true, window(false), window(true)), false);
+  assert.equal(shouldShowPet(false, window(false), undefined), false);
+  assert.equal(shouldShowPet(true, { isDestroyed: () => true }, undefined), false);
 });
 
 test('normal Linux entry points reject desktop startup before loading Electron', { skip: process.platform !== 'linux' }, async () => {

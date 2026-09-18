@@ -251,29 +251,23 @@ body.memory-on .memory{pointer-events:auto}
 .session-row{display:flex;align-items:center;min-width:0}.session-row .item{flex:1;min-width:0;animation:none}
 .pin-chat{flex:none;width:26px;height:30px;color:#9990af;opacity:0}.session-row:hover .pin-chat,.session-row:focus-within .pin-chat,.pin-chat[aria-pressed=true]{opacity:1}
 .scene{max-height:calc(100svh - 85px);overflow-y:auto}.glass .voice{max-height:30svh;overflow:auto}
-.style-nav{color:#57505f}
 .memory-head{top:86px}.memory-head p{max-width:38ch}
-@media(max-width:1024px){.app{min-width:0}.switch{left:76%;top:65px}.memory-head{top:122px}.brain{width:90%}.memory-legend{bottom:24px}.style-nav{right:18px}}
+@media(max-width:1024px){.app{min-width:0}.switch{left:76%;top:65px}.memory-head{top:122px}.brain{width:90%}.memory-legend{bottom:24px}}
 @media(max-width:760px){
  .app{min-width:0;width:100%;height:100dvh}.human{width:100%!important}.right{min-width:0}
- .drawer-btn{z-index:30}.style-nav{display:none}
+ .drawer-btn{z-index:30}
  .peek::after{content:none}.scene{padding-bottom:22px}
- body.show-right .style-nav{display:flex;left:18px;right:auto;top:22px}
  .switch{left:50%;top:66px}.memory{position:fixed;inset:0;z-index:11;mask-image:none;-webkit-mask-image:none}
  body:not(.show-right) .memory{display:none}
  .memory-head{left:50%;top:122px;width:88%;max-width:none;transform:translateX(-50%)}
  .memory-legend{left:50%;width:88%;max-width:none;transform:translateX(-50%);bottom:30px}
  .brain{left:50%;right:auto;top:55%;width:92%;max-height:60svh}
  body.show-right .right{z-index:12;background:transparent;pointer-events:none}
- body.show-right .right .switch,body.show-right .right .style-nav,body.show-right .right .log{pointer-events:auto}
+ body.show-right .right .switch,body.show-right .right .log{pointer-events:auto}
  body.memory-on .right .log{pointer-events:none}
  body.show-right .peek{visibility:hidden}
  body.memory-on .drawer-btn{background:#35313f;color:#fff}
  body.memory-on .drawer-btn svg{stroke:currentColor}
 }
 
-@media(max-width:760px){
- .style-nav{display:flex;left:18px;right:auto;top:64px;z-index:10}
- body.show-right .style-nav{left:18px;right:auto;top:22px;z-index:25}
-}
 .digital-settings{margin:12px 16px;padding:10px 12px;text-align:left;border-radius:10px;color:var(--ink-2);font-size:calc(14px * var(--font-scale,1))}.digital-settings:hover{background:#ded9eb80}

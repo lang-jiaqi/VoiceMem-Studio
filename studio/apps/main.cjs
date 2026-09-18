@@ -4,6 +4,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const runtime = require('./runtime.cjs');
 const { createPet } = require('./pet-window.cjs');
+const { shouldShowPet } = require('./desktop-visibility.cjs');
 
 app.setName('VoiceMem Studio');
 if (process.env.VOICEMEM_DESKTOP_USER_DATA) app.setPath('userData', path.resolve(process.env.VOICEMEM_DESKTOP_USER_DATA));
@@ -19,10 +20,18 @@ let pet, petEnabled = true, ownedBackend, managedConfiguration, reconfiguring = 
 const microphoneGrants = new Set();
 
 async function showPet() {
-  if (!pet || !petEnabled || !studio || studio.isDestroyed()) return;
+  if (!pet) return;
+  if (!shouldShowPet(petEnabled, studio, launcher)) { pet.close(); return; }
   try { await pet.open(activeOrigin); }
   catch (error) {
     dialog.showErrorBox('桌宠加载失败', `Studio 仍可正常使用。请检查 App 的桌宠资源是否完整。\n${error.message}`);
+  }
+}
+
+function followFrontendVisibility(window) {
+  window.on('focus', () => pet?.close());
+  for (const event of ['blur', 'hide', 'minimize']) {
+    window.on(event, () => setImmediate(() => { void showPet(); }));
   }
 }
 
@@ -85,6 +94,7 @@ async function showLauncher(visible = true) {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   launcher = window;
+  followFrontendVisibility(window);
   lockNavigation(window, url => url === launcherUrl);
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   window.webContents.session.setPermissionCheckHandler(() => false);
@@ -137,6 +147,7 @@ async function openStudio(url, ownGeneration) {
   });
   let opened = false;
   studio = window;
+  followFrontendVisibility(window);
   activeOrigin = url;
   pet?.close();
   previous?.destroy();
@@ -160,7 +171,6 @@ async function openStudio(url, ownGeneration) {
     if (home === choosingMode) return;
     choosingMode = home;
     prepareMode(home);
-    if (home) pet?.close(); else void showPet();
   });
   window.webContents.on('page-title-updated', event => event.preventDefault());
   window.webContents.on('render-process-gone', () => {
@@ -295,7 +305,7 @@ function installMenu() {
     { label: 'Studio', submenu: [
       { label: '连接设置', accelerator: 'CmdOrCtrl+,', click: () => { void showLauncher(); } },
       { label: '重新连接', click: () => { void showLauncher().then(() => connect(current)); } },
-      { id: 'show-pet', label: '显示桌宠', type: 'checkbox', checked: petEnabled, click: item => {
+      { id: 'show-pet', label: '后台显示桌宠', type: 'checkbox', checked: petEnabled, click: item => {
         petEnabled = item.checked;
         if (petEnabled) void showPet(); else pet?.close();
       } },
@@ -318,7 +328,7 @@ else {
   app.on('before-quit', () => { quitting = true; cancelConnection(); ownedBackend?.stop(); pet?.close(); });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.on('activate', () => {
-    if (studio && !studio.isDestroyed()) studio.show();
+    if (studio && !studio.isDestroyed()) { studio.show(); studio.focus(); pet?.close(); }
     else if (!managedMode) void showLauncher();
   });
   app.whenReady().then(async () => {

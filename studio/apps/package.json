@@ -36,7 +36,7 @@
     "asar": true,
     "npmRebuild": false,
     "directories": { "output": "dist" },
-    "files": ["main.cjs", "runtime.cjs", "preload.cjs", "studio-preload.cjs", "pet-window.cjs", "pet-preload.cjs", "pet-policy.cjs", ".pet-runtime/**/*", "launcher.html", "launcher.css", "launcher.js", "assets/icon.png", "package.json"],
+    "files": ["main.cjs", "runtime.cjs", "desktop-visibility.cjs", "preload.cjs", "studio-preload.cjs", "pet-window.cjs", "pet-preload.cjs", "pet-policy.cjs", ".pet-runtime/**/*", "launcher.html", "launcher.css", "launcher.js", "assets/icon.png", "package.json"],
     "extraResources": [{ "from": "../../LICENSE", "to": "LICENSE.txt" }],
     "artifactName": "VoiceMem-Studio-${version}-${os}-${arch}.${ext}",
     "win": { "target": ["nsis"], "icon": "assets/icon.png" },

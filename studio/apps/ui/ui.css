@@ -10,10 +10,6 @@ button:disabled{cursor:default;opacity:.45}
 body[data-style=digital] .start-talk{background:#292634;color:#fff;border-color:#ffffff60}
 body[data-style=digital] .start-talk[aria-pressed=true]{background:#8c294b}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:50;padding:10px 16px;max-width:calc(100vw - 32px);border-radius:12px;background:#26252ef0;color:#fff;font:13px/1.6 system-ui,sans-serif}
-.style-nav{position:fixed;right:22px;top:25px;z-index:11;display:flex;gap:12px;font-size:calc(12px * var(--font-scale,1))}
-.style-nav a{color:inherit;text-decoration:none;padding:4px 0}
-.style-nav a:hover{text-decoration:underline}
-body.memory-on .style-nav{color:#dad3e9}
 .asr-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:calc(12px * var(--font-scale,1));color:#777180}
 .msg-foot button,.turn-actions button{min-width:30px;min-height:30px}
 .turn-actions{display:flex;gap:10px;margin-top:6px;font-size:calc(12px * var(--font-scale,1));color:#8b849c}
@@ -32,7 +28,7 @@ body[data-style=technical] .msg-name,body[data-style=technical] .switch button,
 body[data-style=digital] .switch button,.start-talk,.asr-actions{font-size:var(--ui-font)}
 @media(min-width:2000px){body[data-style=digital] .log-glass{padding:28px}body[data-style=digital] .turn{margin-bottom:26px}body[data-style=technical] .msg{padding-block:24px}}
 @media(max-width:700px){:root{--reading-font:17px;--ui-font:14px}.orb-demo button{font-size:calc(12px * var(--font-scale,1));padding:7px 9px}}
-.toast{font-size:calc(13px * var(--font-scale,1))}.style-nav,.app-nav{flex-wrap:wrap}.start-talk{white-space:normal}
+.toast{font-size:calc(13px * var(--font-scale,1))}.start-talk{white-space:normal}
 
 /* Content and interface typography are intentionally independent. */
 body[data-style=technical] .mem{font-size:var(--memory-font,var(--reading-font))}

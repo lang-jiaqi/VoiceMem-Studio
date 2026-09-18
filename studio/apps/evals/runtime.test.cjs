@@ -271,6 +271,7 @@ test('readiness waiting retries, cancels and times out without starting another 
 test('packaging excludes inference weights, credentials, recordings, backend source and tests', async () => {
   const pkg = JSON.parse(await fs.readFile(path.join(__dirname, '..', 'package.json'), 'utf8'));
   assert.ok(pkg.build.files.includes('main.cjs'));
+  assert.ok(pkg.build.files.includes('desktop-visibility.cjs'));
   assert.ok(pkg.build.files.includes('studio-preload.cjs'));
   assert.ok(pkg.build.files.includes('.pet-runtime/**/*'));
   for (const item of pkg.build.files) assert.equal(/\.env|models|record|prompt|tests|evals|voicemem_memoryspace|\.\.\//.test(item), false);

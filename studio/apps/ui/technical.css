@@ -284,8 +284,6 @@ html,body{background:#000}body{isolation:isolate}
 .airesp{margin-top:12px;flex:1 0 auto;min-height:112px;padding:13px 12px;display:flex;flex-direction:column;overflow:visible}
 .airesp p{margin:9px 0 0;font-size:calc(12px * var(--font-scale,1));line-height:1.7;white-space:pre-wrap;overflow:visible;overflow-wrap:anywhere;flex:none;color:#c4c8d2}
 .col-stage{position:relative;isolation:isolate;background:transparent;padding:24px!important}
-.app-nav{position:absolute;left:24px;top:28px;display:flex;gap:12px;font-size:calc(12px * var(--font-scale,1))}
-.app-nav a{color:var(--muted);text-decoration:none}.app-nav a:hover{color:#fff}
 .view{position:relative;margin-top:20px}.space{display:flex;align-items:center;justify-content:center;overflow:hidden;padding-bottom:38px}
 .legend{left:0;bottom:12px;gap:12px;flex-wrap:wrap;font-size:calc(11px * var(--font-scale,1))}.hint{bottom:0;right:0;font-size:calc(10px * var(--font-scale,1))}
 .thread{padding:0}.thread-card{background:rgba(12,13,18,.48)}
@@ -295,7 +293,7 @@ html,body{background:#000}body{isolation:isolate}
  .input-wrap input{padding:10px 8px 40px}.send,.mic{bottom:7px}
  .topk-col:first-child{padding-right:4px}.topk-col:last-child{padding-left:4px}
  .topk-col h3{font-size:calc(11px * var(--font-scale,1))}.col-stage{padding-left:16px!important;padding-right:16px!important}
- .scene-controls{font-size:calc(11px * var(--font-scale,1))}.app-nav{left:16px}
+ .scene-controls{font-size:calc(11px * var(--font-scale,1))}
 }
 @media(max-width:700px){
 
@@ -305,7 +303,7 @@ html,body{background:#000}body{isolation:isolate}
  .topk-col{min-width:0}.topk-col h3{overflow:hidden;text-overflow:ellipsis}
  .perception-tag{display:flex;flex-direction:column;gap:2px}.label-row{flex-wrap:wrap}
  .live-badge{font-size:calc(10px * var(--font-scale,1))}.airesp{min-height:150px}.switch button{padding:9px 16px}
- .app-nav{top:62px}.hint{display:none}
+ .hint{display:none}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
@@ -315,7 +313,7 @@ html,body{background:#000}body{isolation:isolate}
 #scene-canvas{opacity:1;background:transparent}
 .col-stage{background:transparent;padding-top:82px!important}
 
-.label-row{flex-wrap:wrap}.label-row .live-badge{margin-left:auto}.settings-btn{opacity:1;cursor:pointer}.settings-btn:hover{color:#fff}.user-chip{cursor:default}.app-nav{top:28px}.switch{align-self:flex-end}.view.on{animation:viewIn var(--motion-view) var(--motion-ease)}
+.label-row{flex-wrap:wrap}.label-row .live-badge{margin-left:auto}.settings-btn{opacity:1;cursor:pointer}.settings-btn:hover{color:#fff}.user-chip{cursor:default}.switch{align-self:flex-end}.view.on{animation:viewIn var(--motion-view) var(--motion-ease)}
 @keyframes viewIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
 /* The orb and its temporary four-state preview controls. */
