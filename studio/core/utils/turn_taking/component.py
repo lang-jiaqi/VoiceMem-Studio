@@ -50,12 +50,14 @@ class TurnTakingStateMachine:
     _recent_emissions: list[tuple[float, str]] = field(default_factory=list, init=False)
     _work_filler_selected: bool | None = field(default=None, init=False)
     _work_filler_until: float = field(default=0.0, init=False)
+    _default_work_filler_probability: float = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not 0 <= self.work_filler_probability <= 1:
             raise ValueError("work filler probability must be between zero and one")
         if not 0 <= self.work_filler_cooldown_s < float('inf'):
             raise ValueError("work filler cooldown must be finite and nonnegative")
+        self._default_work_filler_probability = self.work_filler_probability
         self._expected_wait_s = max(0.0, self.initial_wait_s)
 
     @property

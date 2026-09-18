@@ -33,17 +33,27 @@ class Routing:
     async def route_pending_thinking(self, pending: Pending, memory_vm=None,
                                      history=None) -> Pending:
         """Combine VoiceMem memory eligibility with local reasoning depth off-loop."""
-        if not self._THINKING_ROUTER_ON:
+        from studio.core.utils.self_harness.component import reasoning_preference
+        depth_preference = reasoning_preference(
+            getattr(pending, "self_harness_profile", None))
+        if not self._THINKING_ROUTER_ON and depth_preference == "auto":
             return pending
         started = time.monotonic()
         memory_vm = memory_vm or self.vm
         memory_required = gate.needs_memory(pending.route)
-        try:
-            decision = await thinking_router().classify_async(
-                pending.text, history=history)
-        except Exception as exc:
-            print(f"[thinking] 深思判断不可用（{type(exc).__name__}），保留 VoiceMem 记忆资格", flush=True)
-            decision = ThinkingDecision(FAST, 'unavailable')
+        if self._THINKING_ROUTER_ON:
+            try:
+                decision = await thinking_router().classify_async(
+                    pending.text, history=history)
+            except Exception as exc:
+                print(f"[thinking] 深思判断不可用（{type(exc).__name__}），保留 VoiceMem 记忆资格", flush=True)
+                decision = ThinkingDecision(FAST, 'unavailable')
+        else:
+            decision = ThinkingDecision(FAST, 'router-disabled')
+        if depth_preference == "deep":
+            decision = ThinkingDecision(SLOW, 'self-harness:deep')
+        elif depth_preference == "quick":
+            decision = ThinkingDecision(FAST, 'self-harness:quick')
         decision = ThinkingDecision(
             SLOW if decision.level == SLOW else (MEDIUM if memory_required else FAST), decision.raw)
         classified = time.monotonic()

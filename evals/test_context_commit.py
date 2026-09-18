@@ -192,6 +192,42 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         await self.session.drop_early()
         self.agent.queue_remember_turn.assert_not_called()
 
+    async def test_discarded_early_reply_cannot_change_self_harness(self):
+        async def model(*_):
+            yield ('<self_harness>{"speaking_style":{"speech_rate":"slow",'
+                   '"tone":"轻快"}}</self_harness>'
+                   '轻快|好的，我说慢一点。')
+        self.memory.reply_stream = model
+        _, _, generation = await self.early()
+        await asyncio.wait_for(generation, 1)
+        self.assertEqual(
+            self.session.self_harness.profile["speaking_style"]["speech_rate"],
+            "normal")
+        self.assertEqual(
+            self.session.self_harness.profile["speaking_style"]["tone"], "auto")
+        await self.session.drop_early()
+        self.assertEqual(
+            self.session.self_harness.profile["speaking_style"]["speech_rate"],
+            "normal")
+
+    async def test_accepted_early_reply_commits_self_harness(self):
+        async def model(*_):
+            yield ('<self_harness>{"speaking_style":{"speech_rate":"slow",'
+                   '"tone":"轻快"}}</self_harness>'
+                   '轻快|好的，我说慢一点。')
+        self.memory.reply_stream = model
+        await self.early()
+        value = self.pending('设备重启怎么检查？', early_ok=True)
+        routed = asyncio.get_running_loop().create_future()
+        routed.set_result(value)
+        self.assertTrue(await self.session.commit_early(value, routed))
+        await asyncio.wait_for(self.session.turn['task'], 1)
+        self.assertEqual(
+            self.session.self_harness.profile["speaking_style"]["speech_rate"],
+            "slow")
+        self.assertEqual(
+            self.session.self_harness.profile["speaking_style"]["tone"], "轻快")
+
     async def test_accept_completed_early_reply_saves_final_pending_once(self):
         _, _, generation = await self.early()
         await asyncio.wait_for(generation, 1)

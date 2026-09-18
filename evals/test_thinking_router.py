@@ -257,6 +257,21 @@ class MemoryRoutingIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending.reply_mode, 'memory_cot')
         self.agent.vm.search.assert_called_once()
 
+    async def test_self_harness_can_prefer_deep_or_quick_without_losing_memory(self):
+        pending = self.pending(route='shallow')
+        pending.self_harness_profile = {
+            "reply_modes": {"reasoning_depth": "deep"}}
+        await self.agent.route_pending_thinking(pending)
+        self.assertEqual(pending.reply_mode, 'memory_cot')
+
+        self.router.classify_async.return_value = ThinkingDecision(SLOW, '深思')
+        pending = self.pending(prepared=True)
+        pending.self_harness_profile = {
+            "reply_modes": {"reasoning_depth": "quick"}}
+        await self.agent.route_pending_thinking(pending)
+        self.assertEqual(pending.reply_mode, 'memory')
+        self.assertEqual(pending.memory_context, 'existing-context')
+
     async def test_classifier_failure_preserves_memory_and_privacy(self):
         self.router.classify_async.side_effect = RuntimeError('synthetic classifier failure')
         pending = self.pending(prepared=True)

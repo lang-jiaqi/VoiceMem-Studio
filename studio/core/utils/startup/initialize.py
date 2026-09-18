@@ -95,11 +95,17 @@ def inspect(args, stage="all"):
         from studio.harness.persona.policy import SYSTEM_PROMPT
         from studio.harness.speaking_style.policy import PROMPT
         from studio.harness.reply_modes.policy import SYSTEM
+        from studio.harness.self_harness.policy import CONTROL_RULE, PROFILE_SCHEMA
         from studio.harness.turn_taking.policy import (
             CONTROLS, FILLER_PROMPT, FILLER_INPUT_PROMPT, WORK_FILLER_PROBABILITY,
             WORK_FILLER_COOLDOWN_S, WORK_FILLER_TIMEOUT_S)
-        if not all(isinstance(text, str) and text.strip() for text in (SYSTEM_PROMPT, PROMPT, SYSTEM, FILLER_PROMPT, FILLER_INPUT_PROMPT)):
+        if not all(isinstance(text, str) and text.strip() for text in (
+                SYSTEM_PROMPT, PROMPT, SYSTEM, CONTROL_RULE,
+                FILLER_PROMPT, FILLER_INPUT_PROMPT)):
             raise ValueError('empty prompt')
+        if not isinstance(PROFILE_SCHEMA, dict) or set(PROFILE_SCHEMA) != {
+                'persona', 'speaking_style', 'reply_modes', 'turn_taking'}:
+            raise ValueError('invalid Self Harness schema')
         if CONTROLS['unfinished_followup_s'] <= 0:
             raise ValueError('unfinished_followup_s must be positive')
         FILLER_PROMPT.format(task_context='')

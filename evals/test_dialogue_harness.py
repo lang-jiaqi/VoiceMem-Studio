@@ -11,7 +11,18 @@ from unittest.mock import patch
 import numpy as np
 
 from studio.core.utils.turn_taking.initialize import backchannel as backchannel_module
-from studio.core.utils.speaking_style.component import content_emotion_note, prompt_rule
+from studio.core.utils.speaking_style.component import (
+    content_emotion_note, prompt_rule,
+)
+from studio.core.utils.self_harness.component import (
+    SelfHarnessState,
+    StagedSelfHarnessUpdate,
+    default_profile,
+    profile_context,
+    speech_rate_instruction,
+    split_control_prefix,
+    validate_update,
+)
 from studio.core.utils.turn_taking.initialize import (
     Backchannel,
     FillerPlan,
@@ -267,7 +278,10 @@ class BackchannelTests(unittest.TestCase):
 
     def test_realtime_never_gets_spoken_control_tags(self):
         self.assertNotIn("语音控制协议", system_prompt("zh"))
+        self.assertNotIn("<self_harness>", system_prompt("zh"))
         self.assertIn("温和|", system_prompt("zh", tagged=True))
+        self.assertIn("<self_harness>{}</self_harness>",
+                      system_prompt("zh", tagged=True))
         self.assertEqual(system_prompt("en"), system_prompt("zh"))
 
 
@@ -413,7 +427,114 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
         # One 200ms clip followed by 300ms silence, measured in captured audio.
 
 
+class SelfHarnessTests(unittest.TestCase):
+    def test_original_prompts_are_exposed_as_immutable_defaults(self):
+        from studio.harness.persona.policy import DEFAULT_SYSTEM_PROMPT, SYSTEM_PROMPT
+        from studio.harness.reply_modes.policy import (
+            DEFAULT_EXAMPLES, DEFAULT_SYSTEM, EXAMPLES, SYSTEM,
+        )
+        from studio.harness.speaking_style.policy import (
+            DEFAULT_PROMPT, DEFAULT_QWEN36_PROMPT, DEFAULT_TONE_RULE,
+            PROMPT, QWEN36_PROMPT, TONE_RULE,
+        )
+        from studio.harness.turn_taking.policy import (
+            DEFAULT_FILLER_INPUT_PROMPT, DEFAULT_FILLER_PROMPT,
+            FILLER_INPUT_PROMPT, FILLER_PROMPT,
+        )
+        self.assertEqual(SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT)
+        self.assertEqual(SYSTEM, DEFAULT_SYSTEM)
+        self.assertEqual(tuple(EXAMPLES), DEFAULT_EXAMPLES)
+        self.assertEqual(QWEN36_PROMPT, DEFAULT_QWEN36_PROMPT)
+        self.assertEqual((PROMPT, TONE_RULE), (DEFAULT_PROMPT, DEFAULT_TONE_RULE))
+        self.assertEqual(
+            (FILLER_PROMPT, FILLER_INPUT_PROMPT),
+            (DEFAULT_FILLER_PROMPT, DEFAULT_FILLER_INPUT_PROMPT))
+
+    def test_private_control_prefix_is_stream_safe_and_strict(self):
+        self.assertFalse(split_control_prefix("<self").resolved)
+        self.assertFalse(split_control_prefix("  \n").resolved)
+        parsed = split_control_prefix(
+            '<self_harness>{"speaking_style":{"speech_rate":"slow",'
+            '"tone":"鼓励"}}</self_harness>'
+            '认真|好，我们慢一点。')
+        self.assertTrue(parsed.resolved)
+        self.assertEqual(parsed.update, {"speaking_style": {
+            "speech_rate": "slow", "tone": "鼓励"}})
+        self.assertEqual(parsed.rest, "认真|好，我们慢一点。")
+
+        malformed = split_control_prefix(
+            '<self_harness>{"provider":"evil"}</self_harness>温和|继续')
+        self.assertTrue(malformed.resolved)
+        self.assertEqual(malformed.update, {})
+        self.assertEqual(malformed.rest, "温和|继续")
+        self.assertIn("unknown Self Harness domain", malformed.error)
+        self.assertEqual(split_control_prefix("普通正文").rest, "普通正文")
+        incomplete = split_control_prefix("<self_", final=True)
+        self.assertEqual(incomplete.rest, "")
+        self.assertIn("unterminated", incomplete.error)
+
+    def test_profile_renders_all_modules_and_request_scoped_tts_instruction(self):
+        profile = default_profile()
+        profile["persona"]["interaction_style"] = "listener"
+        profile["speaking_style"].update(
+            speech_rate="slow", reply_length="concise")
+        profile["reply_modes"]["reasoning_depth"] = "deep"
+        profile["turn_taking"]["backchannel"] = "off"
+        note = profile_context(profile)
+        self.assertIn("persona.interaction_style: listener", note)
+        self.assertIn("speaking_style.speech_rate: slow (稍慢)", note)
+        self.assertIn("reply_modes.reasoning_depth: deep", note)
+        self.assertIn("turn_taking.backchannel: off", note)
+        self.assertIn("后续回复尽量简短", note)
+        self.assertEqual(speech_rate_instruction("基础。", profile),
+                         "基础。语速稍慢，咬字清楚，句尾自然收住。")
+
+    def test_speculative_update_commits_only_after_acceptance(self):
+        target = SelfHarnessState()
+        staged = StagedSelfHarnessUpdate(target)
+        staged.stage({"speaking_style": {"tone": "轻快"}})
+        self.assertEqual(target.profile["speaking_style"]["tone"], "auto")
+        staged.commit()
+        self.assertEqual(target.profile["speaking_style"]["tone"], "轻快")
+
+    def test_recent_changes_expire_and_large_updates_are_rejected(self):
+        state = SelfHarnessState()
+        state.apply({"persona": {"interaction_style": "listener"}})
+        self.assertIn("persona.interaction_style", state.snapshot()["recent"])
+        state.apply({})
+        self.assertIn("persona.interaction_style", state.snapshot()["recent"])
+        state.apply({})
+        self.assertNotIn("persona.interaction_style", state.snapshot()["recent"])
+        with self.assertRaisesRegex(ValueError, "at most 2"):
+            validate_update({
+                "persona": {"interaction_style": "coach"},
+                "speaking_style": {"tone": "轻快"},
+                "reply_modes": {"reasoning_depth": "deep"},
+            })
+
+    def test_rapid_conflict_is_staged_until_the_same_value_is_repeated(self):
+        state = SelfHarnessState()
+        first = {"speaking_style": {"tone": "轻快"}}
+        conflict = {"speaking_style": {"tone": "认真"}}
+
+        self.assertEqual(state.apply(first), first)
+        self.assertEqual(state.apply(conflict), {})
+        self.assertEqual(state.profile["speaking_style"]["tone"], "轻快")
+        self.assertEqual(
+            state.snapshot()["pending"],
+            {"speaking_style.tone": "认真"})
+        replacement = {"speaking_style": {"tone": "温和"}}
+        self.assertEqual(state.apply(replacement), {})
+        self.assertEqual(state.profile["speaking_style"]["tone"], "轻快")
+        self.assertEqual(state.snapshot()["pending"], {
+            "speaking_style.tone": "温和"})
+        self.assertEqual(state.apply(replacement), replacement)
+        self.assertEqual(state.profile["speaking_style"]["tone"], "温和")
+        self.assertEqual(state.snapshot()["pending"], {})
+
+
 class SpeakingStyleTests(unittest.TestCase):
+
     def test_intro_arc_is_shared_but_general_boost_is_qwen_only(self):
         from studio.core.utils.speaking_style.component import qwen_segment_instruction
         for qwen in (False, True):

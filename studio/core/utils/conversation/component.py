@@ -231,12 +231,16 @@ class Conversation:
 
     async def synthesize_work_filler(self, pending, memory_vm, context_space):
         """Generate a bounded local bridge; speech uses the existing shared TTS."""
+        from studio.core.utils.self_harness.component import speech_rate_instruction
         history = self.agent._SESSION_CONTEXT.messages(self.context_session, context_space, window=self.agent.HISTORY_TURNS)
         text = await generate_local_filler(pending.text, history=history, lang=self.agent.space_language(context_space))
         if not text:
             return ('', b'')
         tts = memory_vm.utils.get('tts')
-        instruction = self.agent._speak_instruction(pending.emotion)
+        state = getattr(self, 'self_harness', None)
+        instruction = speech_rate_instruction(
+            self.agent._speak_instruction(pending.emotion),
+            state.snapshot() if state is not None else None)
         print(f'[tts-prompt] filler {json.dumps(instruction, ensure_ascii=False)}', flush=True)
         try:
             stream = tts.stream(text, instruction)
@@ -297,7 +301,9 @@ class Conversation:
 
     async def drop_early(self, why: str='') -> None:
         t = self.early['task']
-        self.early.update(text='', task=None, sink=None, timeline=None, pending=None, said=None, space='', memory_vm=None, started=0.0)
+        self.early.update(text='', task=None, sink=None, timeline=None, pending=None,
+                          said=None, space='', memory_vm=None, started=0.0,
+                          self_harness_update=None)
         if t is not None and (not t.done()):
             t.cancel()
             try:
@@ -324,19 +330,36 @@ class Conversation:
         timeline.context_managed = True
         sink = ReplySink(self.sock.send_json, lambda pcm: self.send_audio(pcm, timeline))
         said_state = {'text': ''}
-        self.early.update(text=text, sink=sink, timeline=timeline, pending=None, said=said_state, space=context_space, memory_vm=memory_vm, started=0.0)
+        from studio.core.utils.self_harness.component import (
+            SelfHarnessState, StagedSelfHarnessUpdate,
+        )
+        self_harness = getattr(self, 'self_harness', None)
+        if self_harness is None:
+            self_harness = SelfHarnessState()
+            self.self_harness = self_harness
+        self_harness_update = StagedSelfHarnessUpdate(self_harness)
+        self.early.update(text=text, sink=sink, timeline=timeline, pending=None,
+                          said=said_state, space=context_space,
+                          memory_vm=memory_vm, started=0.0,
+                          self_harness_update=self_harness_update)
 
         async def run():
             try:
                 committed_text = (await refined_text).strip() or text
                 pending = Pending(committed_text, build_memory_context(result), result, spoken=True, emotion=emotion, route=route, reply_mode=MEMORY if gate.needs_memory(route) else DIRECT, transcript_managed=True)
+                pending.self_harness_profile = self_harness.snapshot()
                 await self.agent.route_pending_thinking(pending, memory_vm, history=routing_history)
                 self.early['text'] = committed_text
                 self.early['pending'] = pending
                 if self.agent.BARGE_DEBUG:
                     print(f'[early] EOT {st.eot_score:.2f} · offline ASR committed: {committed_text[-20:]!r}', flush=True)
                 self.early['started'] = time.monotonic()
-                await self.agent.voicemem_llm_tts(pending, sink.send, sink.send_audio, self.owner, timeline, said=said_state, context_session=self.context_session, context_space=context_space, memory_vm=memory_vm)
+                await self.agent.voicemem_llm_tts(
+                    pending, sink.send, sink.send_audio, self.owner, timeline,
+                    said=said_state, context_session=self.context_session,
+                    context_space=context_space, memory_vm=memory_vm,
+                    self_harness_profile=pending.self_harness_profile,
+                    on_self_harness_update=self_harness_update.stage)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -361,6 +384,10 @@ class Conversation:
             return False
         hist = self.agent._SESSION_CONTEXT.messages(self.context_session, self.agent.ACTIVE_SPACE, window=self.agent.HISTORY_TURNS)
         ctx = '' if result is None else self.agent.build_reply_context(build_memory_context(result), route=gate.DEEP, replay=self.agent._replay_id(text, result), text=text, emotion=self.owner.get('emotion', ''))
+        if hasattr(self, 'self_harness'):
+            from studio.core.utils.self_harness.component import profile_context
+            self_harness_note = profile_context(self.self_harness.snapshot())
+            ctx = f'{ctx}\n\n{self_harness_note}' if ctx else self_harness_note
         cancelled = threading.Event()
         self.prewarm['cancelled'] = cancelled
         model = self.agent._LOCAL_LLM
@@ -436,7 +463,18 @@ class Conversation:
             self.turn['measure_started'] = time.monotonic()
             self.turn_taking.start_reply()
             started_reply = True
-            await self.agent.voicemem_llm_tts(pending, self.sock.send_json, lambda pcm: self.send_audio(pcm, timeline), self.owner, timeline, said=reply_state, context_session=self.context_session, context_space=context_space, memory_vm=memory_vm)
+            self_harness = getattr(self, 'self_harness', None)
+            self_harness_profile = (
+                self_harness.snapshot() if self_harness is not None else None)
+            await self.agent.voicemem_llm_tts(
+                pending, self.sock.send_json,
+                lambda pcm: self.send_audio(pcm, timeline), self.owner,
+                timeline, said=reply_state,
+                context_session=self.context_session,
+                context_space=context_space, memory_vm=memory_vm,
+                self_harness_profile=self_harness_profile,
+                on_self_harness_update=(
+                    self_harness.apply if self_harness is not None else None))
             await self.wait_reply_playback(pending, timeline)
         except asyncio.CancelledError:
             if started_reply:
@@ -496,6 +534,8 @@ class Conversation:
         if self.early['task'] is not None and pending.early_ok and (not self.agent._early_reply_compatible(self.early['text'], pending.text)):
             await self.drop_early('EOT 快照后还有实质续话，改用完整文本回复')
         routing_history = self.agent._SESSION_CONTEXT.messages(self.context_session, self.agent.ACTIVE_SPACE, window=self.agent.HISTORY_TURNS)
+        if hasattr(self, 'self_harness'):
+            pending.self_harness_profile = self.self_harness.snapshot()
         thinking_task = asyncio.create_task(self.agent.route_pending_thinking(pending, self.agent.vm, history=routing_history))
         self.stop_prewarm()
         try:
@@ -521,10 +561,15 @@ class Conversation:
         context_space = self.early['space'] or self.agent.ACTIVE_SPACE
         memory_vm = self.early['memory_vm'] or self.agent.vm
         generation_started = self.early['started'] or time.monotonic()
+        self_harness_update = self.early.get('self_harness_update')
         (sink, ms) = (self.early['sink'], self.early['sink'].buffered_ms)
         self.reset_output_state(pending, timeline, reply_state, memory_vm=memory_vm, context_space=context_space)
         self.turn['generation_task'] = early_task
-        self.early.update(text='', task=None, sink=None, timeline=None, pending=None, said=None, space='', memory_vm=None, started=0.0)
+        if self_harness_update is not None:
+            self_harness_update.commit()
+        self.early.update(text='', task=None, sink=None, timeline=None, pending=None,
+                          said=None, space='', memory_vm=None, started=0.0,
+                          self_harness_update=None)
         ack = self.cached_ack(pending)
         decision = self.turn_taking.decide_handoff(main_audio_ready=ms > 0, reply_mode=pending.reply_mode, cached_ack_available=bool(ack), spoken=pending.spoken)
 
@@ -563,9 +608,20 @@ class Conversation:
         memory_vm = self.agent.vm
         timeline = AudioTimeline(prebuffer_seconds=0.16, rate_estimator=self.speech_rate, track_delivery=True)
         self.reset_output_state(pending, timeline, reply_state, memory_vm=memory_vm, context_space=context_space)
+        self_harness = getattr(self, 'self_harness', None)
+        self_harness_profile = (
+            self_harness.snapshot() if self_harness is not None else None)
+        if self_harness_profile is not None:
+            pending.self_harness_profile = self_harness_profile
 
         async def run_reply(send_json=self.sock.send_json, send_pcm=lambda pcm: self.send_audio(pcm, timeline)):
-            await self.agent.voicemem_llm_tts(pending, send_json, send_pcm, self.owner, timeline, said=reply_state, context_session=self.context_session, context_space=context_space, memory_vm=memory_vm)
+            await self.agent.voicemem_llm_tts(
+                pending, send_json, send_pcm, self.owner, timeline,
+                said=reply_state, context_session=self.context_session,
+                context_space=context_space, memory_vm=memory_vm,
+                self_harness_profile=self_harness_profile,
+                on_self_harness_update=(
+                    self_harness.apply if self_harness is not None else None))
         ack = self.cached_ack(pending)
         decision = self.turn_taking.decide_handoff(main_audio_ready=False, reply_mode=pending.reply_mode, cached_ack_available=bool(ack), spoken=pending.spoken)
 

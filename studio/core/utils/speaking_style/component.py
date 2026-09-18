@@ -1,7 +1,9 @@
 """Render a single speaking policy without prompt-language branches."""
-from studio.harness.speaking_style.policy import CONTEXT, TONE_RULE, PROMPT, EMOTION_NOTE
 import re
-from studio.harness.speaking_style.policy import QWEN36_TTS, QWEN36_INTRO_BRIGHT, QWEN36_INTRO_SOFT
+from studio.harness.speaking_style.policy import (
+    CONTEXT, TONE_RULE, PROMPT, EMOTION_NOTE,
+    QWEN36_TTS, QWEN36_INTRO_BRIGHT, QWEN36_INTRO_SOFT,
+)
 
 def is_qwen36(reply):
     if not isinstance(reply, dict):

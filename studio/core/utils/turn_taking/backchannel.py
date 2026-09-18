@@ -112,6 +112,8 @@ class Backchannel:
     """Track per-session acknowledgement decisions and emission cooldown."""
     policy: BackchannelPolicy = field(default_factory=BackchannelPolicy)
     rng: random.Random = field(default_factory=random.Random)
+    enabled: bool = True
+    frequency: str = "auto"
     _last_at: float | None = None
     _last_token: str = ""
 
@@ -140,7 +142,7 @@ class Backchannel:
     def can_emit(self, now: float | None = None) -> bool:
         """Return whether the shared session cooldown permits another clip."""
         now = now if now is not None else time.monotonic()
-        return (emitting() and
+        return (emitting() and self.enabled and
                 (self._last_at is None or
                  now - self._last_at >= max(0.0, self.policy.refractory_s)))
 
@@ -171,7 +173,7 @@ class Backchannel:
             if spoke and not self._speech_started:
                 self._speech_started = now
             return None
-        if not (emitting() and spoke and self._armed):
+        if not (emitting() and self.enabled and spoke and self._armed):
             return None
         if silence < self.policy.gap_s or (not unfinished and silence >= self.policy.max_gap_s):
             return None
@@ -196,6 +198,10 @@ class Backchannel:
         target = self._phase_targets[phase]
         if target is None:
             target = self.policy.session_curve.draw_target(speech, self.rng.random())
+            if self.frequency == "less":
+                target = min(target, 1)
+            elif self.frequency == "more":
+                target = min(3, max(1, target + 1))
             self._phase_targets[phase] = target
         if DEBUG:
             print(f"[backchannel] turn={self._completed_turns + 1} "

@@ -13,6 +13,7 @@ studio/
       tts/                   # Breeze、初始化、快速缓存、语气协议
       conversation/          # 会话逻辑与状态初始化
       reply_modes/
+      self_harness/
       turn_taking/
       models/                # 权重完整性检查与下载清单
       startup/               # 环境检查与严格预热
@@ -22,6 +23,7 @@ studio/
     persona/policy.py
     speaking_style/policy.py
     reply_modes/policy.py
+    self_harness/policy.py       # 会话差量白名单与稳定规则
     turn_taking/policy.py
   web/                       # 浏览器、HTTP/WebSocket、AudioWorklets
   apps/                      # Windows/macOS App、桌宠、配置页和打包配置
@@ -64,6 +66,14 @@ python -m studio --verbose
 启动会沿用所选空间已保存的语言，不会重写已有记忆；旧的 `demo-zh` 仍可用
 `--space demo-zh` 打开。
 
+## Self Harness
+
+`persona`、`speaking_style`、`reply_modes`、`turn_taking` 四份 policy 是只读默认版本。
+对话 LLM 可以根据用户明确说出的偏好，在当前会话叠加 `harness/self_harness/policy.py`
+声明的白名单差量，例如“以后少给建议”“说慢一点”“这类问题认真推理”或“别插话”。
+每轮最多改两个字段；最近两轮刚变更的字段遇到冲突值时先要求再次确认。关闭会话即丢弃差量，
+冲突值第一次只暂存、连续确认后才生效；默认 prompt、源码和 provider 配置不会被改写。
+
 打开 `http://localhost:8787`；远程使用需 HTTPS 或本地 SSH 端口转发才能让浏览器使用麦克风。
 
 ## 首次安装
@@ -103,7 +113,7 @@ python -m pip install -e '.[studio]'
 cp -n .env.example .env
 ```
 
-启动依次检查凭据、依赖版本、资源、四份 policy 和模型清单；缺项集中打印并退出。
+启动依次检查凭据、依赖版本、资源、五份 policy 和模型清单；缺项集中打印并退出。
 自动加载仓库根目录 `.env`，已导出的环境变量优先；兼容 `.env.qwen`。
 默认情况下，记忆处理和可见回复共用 `--llm`；`--memory-llm` 仍可供非交互部署显式覆盖。
 `--memory-llm` 支持 DeepSeek、Qwen、OpenAI；`--llm` 还在 MLX 后端支持本地模型。

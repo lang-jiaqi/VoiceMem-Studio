@@ -67,7 +67,8 @@ class Reply:
 
     async def voicemem_llm_tts(self, pending, send, send_audio, owner, timeline,
                                said=None, context_session="", context_space="",
-                               memory_vm=None):
+                               memory_vm=None, self_harness_profile=None,
+                               on_self_harness_update=None):
         memory_vm = memory_vm or self.vm
         context_space = context_space or self.ACTIVE_SPACE
         ready = asyncio.Event()
@@ -80,7 +81,9 @@ class Reply:
                 return await self._voicemem_llm_tts(
                     pending, send, send_audio, owner, timeline, said=said,
                     context_session=context_session, context_space=context_space,
-                    memory_vm=memory_vm, first_audio_ready=ready)
+                    memory_vm=memory_vm, first_audio_ready=ready,
+                    self_harness_profile=self_harness_profile,
+                    on_self_harness_update=on_self_harness_update)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -97,7 +100,9 @@ class Reply:
 
     async def _voicemem_llm_tts(self, pending, send, send_audio, owner, timeline,
                                said=None, context_session="", context_space="",
-                               memory_vm=None, first_audio_ready=None):
+                               memory_vm=None, first_audio_ready=None,
+                               self_harness_profile=None,
+                               on_self_harness_update=None):
         memory_vm = memory_vm or self.vm
         context_space = context_space or self.ACTIVE_SPACE
         _entry = time.monotonic()
@@ -114,23 +119,46 @@ class Reply:
         _t0 = time.monotonic()
         _lat = {"llm": 0.0, "seg": 0.0, "audio": 0.0, "pre": 0.0}
 
+        from studio.core.utils.speaking_style.component import (
+            is_qwen36, qwen_segment_instruction,
+        )
+        from studio.core.utils.self_harness.component import (
+            fixed_tone, merge_update, normalize_snapshot, profile_context,
+            speech_rate_instruction, split_control_prefix,
+        )
+        control_enabled = self_harness_profile is not None
+        active_self_harness = normalize_snapshot(self_harness_profile)
+
         queue: asyncio.Queue = asyncio.Queue()
         text_queue: asyncio.Queue = asyncio.Queue()
 
         tts = memory_vm.utils.get("tts")
 
+        speak_base = self._speak_base_env or self._by_lang(self._SPEAK_BASE)
         speak_as = self._speak_instruction(pending.emotion)
+        if forced_tone := fixed_tone(active_self_harness):
+            speak_as = tts_control.instruction(forced_tone, speak_base)
+        control = {"head": control_enabled, "buf": ""}
         tone = {"tag": "", "head": True, "buf": ""}
         logged_instruction = object()
 
-        from studio.core.utils.speaking_style.component import is_qwen36, qwen_segment_instruction
         qwen_voice = is_qwen36(getattr(self, "REPLY", None))
 
         def _synth_one(seg, text_start):
             nonlocal logged_instruction
             import json
             effective = speak_as or getattr(tts, "instruction", "") or getattr(tts, "instructions", "")
-            effective = qwen_segment_instruction(effective, pending.text, reply[:text_start + len(seg)], qwen=qwen_voice)
+            # An explicit conversation preference wins over the model-specific
+            # automatic intro arc; the general Qwen delivery hint still applies.
+            if fixed_tone(active_self_harness):
+                effective = qwen_segment_instruction(
+                    effective, "", "", qwen=qwen_voice)
+            else:
+                effective = qwen_segment_instruction(
+                    effective, pending.text, reply[:text_start + len(seg)],
+                    qwen=qwen_voice)
+            effective = speech_rate_instruction(
+                effective, active_self_harness)
             if effective != logged_instruction:
                 logged_instruction = effective
                 print(f"[tts-prompt] {timeline.output_id[:8]} "
@@ -295,6 +323,8 @@ class Reply:
                 route=pending.route, replay=pending.replay, text=pending.text,
                 emotion=pending.emotion,
                 continuation=getattr(pending, "continuation_prompt", False))
+            if control_enabled:
+                ctx = f"{ctx}\n\n{profile_context(active_self_harness)}"
 
             hist = self._SESSION_CONTEXT.messages(context_session, context_space,
                                              window=self.HISTORY_TURNS)
@@ -306,47 +336,96 @@ class Reply:
                 reasoning_effort=("high" if reply_mode == MEMORY_COT
                                   else "none"),
             )
+
+            def apply_self_harness_update(update):
+                nonlocal speak_as
+                effective = update
+                if on_self_harness_update is not None:
+                    try:
+                        result = on_self_harness_update({
+                            domain: dict(fields)
+                            for domain, fields in update.items()
+                        })
+                        # Stateful callbacks return the subset accepted by the
+                        # stability window. Stateless callbacks such as
+                        # ``dict.update`` return None and preserve the old API.
+                        if isinstance(result, dict):
+                            effective = result
+                    except Exception as exc:
+                        effective = {}
+                        print(f"[self-harness] 保存会话设置失败：{type(exc).__name__}: {exc}",
+                              flush=True)
+                merge_update(active_self_harness["profile"], effective)
+                if selected_tone := fixed_tone(active_self_harness):
+                    speak_as = tts_control.instruction(selected_tone, speak_base)
+                elif "tone" in effective.get("speaking_style", {}):
+                    speak_as = self._speak_instruction(pending.emotion)
+
+            async def emit_visible(delta):
+                nonlocal reply
+                if not delta:
+                    return
+                reply += delta
+                timeline.append_text(delta)
+                await send({"type": "answer_delta", "text": delta})
+                text_queue.put_nowait(delta)
+
+            async def consume_tone(delta, *, final=False):
+                nonlocal speak_as
+                if tone["head"]:
+                    tone["buf"] += delta
+                    tag, rest = tts_control.split(tone["buf"])
+                    if tag:
+                        selected = fixed_tone(active_self_harness)
+                        tag = selected or tts_control.smooth(
+                            self._LAST_TONE["tag"], tag)
+                        tone["tag"], tone["head"], tone["buf"] = (
+                            tag, False, "")
+                        self._LAST_TONE["tag"] = tag
+                        speak_as = tts_control.instruction(tag, speak_base)
+                        delta = rest
+                        if self.BARGE_DEBUG:
+                            print(f"[tone] 模型标的语气：{tag}", flush=True)
+                    elif not final and len(tone["buf"]) < 26 and not any(
+                            char in tone["buf"] for char in "]】"):
+                        return
+                    else:
+                        tone["head"] = False
+                        delta, tone["buf"] = tone["buf"], ""
+                        if final and not delta.strip():
+                            delta = ""
+                await emit_visible(delta)
+
+            async def consume_delta(delta):
+                if control["head"]:
+                    control["buf"] += delta
+                    parsed = split_control_prefix(control["buf"])
+                    if not parsed.resolved:
+                        return
+                    control["head"], control["buf"] = False, ""
+                    if parsed.error:
+                        print(f"[self-harness] 忽略模型控制头：{parsed.error}",
+                              flush=True)
+                    apply_self_harness_update(parsed.update)
+                    delta = parsed.rest
+                await consume_tone(delta)
+
             async for d in deltas:
                 if not _lat["llm"]:
                     _lat["llm"] = (time.monotonic() - _t0) * 1000
-                if tone["head"]:
-
-                    tone["buf"] += d
-                    tag, rest = tts_control.split(tone["buf"])
-                    if tag:
-
-                        tag = tts_control.smooth(self._LAST_TONE["tag"], tag)
-                        tone["tag"], tone["head"] = tag, False
-                        self._LAST_TONE["tag"] = tag
-
-                        speak_as = tts_control.instruction(
-                            tag, self._speak_base_env or self._by_lang(self._SPEAK_BASE))
-                        d = rest
-                        if self.BARGE_DEBUG:
-                            print(f"[tone] 模型标的语气：{tag}", flush=True)
-                    elif len(tone["buf"]) < 26 and not any(
-                            c in tone["buf"] for c in "]】"):
-                        continue
-
-                    else:
-                        tone["head"] = False
-                        d = tone["buf"]
-                    if not d:
-                        continue
-
-                reply += d
-                timeline.append_text(d)
-                await send({"type": "answer_delta", "text": d})
-                text_queue.put_nowait(d)
-            # Normal EOF resolves an unrecognized short prefix as plain speech.
-            # Keep this outside finally so cancellation/errors never flush it.
-            if tone["head"] and tone["buf"].strip():
-                d = tone["buf"]
-                tone["head"], tone["buf"] = False, ""
-                reply += d
-                timeline.append_text(d)
-                await send({"type": "answer_delta", "text": d})
-                text_queue.put_nowait(d)
+                await consume_delta(d)
+            # Only normal EOF may resolve buffered prefixes. Cancellation and
+            # provider failures must never leak a private control header.
+            if control["head"]:
+                parsed = split_control_prefix(control["buf"], final=True)
+                control["head"], control["buf"] = False, ""
+                if parsed.error:
+                    print(f"[self-harness] 忽略模型控制头：{parsed.error}",
+                          flush=True)
+                apply_self_harness_update(parsed.update)
+                await consume_tone(parsed.rest, final=True)
+            else:
+                await consume_tone("", final=True)
         except asyncio.CancelledError:
             interrupted = True
         except Exception:

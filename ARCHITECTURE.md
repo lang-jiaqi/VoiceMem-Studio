@@ -55,6 +55,7 @@ Owned by `studio/core/voiceagent.py`, its `utils/` modules, and `studio/harness/
 - unfinished-utterance handling;
 - spoken backchannel policy and cached clips;
 - tone-label parsing and TTS instruction selection;
+- allowlisted, conversation-scoped Self Harness overlays selected by the reply model;
 - early reply buffering and commitment;
 - interruption and output cancellation;
 - short-term Session Context.
@@ -62,11 +63,38 @@ Owned by `studio/core/voiceagent.py`, its `utils/` modules, and `studio/harness/
 This plane may use memory results but does not define factual or affective
 storage semantics.
 
-The four editable policy files are `studio/harness/{persona,speaking_style,
-reply_modes,turn_taking}/policy.py`. Each folder contains one policy module;
-execution belongs to the corresponding `studio/core/utils/` component. Studio
-uses one prompt per purpose without language variants. `--lang` still selects
-ASR and Memory Space language; the memory library retains its own prompt inputs.
+The four policy files in `studio/harness/{persona,speaking_style,reply_modes,
+turn_taking}/policy.py` are immutable runtime defaults. Each exposes its
+pre-Self-Harness prompt as a `DEFAULT_*` value, and execution remains in the
+corresponding `studio/core/utils/` component. Studio uses one prompt per purpose
+without language variants. `--lang` still selects ASR and Memory Space language;
+the memory library retains its own prompt inputs.
+
+`studio/harness/self_harness/policy.py` is the fifth, coordinating policy. It
+declares a typed overlay schema spanning persona interaction style, speech rate,
+tone, reply length, reasoning depth, spoken backchannel frequency, and work
+filler behavior. The same reply call emits a private `<self_harness>` JSON
+prefix before its tone tag. The reply pipeline removes that prefix, rejects
+unknown domains, fields, values, and changes larger than two fields, and stores
+accepted changes on the current WebSocket `Conversation`. It never rewrites the
+four default prompts, Python source, provider settings, or arbitrary runtime
+parameters.
+
+Self Harness changes are small session overlays. The model may emit them only
+for explicit user preferences; transient content cannot change the profile.
+Current profile context marks fields changed during the preceding two replies.
+A conflicting request in that window is emitted as a candidate but staged by
+the runtime instead of being activated. The model asks for confirmation; only
+the same candidate repeated on the next explicit request is applied. This
+hysteresis is enforced for the stored profile and the current reply's TTS, while
+relative speech-rate requests move only one step. The runtime also enforces the
+schema and per-turn change bound independently of the prompt.
+Speech rate is appended to request-scoped TTS instructions, reasoning preference
+is composed with Gate memory eligibility, and turn-taking preferences mutate
+only the session state machine. Speculative replies stage their entire update
+and apply it only when that reply is committed, so a discarded EOT prediction
+cannot alter later turns. Realtime speech-to-speech prompts do not use this text
+control protocol.
 
 The local Qwen3-0.6B classifier selects ordinary or deep reasoning after ASR.
 Studio combines that depth with VoiceMem memory eligibility into the existing
@@ -698,14 +726,17 @@ Package/default prompt files live in `prompt/llm_*.md` and
 
 Prompt configuration is parsed and cached by `prompt_config.py`; malformed or
 incomplete configuration fails validation rather than changing behavior
-silently. Runtime changes require restart because prompt files are not read in
-the speech loop.
+silently. Editing a default policy requires restart because prompt files are not
+read in the speech loop. Self Harness profile changes are in-memory overlays and
+take effect without editing or reloading those defaults.
 
-### Tone and TTS
+### Self Harness, tone and TTS
 
-The reply model may prefix text with a tone tag. `studio/core/utils/tts/control.py` removes
-that control tag, smooths abrupt tone transitions, and converts it into a TTS
-instruction. Control tags are never spoken or stored as assistant text.
+The reply model prefixes tagged replies with a private Self Harness header and
+then a tone tag. `studio/core/utils/self_harness/component.py` validates and
+removes the header. `studio/core/utils/tts/control.py` removes the tone tag,
+smooths abrupt tone transitions when no fixed tone is selected, and converts it
+into a TTS instruction. Neither control prefix is spoken or stored as assistant text.
 The reply pipeline buffers a possible leading tone tag across deltas. If the
 provider ends normally before that buffer becomes a recognized tag or reaches
 the streaming fallback length, nonempty buffered text is delivered once as

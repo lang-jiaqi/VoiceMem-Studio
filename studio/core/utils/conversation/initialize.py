@@ -4,6 +4,9 @@ import uuid
 from studio.core.utils.dialogue.component import backchannel_policy
 from studio.core.utils.turn_taking.initialize import Backchannel, TurnTakingStateMachine
 from studio.core.utils.audio_timeline.component import SpeechRateEstimator
+from studio.core.utils.self_harness.component import (
+    SelfHarnessState, apply_turn_taking_profile,
+)
 
 def initialize(self, agent, sock):
     self.agent = agent
@@ -18,6 +21,10 @@ def initialize(self, agent, sock):
     self.candidate_paused = False
     self.candidate_paused_at = 0.0
     self.filler_waiters: dict[str, asyncio.Event] = {}
-    self.early = {'text': '', 'task': None, 'sink': None, 'timeline': None, 'pending': None, 'said': None, 'space': '', 'memory_vm': None, 'started': 0.0}
+    self.self_harness = SelfHarnessState(
+        on_change=lambda snapshot: apply_turn_taking_profile(
+            self.turn_taking, snapshot))
+    apply_turn_taking_profile(self.turn_taking, self.self_harness.snapshot())
+    self.early = {'text': '', 'task': None, 'sink': None, 'timeline': None, 'pending': None, 'said': None, 'space': '', 'memory_vm': None, 'started': 0.0, 'self_harness_update': None}
     self.prewarm = {'task': None, 'cancelled': None, 'closed': False}
     self.unfinished_wait = {'pending': None, 'task': None}

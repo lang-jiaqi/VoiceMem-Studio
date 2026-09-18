@@ -13,6 +13,7 @@ from studio.core.utils.conversation.component import Conversation
 from studio.core.utils.reply_modes.component import QwenThinkingRouter
 from studio.core.utils.reply_modes.mlx import MLXThinkingRouter
 from studio.core.utils.reply_modes.short_text import generate_short_text, torch_short_text
+from studio.core.utils.self_harness.component import apply_turn_taking_profile
 from studio.core.utils.turn_taking.component import HandoffKind, TurnTakingStateMachine
 from studio.core.utils.turn_taking.filler import generate_local_filler
 
@@ -84,6 +85,21 @@ class WorkFillerPolicyTests(unittest.TestCase):
         self.assertIs(self.choose(second).kind, HandoffKind.LLM_FILLER)
         self.assertIs(self.choose(first, reply_mode='memory').kind, HandoffKind.CACHED_ACK)
         self.assertIsNot(first.filler_rng, first.backchannel.rng)
+
+    def test_self_harness_turn_taking_overlay_is_session_local_and_resettable(self):
+        machine = TurnTakingStateMachine(work_filler_probability=.3)
+        apply_turn_taking_profile(machine, {"turn_taking": {
+            "backchannel": "off", "work_filler": "silent"}})
+        self.assertFalse(machine.backchannel.enabled)
+        self.assertEqual(machine.work_filler_probability, 0)
+        apply_turn_taking_profile(machine, {"turn_taking": {
+            "backchannel": "more", "work_filler": "reassuring"}})
+        self.assertTrue(machine.backchannel.enabled)
+        self.assertEqual(machine.backchannel.frequency, "more")
+        self.assertEqual(machine.work_filler_probability, .75)
+        apply_turn_taking_profile(machine, {})
+        self.assertEqual(machine.backchannel.frequency, "auto")
+        self.assertEqual(machine.work_filler_probability, .3)
 
 
 class LocalFillerTests(unittest.IsolatedAsyncioTestCase):
