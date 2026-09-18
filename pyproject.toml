@@ -93,9 +93,9 @@ slm = [
 #   跑 finetune/ 的训练脚本         pip install ms-swift==4.5.2 bitsandbytes
 
 [project.urls]
-Homepage = "https://github.com/lang-jiaqi/Voicemem_open"
-Repository = "https://github.com/lang-jiaqi/Voicemem_open"
-Issues = "https://github.com/lang-jiaqi/Voicemem_open/issues"
+Homepage = "https://github.com/lang-jiaqi/VoiceMem-Studio"
+Repository = "https://github.com/lang-jiaqi/VoiceMem-Studio"
+Issues = "https://github.com/lang-jiaqi/VoiceMem-Studio/issues"
 
 [tool.setuptools.packages.find]
 include = ["voicemem*", "studio*"]

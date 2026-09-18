@@ -33,6 +33,12 @@ docker compose up -d --build
 docker compose logs -f studio
 ```
 
+无桌面的 Linux 服务通过 `.env` 配置模型服务。除对应 API Key 外，可分别设置
+`VOICEMEM_MEMORY_PROVIDER`、`VOICEMEM_MEMORY_MODEL`、`VOICEMEM_MEMORY_BASE_URL`、
+`VOICEMEM_STUDIO_PROVIDER`、`VOICEMEM_STUDIO_MODEL` 和
+`VOICEMEM_STUDIO_BASE_URL`，然后重启容器。
+远程 Mac/Windows App 的“设置 → 组件”只展示这些信息，不会从客户端重启服务器。
+
 看到 `[startup] VoiceMem Studio 启动成功` 后打开 `http://localhost:8787`。初次构建需要下载依赖；
 初次启动需要下载模型并编译预热，可能较久。之后复用持久化权重和编译缓存。
 默认 DeepSeek、中文、`studio-zh`、详细终端日志，Breeze 在 Studio 进程内流式合成。
@@ -133,3 +139,12 @@ Breeze 模型权重及自托管输出受其研究/非商业许可约束；容器
 准备脚本安装 `.[studio]` 和桌宠的 Node/Electron 依赖，并在缺失时创建 `.env` 模板；不会覆盖已有 `.env`、
 重建现有虚拟环境或修改记忆数据。安装后只需执行原有启动脚本。
 Mac 的模型、缓存和 Memory Spaces 仍留在原来的本机位置。
+
+若希望使用包含双风格 UI 和内置桌宠的桌面 App，准备完成后执行：
+
+```bash
+cd studio/apps
+npm start
+```
+
+全新环境也可以从仓库根目录直接运行 `./scripts/start_studio_app.sh`；它会在需要时先调用上述准备脚本。

@@ -61,11 +61,15 @@ def build_app(agent):
             "memory": {
                 "provider": memory_provider,
                 "configured": bool(credential(memory_provider, "memory")),
+                "model": memory["config"].get("model", ""),
+                "base_url": memory["config"].get("base_url", ""),
             },
             "reply": {
                 "provider": reply_provider,
                 "configured": reply_provider == "local" or
                 bool(credential(reply_provider, "reply")),
+                "model": reply["config"].get("model", ""),
+                "base_url": reply["config"].get("base_url", ""),
             },
             "speech": {"provider": agent.REPLY["tts"]["provider"]},
         }

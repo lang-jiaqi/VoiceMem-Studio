@@ -56,6 +56,66 @@ test('managed npm launch validates its project and provider', () => {
   }), /配置无效/);
 });
 
+test('managed model services validate custom endpoints without exposing credentials', () => {
+  const services = r.modelServicesFromLaunch({ memoryProvider: 'deepseek', replyProvider: 'openai' }, {
+    DEEPSEEK_API_KEY: 'memory-secret', OPENAI_API_KEY: 'reply-secret',
+    VOICEMEM_MEMORY_MODEL: 'deepseek-chat',
+    VOICEMEM_STUDIO_MODEL: 'custom-chat',
+    VOICEMEM_STUDIO_BASE_URL: 'https://models.example.com/v1/',
+  });
+  assert.equal(services.memory.model, 'deepseek-chat');
+  assert.equal(services.reply.baseUrl, 'https://models.example.com/v1');
+  assert.deepEqual(r.publicModelServices(services).reply, {
+    provider: 'openai', model: 'custom-chat', baseUrl: 'https://models.example.com/v1', configured: true,
+  });
+  assert.equal(JSON.stringify(r.publicModelServices(services)).includes('secret'), false);
+  assert.throws(() => r.modelEndpoint('http://models.example.com/v1'), /HTTPS/);
+  assert.equal(r.modelEndpoint('http://127.0.0.1:11434/v1/'), 'http://127.0.0.1:11434/v1');
+});
+
+test('model service updates retain same-provider keys and require a key after provider changes', () => {
+  const current = r.modelServices({
+    memory: { provider: 'deepseek', apiKey: 'memory-secret' },
+    reply: { provider: 'openai', apiKey: 'reply-secret' },
+  });
+  const updated = r.updateModelService(current, 'reply', {
+    provider: 'openai', model: 'gpt-4.1-mini', baseUrl: 'https://api.openai.com/v1', apiKey: '',
+  });
+  assert.equal(updated.reply.apiKey, 'reply-secret');
+  assert.equal(updated.reply.model, 'gpt-4.1-mini');
+  assert.throws(() => r.updateModelService(current, 'reply', {
+    provider: 'qwen', model: 'qwen-plus', baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', apiKey: '',
+  }), /API Key/);
+});
+
+test('model service persistence protects keys and restores process environment', async t => {
+  const directory = await temporary(t), file = path.join(directory, 'model-services.json');
+  const services = r.modelServices({
+    memory: { provider: 'deepseek', apiKey: 'memory-secret' },
+    reply: { provider: 'openai', model: 'custom-chat', baseUrl: 'http://localhost:11434/v1', apiKey: 'reply-secret' },
+  });
+  const protect = value => Buffer.from(value).toString('base64');
+  const unprotect = value => Buffer.from(value, 'base64').toString();
+  await r.saveModelServices(file, services, protect);
+  const raw = await fs.readFile(file, 'utf8');
+  assert.equal(raw.includes('memory-secret') || raw.includes('reply-secret'), false);
+  assert.deepEqual(await r.loadModelServices(file, unprotect), services);
+  const env = r.modelServiceEnvironment({ KEEP: 'yes', VOICEMEM_STUDIO_API_KEY: 'old' }, services);
+  assert.equal(env.KEEP, 'yes');
+  assert.equal(env.VOICEMEM_MEMORY_API_KEY, 'memory-secret');
+  assert.equal(env.VOICEMEM_MEMORY_PROVIDER, 'deepseek');
+  assert.equal(env.VOICEMEM_STUDIO_API_KEY, 'reply-secret');
+  assert.equal(env.VOICEMEM_STUDIO_PROVIDER, 'openai');
+  assert.equal(env.VOICEMEM_STUDIO_MODEL, 'custom-chat');
+  assert.equal(env.VOICEMEM_STUDIO_BASE_URL, 'http://localhost:11434/v1');
+});
+
+test('managed startup uses a long first-run timeout with a validated override', () => {
+  assert.equal(r.managedStartupTimeout({}), 30 * 60 * 1000);
+  assert.equal(r.managedStartupTimeout({ VOICEMEM_DESKTOP_STARTUP_TIMEOUT_SECONDS: '600' }), 600000);
+  assert.throws(() => r.managedStartupTimeout({ VOICEMEM_DESKTOP_STARTUP_TIMEOUT_SECONDS: '20' }), /不小于 60/);
+});
+
 test('managed macOS backend uses MLX and keeps credentials out of arguments', async t => {
   const directory = await temporary(t);
   for (const file of ['compose.yaml', 'pyproject.toml']) await fs.writeFile(path.join(directory, file), 'fixture');
@@ -72,15 +132,30 @@ test('managed macOS backend uses MLX and keeps credentials out of arguments', as
   assert.equal(specification.env.STUDIO_DESKTOP_PET, '0');
 });
 
+test('managed macOS backend directs Intel users to remote mode', async t => {
+  const directory = await temporary(t);
+  for (const file of ['compose.yaml', 'pyproject.toml']) await fs.writeFile(path.join(directory, file), 'fixture');
+  await assert.rejects(r.managedBackendCommand(directory, 'deepseek', 'deepseek', {
+    platform: 'darwin', arch: 'x64', env: {},
+  }), /npm run start:remote/);
+});
+
 test('managed Windows backend starts WSL CUDA without changing Docker', async t => {
   const directory = await temporary(t);
   for (const file of ['compose.yaml', 'pyproject.toml']) await fs.writeFile(path.join(directory, file), 'fixture');
   const calls = [];
   const specification = await r.managedBackendCommand(directory, 'openai', 'qwen', {
     platform: 'win32', env: { OPENAI_API_KEY: 'memory-secret', DASHSCOPE_API_KEY: 'reply-secret' },
-    run: async (file, args) => { calls.push({ file, args }); return '/mnt/c/VoiceMem-Studio'; },
+    run: async (file, args) => {
+      calls.push({ file, args });
+      return args[0] === 'wslpath' ? '/mnt/c/VoiceMem-Studio' : '';
+    },
   });
-  assert.deepEqual(calls, [{ file: 'wsl.exe', args: ['wslpath', '-a', await fs.realpath(directory)] }]);
+  assert.deepEqual(calls, [
+    { file: 'wsl.exe', args: ['wslpath', '-a', await fs.realpath(directory)] },
+    { file: 'wsl.exe', args: ['--cd', '/mnt/c/VoiceMem-Studio', '--exec', 'test', '-x',
+      '/mnt/c/VoiceMem-Studio/.venv-cuda/bin/python'] },
+  ]);
   assert.equal(specification.file, 'wsl.exe');
   assert.deepEqual(specification.args.slice(0, 4), [
     '--cd', '/mnt/c/VoiceMem-Studio', '--exec', '/mnt/c/VoiceMem-Studio/.venv-cuda/bin/python',
@@ -90,8 +165,22 @@ test('managed Windows backend starts WSL CUDA without changing Docker', async t 
   assert.ok(specification.env.WSLENV.split(':').includes('DASHSCOPE_API_KEY'));
   assert.ok(specification.env.WSLENV.split(':').includes('OPENAI_API_KEY'));
   assert.ok(specification.env.WSLENV.split(':').includes('VOICEMEM_MEMORY_API_KEY'));
+  assert.ok(specification.env.WSLENV.split(':').includes('VOICEMEM_STUDIO_MODEL'));
+  assert.ok(specification.env.WSLENV.split(':').includes('VOICEMEM_STUDIO_BASE_URL'));
   assert.equal(specification.args.includes('memory-secret') || specification.args.includes('reply-secret'), false);
   assert.equal(calls.some(call => call.file === 'docker'), false);
+});
+
+test('managed Windows backend reports a missing WSL Python environment clearly', async t => {
+  const directory = await temporary(t);
+  for (const file of ['compose.yaml', 'pyproject.toml']) await fs.writeFile(path.join(directory, file), 'fixture');
+  await assert.rejects(r.managedBackendCommand(directory, 'deepseek', 'deepseek', {
+    platform: 'win32', env: {},
+    run: async (_file, args) => {
+      if (args[0] === 'wslpath') return '/mnt/c/VoiceMem-Studio';
+      throw new Error('test failed');
+    },
+  }), /WSL2 Studio Python 环境.*\.venv-cuda/);
 });
 
 test('VoiceMem preparation finishes before Electron startup continues', async t => {
@@ -182,6 +271,7 @@ test('readiness waiting retries, cancels and times out without starting another 
 test('packaging excludes inference weights, credentials, recordings, backend source and tests', async () => {
   const pkg = JSON.parse(await fs.readFile(path.join(__dirname, '..', 'package.json'), 'utf8'));
   assert.ok(pkg.build.files.includes('main.cjs'));
+  assert.ok(pkg.build.files.includes('studio-preload.cjs'));
   assert.ok(pkg.build.files.includes('.pet-runtime/**/*'));
   for (const item of pkg.build.files) assert.equal(/\.env|models|record|prompt|tests|evals|voicemem_memoryspace|\.\.\//.test(item), false);
   assert.equal(pkg.devDependencies.electron.startsWith('^'), false);

@@ -40,9 +40,10 @@ def parse_args(argv=None):
     parser.add_argument("--lang", choices=("zh", "en"), default="zh")
     parser.add_argument("--confirm_ms", type=int, default=200)
     parser.add_argument("--verbose", action="store_true")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--llm", choices=("deepseek", "qwen", "openai", "local"),
+                        default=os.environ.get("VOICEMEM_STUDIO_PROVIDER") or None,
                         help="Studio 可见回复 API；省略时在交互终端选择")
     parser.add_argument("--memory-llm", choices=("deepseek", "qwen", "openai"),
                         default=os.environ.get("VOICEMEM_MEMORY_PROVIDER") or None,

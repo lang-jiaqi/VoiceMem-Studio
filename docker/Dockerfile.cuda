@@ -78,4 +78,4 @@ EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30m --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/', timeout=3).close()"]
 ENTRYPOINT ["python", "-m", "studio"]
-CMD ["--verbose"]
+CMD ["--host", "0.0.0.0", "--verbose"]

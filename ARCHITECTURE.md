@@ -137,12 +137,19 @@ filters exclude private traces, memory, recordings, checkpoints and host environ
 The default published port is loopback-only; exposing the application requires
 deployment-level HTTPS and access control. HTTP health becomes available only
 after the existing model warmup completes.
+Native command-line startup also binds loopback by default. The CUDA container
+explicitly binds `0.0.0.0` inside its isolated network namespace so Compose can
+publish the service on the host's loopback address.
 
 Apple Silicon retains native MLX deployment through the existing launch script;
 `scripts/setup_studio_mlx.sh` prepares the matching environment without replacing
 an existing environment or credential file. No Metal-in-Linux-container path or
 host inference proxy is added. Neither deployment changes memory semantics,
 provider contracts, speech segmentation or model scheduling.
+`npm start` is the canonical source entry and runs setup only when the environment
+marker is absent or the dependency definition changed. `scripts/start_studio_app.sh`
+is a compatibility alias. The lower-level setup and backend launchers remain
+available independently.
 The native setup also installs the locked desktop-pet dependencies. Headless
 containers disable spawning Electron through `STUDIO_DESKTOP_PET=0` while
 retaining the upstream pet-observer WebSocket and events. Linux, including WSL,
@@ -167,9 +174,15 @@ image cards linking to the technical or digital-human visual style. Display
 settings live inside each style. The component settings tab presents the fixed
 input, memory, reply, speech, and pet components as a draggable canvas. Only
 normalized card positions are stored in browser local storage; components cannot
-be removed. `/api/components` supplies non-secret provider and readiness labels.
-API keys never enter the renderer and remain configurable through the single
-`npm start` terminal prompt. `/legacy` retains the previous Studio renderer;
+be removed. `/api/components` supplies non-secret provider, model, endpoint, and
+readiness labels. For an App-owned backend, a narrowly scoped isolated preload
+allows the main-frame settings page to update the memory or reply model service
+and request a supervised backend restart. The main process validates endpoints,
+keeps keys out of command arguments and backend responses, and encrypts persisted
+keys with Electron `safeStorage`. A new configuration is persisted only after its
+backend becomes ready; failure restarts the previous configuration. Existing or
+remote services remain read-only because their lifecycle belongs to the server.
+`/legacy` retains the previous Studio renderer;
 `/classic` retains the older demo. The desktop opens this same root and keeps its
 connection configuration window hidden on a successful startup; connection errors
 reveal configuration. Desktop clients require the updated backend assets.
@@ -190,32 +203,45 @@ lists are page-local and reset on refresh; opening a previous list item starts a
 new backend context for subsequent input. The supplied brain illustration is a
 memory-domain navigation diagram, not a count or topology of stored memories.
 The panels show real per-turn recall results without demo records or rule replies. A local
-configuration page owns the restricted settings IPC; the Studio renderer has no
-preload bridge or Node integration. Both renderers use context isolation and
+configuration page owns connection IPC. The Studio renderer has only the model-service
+bridge described above and no Node integration. Both renderers use context isolation and
 sandboxing. Microphone requests are limited to main-frame audio from the selected
 origin and require user approval; remote connections require HTTPS, while HTTP
 is accepted only on loopback. Settings and browser state live in the desktop
 application-data directory, not in the backend's memory or credential files.
 
-The source desktop entry (`npm start`) first verifies its locked Electron, PixiJS,
+The source desktop entry (`npm start`) first prepares a missing or stale Apple
+Silicon Python environment, then verifies its locked Electron, PixiJS,
 and Pixi Live2D files. Missing files trigger `npm ci --include=dev`; a complete
 installation performs no package-manager or network work. The managed install
 explicitly enables lifecycle scripts so a user-level npm `ignore-scripts`
 setting cannot leave Electron without its platform binary. It then owns an optional local backend lifecycle.
+The separate `npm run start:remote` entry performs the same locked client-resource
+preparation but removes managed-backend state before Electron starts. It opens
+the connection configuration immediately, without first waiting on the default
+loopback service and without checking local Python, WSL, accelerators,
+credentials, or inference models. This is the source entry for Intel Macs,
+clients without a compatible local GPU, and already running local or remote services.
 Before Electron starts it asks once for a provider and reads one matching API
-key with masked terminal input. Remote selections and their key are shared by
+key with masked terminal input when no encrypted App model configuration exists.
+Later launches reuse the App configuration without another terminal prompt.
+Remote selections and their key are shared by
 VoiceMem memory work and visible Studio replies. The local MLX reply selection
 uses the same single prompt for the DeepSeek key required by memory work and
 conversation titles. A
 short-lived preparation process checks and acquires the shared memory,
 perception, and transcription models. Keys are inherited only by preparation,
-Electron, and the backend process; they are not written to desktop settings or
-command arguments.
+Electron, and the backend process, never command arguments. After the first
+backend reaches readiness, Electron persists them only through OS-backed
+`safeStorage`; the connection settings file remains secret-free.
 Electron starts `.venv/bin/python` with the MLX backend on macOS, or invokes
 `.venv-cuda/bin/python` through `wsl.exe` with the CUDA backend on Windows. Both
 paths bind loopback port 8787, disable the backend-owned pet, acquire the
 remaining reply and speech models, run strict warmups, wait for the shared Web
-page, and only then create and show the style selector. Managed startup never
+page for up to 30 minutes by default, and only then create and show the style selector.
+The timeout can be increased for unusually slow first downloads through the
+desktop launch environment. Existing-service connections retain their shorter
+readiness timeout. Managed startup never
 creates the local connection/status window; preparation progress stays in the
 terminal, and startup failures use a native error dialog. The app stops this
 owned process on exit. Missing Python, WSL, driver, or dependency prerequisites produce a startup
@@ -907,7 +933,8 @@ scheduled. A later UI space change cannot redirect an existing write.
 
 | State | Owner | Lifetime |
 | --- | --- | --- |
-| Model-role and provider configuration | Process configuration | Process |
+| Active model-role and provider configuration | Backend process | Process |
+| Managed desktop model-service configuration | Electron main process / encrypted app data | App installation |
 | Prompt templates and parsed prompt cache | Harness / prompt config | Process |
 | MLX scheduler | `GpuLoop` | Process |
 | Torch device serialization | `TORCH_LOCK` | Process |

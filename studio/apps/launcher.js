@@ -10,7 +10,7 @@ function refresh() {
   byId('connect').disabled = busy;
   byId('choose-project').disabled = busy;
   byId('cancel').disabled = !busy;
-  byId('connect').textContent = byId('docker').checked ? '启动并进入' : '连接并进入';
+  byId('connect').textContent = byId('docker').checked ? '启动并选择风格' : '连接并选择风格';
 }
 
 function status(value) {
@@ -29,10 +29,11 @@ api.state().then(state => {
   byId('project-path').textContent = projectDir || '尚未选择';
   byId('version').textContent = `v${state.version}`;
   byId('docker-options').hidden = state.platform !== 'win32';
+  byId('docker-options').open = state.platform === 'win32' && byId('docker').checked;
   byId('platform-hint').textContent = state.platform === 'darwin'
-    ? 'Mac 本机使用原生 MLX 后端；也可连接远程服务。'
+    ? '连接本机服务、SSH 转发或 HTTPS 远端。'
     : state.platform === 'win32'
-      ? 'App 和桌宠在 Windows 运行；本机 CUDA 后端运行在 WSL2 中。'
+      ? '连接 WSL2 本机服务或 HTTPS 远端。'
       : 'Linux 只部署后端；此桌面页面仅用于开发验证。';
   if (state.platform !== 'win32') {
     byId('docker').disabled = true;

@@ -7,6 +7,13 @@ const os = require('node:os');
 const path = require('node:path');
 const dependencies = require('../scripts/ensure-dependencies.cjs');
 
+test('Node version preflight rejects unsupported runtimes before installing dependencies', () => {
+  assert.doesNotThrow(() => dependencies.assertNodeVersion('22.12.0'));
+  assert.doesNotThrow(() => dependencies.assertNodeVersion('24.0.0'));
+  assert.throws(() => dependencies.assertNodeVersion('22.11.99'), /Node\.js >=22\.12\.0/);
+  assert.throws(() => dependencies.assertNodeVersion('invalid'), /当前为 invalid/);
+});
+
 async function temporary(t) {
   const directory = await promises.mkdtemp(path.join(process.env.VOICEMEM_TEST_TMP || os.tmpdir(), 'studio-dependencies-test-'));
   t.after(() => promises.rm(directory, { recursive: true, force: true }));

@@ -2,6 +2,7 @@
 (()=>{
 'use strict';
 const KEY='voicemem.display',COMPONENT_KEY='voicemem.components.layout.v1',UI_BASE=1.2,CONTENT_BASE=.75;
+const desktopModels=window.studioModelServices;
 let prefs={lang:'zh-CN',uiLevel:1,contentLevel:1,schema:2};
 try{
  const saved=JSON.parse(localStorage.getItem(KEY)||'null');
@@ -39,7 +40,11 @@ const en=new Map(pairs),zh=new Map(pairs.map(([a,b])=>[b,a]));
  ['管理方式','Managed in'],['App 菜单','App menu'],['固定组件','Fixed component'],
  ['所有核心组件都会保留，只能调整位置。','All core components stay available; only their positions can change.'],
  ['重新配置 API','Reconfigure API'],['完成','Done'],
- ['退出 App 后重新运行 npm start，在终端选择服务商并输入一次 Key。VoiceMem 与 Studio 会共用这次配置。','Quit the app and run npm start again. Choose a provider and enter one key; VoiceMem and Studio will share it.'],
+ ['保存并重启服务','Save and restart service'],['模型名称','Model'],['服务地址','Service URL'],
+ ['留空则保留当前 Key','Leave blank to keep the current key'],['正在保存并重启服务…','Saving and restarting the service…'],
+ ['配置已提交，正在等待服务重新就绪。','Configuration submitted. Waiting for the service to become ready.'],
+ ['远程服务的模型配置需要在服务器端修改。','Configure models on the remote server.'],
+ ['只允许托管的本机后端从 App 重启。','Only an app-managed local backend can be restarted here.'],
  ['拖动组件','Drag component'],['本机','Local'],['本地模型','Local model'],['启动配置','Startup config'],
 ].forEach(([a,b])=>{en.set(a,b);zh.set(b,a);});
 // Existing English chrome gets a Chinese equivalent too.
@@ -104,13 +109,15 @@ const DEFAULT_COMPONENT_LAYOUT={
  input:{x:.03,y:.12},memory:{x:.27,y:.57},reply:{x:.51,y:.12},speech:{x:.75,y:.57},pet:{x:.99,y:.12},
 };
 const COMPONENT_LINKS=[['input','memory'],['memory','reply'],['reply','speech'],['speech','pet']];
+const MODEL_DEFAULTS={deepseek:{model:'deepseek-v4-flash',baseUrl:'https://api.deepseek.com'},qwen:{model:'qwen3.6-flash',baseUrl:'https://dashscope-intl.aliyuncs.com/compatible-mode/v1'},openai:{model:'gpt-4o',baseUrl:'https://api.openai.com/v1'},local:{model:'mlx-community/Qwen3.5-4B-4bit',baseUrl:''}};
 function providerName(value){const labels={deepseek:'DeepSeek',qwen:'Qwen',openai:'OpenAI',local:'本地模型',breeze_mlx:'Breeze MLX',breeze_cuda:'Breeze CUDA'};return labels[value]||value||'启动配置';}
+function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));}
 function componentLayout(){
  let saved={};try{saved=JSON.parse(localStorage.getItem(COMPONENT_KEY)||'{}')||{};}catch{}
  return Object.fromEntries(COMPONENTS.map(item=>{const value=saved[item.id]||DEFAULT_COMPONENT_LAYOUT[item.id];return[item.id,{x:Math.min(1,Math.max(0,Number(value.x)||0)),y:Math.min(1,Math.max(0,Number(value.y)||0))}];}));
 }
 function setupComponentBoard(board){
- let layout=componentLayout(),runtime={},selected='',loaded=false;
+ let layout=componentLayout(),runtime={},manager={managed:false,services:null},selected='',loaded=false;
  board.innerHTML=`<div class="component-board-head"><div><strong>组件画板</strong><span>拖动整理，点击组件查看配置</span></div><button type="button" class="component-reset">恢复布局</button></div>
  <svg class="component-links" aria-hidden="true"><defs><marker id="componentArrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 8 4 0 8Z"></path></marker></defs>${COMPONENT_LINKS.map(([a,b])=>`<path data-from="${a}" data-to="${b}" marker-end="url(#componentArrow)"></path>`).join('')}</svg>
  <div class="component-nodes">${COMPONENTS.map(item=>`<article class="component-node component-${item.id}" data-component="${item.id}"><button type="button" class="component-drag" aria-label="拖动组件" title="拖动组件"><span></span><span></span><span></span><span></span><span></span><span></span></button><button type="button" class="component-open"><span class="component-copy"><strong>${item.title}</strong><small>${item.description}</small></span><span class="component-state"><i></i><b>本机</b></span></button></article>`).join('')}</div>
@@ -139,7 +146,29 @@ function setupComponentBoard(board){
   return 'App';
  }
  function updateBadges(){for(const [id,node] of nodes)node.querySelector('.component-state b').textContent=componentBadge(id);}
- function field(label,value,secret=false){return `<div class="component-field"><span>${label}</span><strong class="${secret?'component-secret':''}">${value}</strong></div>`;}
+ function field(label,value,secret=false){return `<div class="component-field"><span>${label}</span><strong class="${secret?'component-secret':''}">${escapeHtml(value)}</strong></div>`;}
+ function serviceForm(id){
+  if(!manager.managed)return `<div class="component-reconfigure-note"><strong>远程服务的模型配置需要在服务器端修改。</strong><br>只允许托管的本机后端从 App 重启。</div>`;
+  const service=manager.services?.[id]||runtime[id]||{},local=id==='reply'&&service.provider==='local';
+  const providers=[['deepseek','DeepSeek'],['qwen','Qwen / DashScope'],['openai','OpenAI-compatible'],...(id==='reply'?[['local','本地模型 / MLX']]:[])];
+  return `<form class="component-service-form" data-role="${id}">
+   <label>服务商<select name="provider">${providers.map(([value,label])=>`<option value="${value}"${service.provider===value?' selected':''}>${label}</option>`).join('')}</select></label>
+   <label>模型名称<input name="model" value="${escapeHtml(service.model||'')}" maxlength="300" required${local?' disabled':''}></label>
+   <label>服务地址<input name="baseUrl" type="url" value="${escapeHtml(service.baseUrl||'')}" spellcheck="false"${local?' disabled':' required'}></label>
+   <label>API Key<input name="apiKey" type="password" value="" autocomplete="new-password" placeholder="留空则保留当前 Key"${local?' disabled':''}></label>
+   <p class="component-service-status" role="status" aria-live="polite"></p>
+   <button class="component-service-save" type="submit">保存并重启服务</button>
+  </form>`;
+ }
+ function bindServiceForm(id){
+  const form=editor.querySelector('.component-service-form');if(!form)return;
+  const provider=form.elements.provider,model=form.elements.model,base=form.elements.baseUrl,key=form.elements.apiKey,status=form.querySelector('.component-service-status'),save=form.querySelector('.component-service-save');
+  provider.onchange=()=>{const value=MODEL_DEFAULTS[provider.value],local=provider.value==='local';model.value=value.model;base.value=value.baseUrl;for(const input of [model,base,key])input.disabled=local;base.required=!local;model.required=!local;};
+  form.onsubmit=async event=>{event.preventDefault();save.disabled=true;status.textContent='正在保存并重启服务…';
+   try{await desktopModels.update(id,{provider:provider.value,model:model.value,baseUrl:base.value,apiKey:key.value});status.textContent='配置已提交，正在等待服务重新就绪。';}
+   catch(error){status.textContent=error.message;save.disabled=false;}
+  };
+ }
  function renderEditor(id){
   selected=id;for(const [key,node] of nodes)node.classList.toggle('selected',key===id);
   const item=COMPONENTS.find(value=>value.id===id);if(!item)return;
@@ -151,8 +180,9 @@ function setupComponentBoard(board){
   if(id==='speech')rows+=field('模型',providerName(runtime.speech?.provider||'breeze_mlx'))+field('后端',runtime.backend?.toUpperCase()||'本机');
   if(id==='pet')rows+=field('管理方式','App 菜单')+field('模式','跟随回复状态');
   const api=['memory','reply'].includes(id);
-  editor.querySelector('.component-editor-body').innerHTML=`${rows}<div class="component-lock"><strong>固定组件</strong><p>所有核心组件都会保留，只能调整位置。</p></div>${api?'<p class="component-reconfigure-note" hidden>退出 App 后重新运行 npm start，在终端选择服务商并输入一次 Key。VoiceMem 与 Studio 会共用这次配置。</p>':''}`;
-  const configure=editor.querySelector('.component-reconfigure');configure.hidden=!api;configure.onclick=()=>{const note=editor.querySelector('.component-reconfigure-note');if(note)note.hidden=false;configure.hidden=true;};
+  editor.querySelector('.component-editor-body').innerHTML=`${rows}${api?serviceForm(id):''}<div class="component-lock"><strong>固定组件</strong><p>所有核心组件都会保留，只能调整位置。</p></div>`;
+  const configure=editor.querySelector('.component-reconfigure');configure.hidden=true;
+  if(api)bindServiceForm(id);
   editor.hidden=false;board.classList.add('editing');editor.querySelector('.component-editor-close').focus();
  }
  function closeEditor(){selected='';editor.hidden=true;board.classList.remove('editing');for(const node of nodes.values())node.classList.remove('selected');}
@@ -170,6 +200,7 @@ function setupComponentBoard(board){
  async function refresh(){
   if(loaded)return;loaded=true;
   try{const response=await fetch('/api/components',{cache:'no-store'});if(response.ok)runtime=await response.json();}catch{}
+  if(desktopModels)try{manager=await desktopModels.state();}catch{}
   updateBadges();if(selected)renderEditor(selected);
  }
  const activate=()=>{requestAnimationFrame(()=>{positionNodes();void refresh();});};

@@ -26,7 +26,7 @@ Windows 的 Docker 路线需要已运行的 Docker Desktop、启用 WSL2 后端�
 
 ## 配置页面
 
-左侧统一使用“配置设置”；主对话页面继续复用 Web。
+远程连接页与对话风格选择页共用浅色卡片视觉和 680×430 紧凑窗口；菜单中统一使用“连接设置”，主对话页面继续复用 Web。
 删除宣传性小字，保留会影响操作的错误、进度和必要提示。
 
 最终建议提供两个服务选项：
@@ -39,20 +39,28 @@ Windows 的 Docker 路线需要已运行的 Docker Desktop、启用 WSL2 后端�
 本机模型路径必须属于实际运行后端的文件系统：Windows、WSL 和容器路径不是同一个命名空间，不能直接混用。
 远程模式的模型和 API Key 留在服务器，不能拿客户端目录代替服务器配置。
 
-`npm start` 在终端只选择一次 API 并以隐藏输入读取一次密钥，VoiceMem 记忆处理和 Studio 回复共用这套配置；当前“配置设置”仍只编辑服务连接与已有 Docker 启动选项，不提供通用 `.env` 或模型管理界面。
+首次 `npm start` 在终端选择一次 API 并以隐藏输入读取密钥。托管后端启动后，“设置 → 组件”
+可分别修改记忆和回复的服务商、OpenAI-compatible 地址、模型名与 Key，并由 App 受控重启。
+成功配置使用系统安全存储加密，下次启动直接复用；远程连接仍只读，由服务器管理配置和重启。
 
 ## 源码 App 启动流程
 
 ```text
-npm start → 选择一次 API / 输入一次 Key
-          → 检查并下载记忆、感知、转写模型
-          ├─ Mac 本机：启动受控的原生 MLX 后端
-          └─ Windows 本机：通过 wsl.exe 启动 WSL2/CUDA 后端
-          → 检查并下载回复、TTS 模型 → 严格预热
-          → 创建风格选择页 → 主界面 + 桌宠
+npm start        → 自动准备缺失的 Apple Silicon 环境
+                 → 首次选择 API / 输入 Key，或读取已加密配置
+                 → 检查并下载记忆、感知、转写模型
+                 ├─ Apple Silicon Mac：启动受控的原生 MLX 后端
+                 └─ Windows 本机：通过 wsl.exe 启动 WSL2/CUDA 后端
+                 → 检查并下载回复、TTS 模型 → 严格预热
+                 → 创建风格选择页 → 主界面 + 桌宠
+
+npm run start:remote
+                 → 不检查或启动本机后端
+                 → 打开配置页 → 连接已有本机或 HTTPS 远程服务
 ```
 
 准备和等待期间只使用终端，不创建本地连接/状态窗口。启动失败时显示原生错误框并退出。
+受管后端首次下载和预热默认最多等待 30 分钟；连接已有服务仍使用较短的三分钟就绪等待。
 
 自动识别平台不等于自动安装系统组件。缺少 WSL、驱动、Docker 或 MLX 环境时应准确提示，
 不擅自提权、修改系统配置或新建第二套模型目录。
@@ -63,9 +71,9 @@ Mac 的启动适配应传入 `STUDIO_DESKTOP_PET=0`，桌宠由 App 唯一管理
 ## 当前实现与待验证边界
 
 - 已实现：共享 App + 桌宠、配置文案、Windows/macOS 打包配置、连接现有服务、Linux/WSL 禁止自动拉起桌宠。
-- 已实现代码并做模拟测试：`npm start` 的单次 provider/密钥终端步骤、VoiceMem 模型准备、Mac MLX 受控进程和 Windows `wsl.exe` CUDA 受控进程；App 退出时结束自己启动的进程。
+- 已实现代码并做模拟测试：`npm start` 的首次 provider/密钥步骤、组件内模型服务配置、安全持久化与失败回退、VoiceMem 模型准备、Mac MLX 受控进程和 Windows `wsl.exe` CUDA 受控进程；App 退出时结束自己启动的进程。
 - 已实现代码并做模拟测试：Windows Docker CLI 本机 named-pipe 检查和 Compose 启动；只启动已有镜像和配置。
   不自动启动 Docker Desktop 本身，不构建、拉取或重建容器。
-- 尚未实现：安装包内置 Python/模型环境、图形化 API/模型配置界面。
+- 尚未实现：安装包内置 Python/模型环境；本地 ASR、TTS、感知和声纹模型继续由后端 profile 管理。
 - 尚未实机验收：Windows 安装包、WSL/CUDA 联调、Mac 打包签名和麦克风权限。
   Linux 的虚拟桌面测试只验证共享客户端代码，不等于支持 Linux 桌面发布，也不能代替 Windows/macOS 验收。

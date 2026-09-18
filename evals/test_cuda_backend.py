@@ -28,11 +28,20 @@ class BackendConfigTests(unittest.TestCase):
                                  (backend, device, device))
                 self.assertEqual((args.mode, args.llm, args.space, args.lang, args.port),
                                  ('llm_tts', 'deepseek', 'studio-zh', 'zh', 8787))
+                self.assertEqual(args.host, '127.0.0.1')
                 self.assertEqual(args.memory_llm, 'deepseek')
 
     def test_explicit_space_still_overrides_default(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(parse_args(['--space', 'demo-zh']).space, 'demo-zh')
+
+    def test_provider_roles_can_come_from_environment(self):
+        with patch.dict(os.environ, {
+                'VOICEMEM_MEMORY_PROVIDER': 'qwen',
+                'VOICEMEM_STUDIO_PROVIDER': 'openai'}, clear=True):
+            args = parse_args([])
+        self.assertEqual(args.memory_llm, 'qwen')
+        self.assertEqual(args.llm, 'openai')
 
     def test_shell_launchers_enable_verbose_and_forward_arguments(self):
         root = Path(__file__).resolve().parents[1]

@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, Menu, dialog, session, systemPreferences, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, session, systemPreferences, nativeTheme, safeStorage } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const runtime = require('./runtime.cjs');
@@ -8,13 +8,14 @@ const { createPet } = require('./pet-window.cjs');
 app.setName('VoiceMem Studio');
 if (process.env.VOICEMEM_DESKTOP_USER_DATA) app.setPath('userData', path.resolve(process.env.VOICEMEM_DESKTOP_USER_DATA));
 const configurationFile = path.join(app.getPath('userData'), 'connection.json');
+const modelServicesFile = path.join(app.getPath('userData'), 'model-services.json');
 const launcherUrl = pathToFileURL(path.join(__dirname, 'launcher.html')).href;
 const icon = path.join(__dirname, 'assets/icon.png');
 let launcher, studio, current = { ...runtime.DEFAULTS }, attempt, generation = 0, activeOrigin = '';
 let status = { kind: 'idle', message: '连接已运行的服务，或启动本机 Docker。' };
 let writes = Promise.resolve();
 let quitting = false, managedMode = false;
-let pet, petEnabled = true, ownedBackend;
+let pet, petEnabled = true, ownedBackend, managedConfiguration, reconfiguring = false;
 const microphoneGrants = new Set();
 
 async function showPet() {
@@ -44,8 +45,29 @@ function backendExitError(result) {
 function assertLauncher(event) {
   if (!launcher || launcher.isDestroyed() || event.sender !== launcher.webContents
       || event.senderFrame !== launcher.webContents.mainFrame || event.senderFrame.url !== launcherUrl) {
-    throw new Error('该操作只允许从本地配置设置页发起。');
+    throw new Error('该操作只允许从本地连接设置页发起。');
   }
+}
+
+function assertStudio(event) {
+  let pathname = '';
+  try { pathname = new URL(event.senderFrame.url).pathname; } catch {}
+  if (!studio || studio.isDestroyed() || event.sender !== studio.webContents
+      || event.senderFrame !== studio.webContents.mainFrame
+      || !runtime.sameOrigin(event.senderFrame.url, activeOrigin)
+      || !['/ui/technical.html', '/ui/digital.html'].includes(pathname)) {
+    throw new Error('该操作只允许从当前 Studio 设置页发起。');
+  }
+}
+
+function protectSecret(value) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('系统安全存储当前不可用，无法保存 API Key。');
+  return safeStorage.encryptString(value).toString('base64');
+}
+
+function unprotectSecret(value) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('系统安全存储当前不可用。');
+  return safeStorage.decryptString(Buffer.from(String(value || ''), 'base64'));
 }
 
 function lockNavigation(window, allowed) {
@@ -58,8 +80,8 @@ function lockNavigation(window, allowed) {
 async function showLauncher(visible = true) {
   if (launcher && !launcher.isDestroyed()) { launcher.show(); launcher.focus(); return launcher; }
   const window = new BrowserWindow({
-    width: 1020, height: 730, minWidth: 800, minHeight: 620, title: 'VoiceMem Studio · 配置设置',
-    backgroundColor: '#212121', icon, show: false,
+    width: 680, height: 430, minWidth: 600, minHeight: 400, title: 'VoiceMem Studio · 连接服务',
+    backgroundColor: '#f7f8fa', icon, show: false,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   launcher = window;
@@ -108,7 +130,10 @@ async function openStudio(url, ownGeneration) {
   const window = new BrowserWindow({
     width: 680, height: 430, minWidth: 480, minHeight: 380, title: 'VoiceMem Studio',
     backgroundColor: '#f7f8fa', icon, show: false,
-    webPreferences: { session: studioSession, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
+    webPreferences: {
+      session: studioSession, preload: path.join(__dirname, 'studio-preload.cjs'),
+      contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false,
+    },
   });
   let opened = false;
   studio = window;
@@ -206,36 +231,43 @@ async function connect(value, persist = true) {
   }
 }
 
-async function connectManaged(config) {
+async function connectManaged(config, { quitOnError = true } = {}) {
   cancelConnection();
   const ownGeneration = generation;
   const control = new AbortController();
   attempt = control;
   current = { ...runtime.DEFAULTS };
   try {
-    ownedBackend?.stop();
+    const startupTimeoutMs = runtime.managedStartupTimeout(process.env);
+    const previousBackend = ownedBackend;
+    ownedBackend = undefined;
+    previousBackend?.stop();
     publish('connecting', `正在启动本机 ${process.platform === 'darwin' ? 'MLX' : 'WSL2/CUDA'} 后端…`);
     const backend = await runtime.startManagedBackend(
       config.projectDir, config.memoryProvider, config.replyProvider, {
         signal: control.signal,
+        env: runtime.modelServiceEnvironment(process.env, config.services),
       },
     );
     ownedBackend = backend;
     let ready = false;
     const exitWatch = backend.exited.then(result => {
       if (!ready) throw backendExitError(result);
-      if (ownedBackend === backend) ownedBackend = undefined;
-      if (!quitting && studio && !studio.isDestroyed()) {
-        studio.destroy();
-        publish('error', backendExitError(result).message);
-        dialog.showErrorBox('VoiceMem Studio 后端已退出', `${backendExitError(result).message}\n\n请查看启动终端中的详细日志。`);
-        app.quit();
+      if (ownedBackend === backend) {
+        ownedBackend = undefined;
+        if (!quitting && studio && !studio.isDestroyed()) {
+          studio.destroy();
+          publish('error', backendExitError(result).message);
+          dialog.showErrorBox('VoiceMem Studio 后端已退出', `${backendExitError(result).message}\n\n请查看启动终端中的详细日志。`);
+          app.quit();
+        }
       }
     });
     publish('connecting', `正在准备 Studio ${config.replyProvider} 回复与语音模型，首次预热可能需要几分钟…`);
     await Promise.race([
       runtime.waitForStudio(backend.url, {
         signal: control.signal,
+        timeoutMs: startupTimeoutMs,
         onWait: seconds => publish('connecting', `等待本机后端就绪 · ${seconds} 秒。首次模型预热可能需要几分钟。`),
       }),
       exitWatch,
@@ -243,13 +275,15 @@ async function connectManaged(config) {
     ready = true;
     control.signal.throwIfAborted();
     await openStudio(backend.url, ownGeneration);
+    return true;
   } catch (error) {
-    if (ownGeneration !== generation || control.signal.aborted) return;
+    if (ownGeneration !== generation || control.signal.aborted) return false;
     ownedBackend?.stop();
     ownedBackend = undefined;
     publish('error', error.message || '本机后端启动失败。');
     dialog.showErrorBox('VoiceMem Studio 启动失败', `${error.message || '本机后端启动失败。'}\n\n请查看启动终端中的详细日志。`);
-    app.quit();
+    if (quitOnError) app.quit();
+    return false;
   } finally {
     if (ownGeneration === generation) attempt = undefined;
   }
@@ -259,7 +293,7 @@ function installMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     ...(process.platform === 'darwin' ? [{ label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] }] : []),
     { label: 'Studio', submenu: [
-      { label: '配置设置', accelerator: 'CmdOrCtrl+,', click: () => { void showLauncher(); } },
+      { label: '连接设置', accelerator: 'CmdOrCtrl+,', click: () => { void showLauncher(); } },
       { label: '重新连接', click: () => { void showLauncher().then(() => connect(current)); } },
       { id: 'show-pet', label: '显示桌宠', type: 'checkbox', checked: petEnabled, click: item => {
         petEnabled = item.checked;
@@ -289,10 +323,17 @@ else {
   });
   app.whenReady().then(async () => {
     nativeTheme.themeSource = 'dark';
-    let configError, managed;
+    let configError, managed, persistInitialManaged = false;
+    const configureOnly = process.env.VOICEMEM_DESKTOP_CONFIGURE === '1';
     managedMode = Boolean(process.env.VOICEMEM_DESKTOP_PROJECT_ROOT);
     try {
-      managed = runtime.managedLaunch(process.env);
+      const launch = runtime.managedLaunch(process.env);
+      if (launch) {
+        const stored = await runtime.loadModelServices(modelServicesFile, unprotectSecret);
+        managed = { ...launch, services: stored || runtime.modelServicesFromLaunch(launch, process.env) };
+        persistInitialManaged = !stored;
+        managedConfiguration = managed;
+      }
       current = managed ? { ...runtime.DEFAULTS } : await runtime.loadSettings(configurationFile);
     } catch (error) { configError = error.message; }
     installMenu();
@@ -337,14 +378,55 @@ else {
         publish('idle', '已取消本机后端启动。');
       } else publish('idle', '已取消等待；已经启动的 Docker 服务不会被停止。');
     });
+    ipcMain.handle('studio-desktop:model-services', event => {
+      assertStudio(event);
+      return managedConfiguration
+        ? { managed: true, services: runtime.publicModelServices(managedConfiguration.services), reconfiguring }
+        : { managed: false, services: null, reconfiguring: false };
+    });
+    ipcMain.handle('studio-desktop:update-model-service', (event, role, value) => {
+      assertStudio(event);
+      if (!managedConfiguration) throw new Error('远程服务需要在服务器端修改模型配置。');
+      if (reconfiguring) throw new Error('模型服务正在重启，请稍候。');
+      const previous = managedConfiguration;
+      const services = runtime.updateModelService(previous.services, role, value);
+      const next = { ...previous, memoryProvider: services.memory.provider,
+        replyProvider: services.reply.provider, services };
+      reconfiguring = true;
+      setImmediate(() => { void (async () => {
+        managedConfiguration = next;
+        const ready = await connectManaged(next, { quitOnError: false });
+        if (ready) {
+          try {
+            await runtime.saveModelServices(modelServicesFile, services, protectSecret);
+          } catch (error) {
+            dialog.showErrorBox('模型配置未保存', `${error.message}\n\n本次运行已应用配置，但下次启动仍使用原配置。`);
+          }
+        } else {
+          managedConfiguration = previous;
+          await connectManaged(previous);
+        }
+        reconfiguring = false;
+      })(); });
+      return { restarting: true, services: runtime.publicModelServices(services) };
+    });
     if (configError && managedMode) {
       dialog.showErrorBox('VoiceMem Studio 启动配置无效', configError);
       app.quit();
       return;
     }
-    if (!managed) await showLauncher(false);
+    if (!managed) await showLauncher(configureOnly);
     if (configError) { publish('error', configError); void showLauncher(); }
-    else if (managed) void connectManaged(managed);
+    else if (managed) void (async () => {
+      const ready = await connectManaged(managed);
+      if (ready && persistInitialManaged) {
+        try { await runtime.saveModelServices(modelServicesFile, managed.services, protectSecret); }
+        catch (error) {
+          dialog.showErrorBox('模型配置未保存', `${error.message}\n\n下次启动时需要重新输入 API Key。`);
+        }
+      }
+    })();
+    else if (configureOnly) publish('idle', '填写已有 Studio 服务地址后连接。');
     else void connect(current, false);
   }).catch(error => { dialog.showErrorBox('VoiceMem Studio 启动失败', error.message); app.quit(); });
 }

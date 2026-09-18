@@ -8,28 +8,28 @@
   <link rel="stylesheet" href="launcher.css">
 </head>
 <body>
-  <aside>
-    <div class="brand"><span class="brand-mark"></span><span>VoiceMem</span></div>
-    <div class="nav-item">配置设置</div>
-    <footer>VOICEMEM STUDIO <span id="version"></span></footer>
-  </aside>
-  <main>
-    <div class="orb"><span></span><i></i></div>
-    <div class="heading"><h1>配置 Studio</h1></div>
-    <form id="connection" class="panel">
-      <label for="server">服务地址</label>
-      <input id="server" type="url" spellcheck="false" value="http://127.0.0.1:8787" required>
-      <p class="hint">远程服务使用 HTTPS，或通过 SSH 转发连接本地地址。</p>
-      <p class="hint" id="platform-hint"></p>
-      <div id="docker-options" hidden>
-      <label class="switch-row"><input id="docker" type="checkbox"><span>自动启动本机 Docker 服务</span></label>
-      <p class="hint" id="docker-hint">需要已运行的 Docker Desktop（WSL2 + NVIDIA）、已有镜像和已配置好的项目。</p>
-      <div id="project-row" hidden><button id="choose-project" type="button" class="secondary">选择项目目录</button><span id="project-path">尚未选择</span></div>
-      </div>
-      <div class="actions"><button type="submit" id="connect" class="primary">连接并进入</button><button id="cancel" type="button" class="secondary" disabled>取消等待</button></div>
-    </form>
-    <div id="status" class="status" role="status" aria-live="polite"><span class="dot"></span><span id="message">正在加载配置…</span></div>
-    <p class="footnote">切换服务会结束当前语音会话。退出 App 不会停止 Docker 后端。</p>
+  <main class="launcher-card">
+    <header><div class="brand"><span class="brand-orb"></span><strong>VoiceMem</strong></div><span id="version" class="version"></span></header>
+    <div class="launcher-content">
+      <section class="intro">
+        <div class="orb" aria-hidden="true"></div>
+        <h1>连接 Studio</h1>
+        <p>连接服务后，选择你喜欢的对话风格。</p>
+      </section>
+      <form id="connection" class="connection-card">
+        <label for="server">服务地址</label>
+        <input id="server" type="url" spellcheck="false" value="http://127.0.0.1:8787" required>
+        <p class="hint">远程服务使用 HTTPS，或通过 SSH 转发连接本地地址。</p>
+        <p class="platform-hint" id="platform-hint"></p>
+        <details id="docker-options" hidden>
+          <summary>本机 Docker</summary>
+          <label class="switch-row"><input id="docker" type="checkbox"><span>自动启动已有服务</span></label>
+          <div id="project-row" hidden><button id="choose-project" type="button" class="secondary">选择项目</button><span id="project-path">尚未选择</span></div>
+        </details>
+        <div class="actions"><button type="submit" id="connect" class="primary">连接并选择风格</button><button id="cancel" type="button" class="secondary" disabled>取消</button></div>
+        <div id="status" class="status" role="status" aria-live="polite"><span class="dot"></span><span id="message">正在加载配置…</span></div>
+      </form>
+    </div>
   </main>
   <script src="launcher.js"></script>
 </body>

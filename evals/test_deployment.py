@@ -6,12 +6,27 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_studio_provider_configuration_accepts_role_specific_model_services(self):
+        from studio.core.utils.llm.initialize import configuration
+        env = {
+            'VOICEMEM_MEMORY_MODEL': 'memory-model',
+            'VOICEMEM_MEMORY_BASE_URL': 'https://memory.example/v1',
+            'VOICEMEM_STUDIO_MODEL': 'reply-model',
+            'VOICEMEM_STUDIO_BASE_URL': 'https://reply.example/v1',
+        }
+        with patch.dict(os.environ, env, clear=False):
+            self.assertEqual(configuration('openai', 'memory')['config']['model'], 'memory-model')
+            reply = configuration('openai', 'reply')['config']
+        self.assertEqual(reply['model'], 'reply-model')
+        self.assertEqual(reply['base_url'], 'https://reply.example/v1')
+
     def test_build_context_excludes_private_runtime_data(self):
         rules = (ROOT / '.dockerignore').read_text().splitlines()
         self.assertIn('**', rules)
@@ -31,7 +46,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('torch==2.8.0', text)
         self.assertIn("'.[studio-cuda]'", text)
         self.assertIn('ENTRYPOINT ["python", "-m", "studio"]', text)
-        self.assertIn('CMD ["--verbose"]', text)
+        self.assertIn('CMD ["--host", "0.0.0.0", "--verbose"]', text)
 
     def test_cuda_dependency_pins_match_the_image_profile(self):
         import tomllib

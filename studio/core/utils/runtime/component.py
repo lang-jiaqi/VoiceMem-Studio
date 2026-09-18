@@ -69,13 +69,13 @@ def configure(self, args):
         os.environ["VOICEMEM_MEMORY_API_KEY"] = memory_key
     if reply_key:
         os.environ["VOICEMEM_STUDIO_API_KEY"] = reply_key
-    memory_llm = configuration(memory_provider)
+    memory_llm = configuration(memory_provider, "memory")
     memory_llm["config"]["api_key"] = memory_key
     self.CONFIG = {
         "mode": "multi_modal", "memory_root": args.memory_root,
         "space": args.space, "embedding": {"provider": "local"},
         "slots": {"provider": "local"},
-        "reply": {"llm": configuration(provider),
+        "reply": {"llm": configuration(provider, "reply"),
                   "tts": {"provider": "breeze_cuda" if args.backend == "cuda" else "breeze_mlx", "config": {}},
                   "realtime": {"provider": "openai", "config": {"model": "gpt-realtime"}}},
     }

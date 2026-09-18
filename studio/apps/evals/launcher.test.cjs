@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
+const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { PassThrough, Readable } = require('node:stream');
@@ -14,6 +15,7 @@ test('npm start selects a provider and passes its credential without printing it
   const output = { write(value) { printed += value; } };
   const env = await launch.launchEnvironment({
     platform: 'darwin', env: {}, input: Readable.from([]), output,
+    savedProviders: null,
     askChoice: async () => choices.shift(), askSecret: async () => secrets.shift(),
     prepareMemory: async value => prepared.push(value),
   });
@@ -30,15 +32,34 @@ test('npm start selects a provider and passes its credential without printing it
 });
 
 test('provider menu only offers local MLX on macOS', () => {
-  assert.equal(launch.selectProvider('4', 'darwin').id, 'local');
+  assert.equal(launch.selectProvider('4', 'darwin', 'arm64').id, 'local');
+  assert.equal(launch.selectProvider('local', 'darwin', 'x64'), undefined);
   assert.equal(launch.selectProvider('local', 'win32'), undefined);
   assert.equal(launch.selectProvider('', 'win32').id, 'deepseek');
+});
+
+test('remote source mode skips managed backend state and forwards other Electron arguments', () => {
+  assert.deepEqual(launch.launchArguments(['--remote', '--inspect=9229']), {
+    remote: true, electronArgs: ['--inspect=9229'],
+  });
+  const env = launch.remoteEnvironment({
+    KEEP: 'yes', ELECTRON_RUN_AS_NODE: '1',
+    VOICEMEM_DESKTOP_PROJECT_ROOT: '/fixture',
+    VOICEMEM_DESKTOP_MEMORY_PROVIDER: 'deepseek',
+    VOICEMEM_DESKTOP_REPLY_PROVIDER: 'deepseek',
+    VOICEMEM_DESKTOP_MANAGED_PROVIDER: 'deepseek',
+  });
+  assert.equal(env.KEEP, 'yes');
+  assert.equal(env.VOICEMEM_DESKTOP_CONFIGURE, '1');
+  assert.equal(env.VOICEMEM_DESKTOP_PROJECT_ROOT, undefined);
+  assert.equal(env.VOICEMEM_DESKTOP_MANAGED_PROVIDER, undefined);
 });
 
 test('local Studio replies ask once for the DeepSeek memory key', async () => {
   const choices = ['local'], prompts = [];
   const env = await launch.launchEnvironment({
     platform: 'darwin', env: {}, input: Readable.from([]), output: { write() {} },
+    savedProviders: null,
     askChoice: async () => choices.shift(), askSecret: async prompt => { prompts.push(prompt); return 'memory-key'; },
   });
   assert.equal(prompts.length, 1);
@@ -53,11 +74,39 @@ test('failed VoiceMem preparation does not ask for another API key', async () =>
   const choices = [];
   await assert.rejects(launch.launchEnvironment({
     platform: 'darwin', env: {}, input: Readable.from([]), output: { write() {} },
+    savedProviders: null,
     askChoice: async purpose => { choices.push(purpose); return 'deepseek'; },
     askSecret: async () => 'memory-key',
     prepareMemory: async () => { throw new Error('preparation failed'); },
   }), /preparation failed/);
   assert.deepEqual(choices, ['shared']);
+});
+
+test('saved App model services skip the terminal provider prompt', async () => {
+  const choices = [];
+  const env = await launch.launchEnvironment({
+    platform: 'darwin', env: {}, output: { write() {} },
+    savedProviders: { memoryProvider: 'qwen', replyProvider: 'openai' },
+    askChoice: async purpose => { choices.push(purpose); return 'deepseek'; },
+    askSecret: async () => { throw new Error('must not ask'); },
+    prepareMemory: async () => { throw new Error('must not prepare'); },
+  });
+  assert.equal(env.VOICEMEM_DESKTOP_MEMORY_PROVIDER, 'qwen');
+  assert.equal(env.VOICEMEM_DESKTOP_REPLY_PROVIDER, 'openai');
+  assert.deepEqual(choices, []);
+});
+
+test('source launcher discovers saved model providers without reading their secrets', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'studio-model-settings-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  await fs.writeFile(path.join(directory, 'model-services.json'), JSON.stringify({
+    schema: 1,
+    memory: { provider: 'deepseek', secret: 'encrypted-memory-value' },
+    reply: { provider: 'local', secret: '' },
+  }));
+  assert.deepEqual(launch.savedModelProviders('darwin', {
+    VOICEMEM_DESKTOP_USER_DATA: directory,
+  }), { memoryProvider: 'deepseek', replyProvider: 'local' });
 });
 
 test('API key input is masked and returns the entered value', async () => {
@@ -73,13 +122,22 @@ test('API key input is masked and returns the entered value', async () => {
   assert.equal(input.raw, false);
 });
 
-test('configuration page omits the removed descriptive copy', async () => {
+test('connection page uses the same compact visual shell as style selection', async () => {
   const html = await fs.readFile(path.join(__dirname, '../launcher.html'), 'utf8');
-  assert.match(html, /class="nav-item">配置设置</);
-  assert.doesNotMatch(html, /与你熟悉的|桌面工作区|连接设置|class="side-note"|class="eyebrow"/);
+  const css = await fs.readFile(path.join(__dirname, '../launcher.css'), 'utf8');
+  assert.match(html, /class="launcher-card"/);
+  assert.match(html, /class="orb"/);
+  assert.match(html, /连接 Studio/);
+  assert.match(html, /连接并选择风格/);
+  assert.doesNotMatch(html, /class="nav-item"|class="sidebar"/);
+  assert.match(css, /--soft:#f7f8fa/);
+  assert.match(css, /\.launcher-card\{[^}]*border-radius:24px/);
   const main = await fs.readFile(path.join(__dirname, '../main.cjs'), 'utf8');
-  assert.match(main, /label: '配置设置'/);
-  assert.match(main, /if \(!managed\) await showLauncher\(false\)/);
+  assert.match(main, /width: 680, height: 430/);
+  assert.match(main, /label: '连接设置'/);
+  assert.match(main, /if \(!managed\) await showLauncher\(configureOnly\)/);
+  assert.match(main, /else if \(configureOnly\) publish\('idle'/);
+  assert.match(main, /studio-preload\.cjs/);
 });
 
 test('Windows exposes Docker startup while macOS keeps the native MLX path', async () => {
@@ -96,7 +154,8 @@ test('Windows exposes Docker startup while macOS keeps the native MLX path', asy
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(byId('docker-options').hidden, platform !== 'win32');
     assert.equal(byId('docker').checked, platform === 'win32');
-    assert.match(byId('platform-hint').textContent, platform === 'win32' ? /WSL2/ : platform === 'darwin' ? /原生 MLX/ : /只部署后端/);
+    assert.equal(byId('docker-options').open, platform === 'win32');
+    assert.match(byId('platform-hint').textContent, platform === 'win32' ? /WSL2/ : platform === 'darwin' ? /SSH.*HTTPS/ : /只部署后端/);
   }
 });
 

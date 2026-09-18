@@ -81,17 +81,43 @@ https://github.com/user-attachments/assets/0d919f8c-e9ba-4fdb-8078-b049e4b99a28
 
 ## 🚀 快速开始
 
-### 安装
+### 运行 VoiceMem Studio
+
+Apple Silicon Mac 需要原生 ARM64 Python 3.12，以及 Node.js 22.12 或更新版本：
 
 ```bash
-git clone https://github.com/xzf-thu/VoiceMem.git
-cd VoiceMem
+git clone https://github.com/lang-jiaqi/VoiceMem-Studio.git
+cd VoiceMem-Studio
+npm --prefix studio/apps start
+```
+
+`npm start` 会在首次运行时自动调用 Apple Silicon 环境准备脚本；
+`./scripts/start_studio_app.sh` 仍作为兼容入口，行为相同。
+
+首次运行会在终端选择回复服务并隐藏输入 API Key，然后自动检查、下载模型并启动
+本机 MLX 后端。之后可在“设置 → 组件”中更换记忆/回复模型服务并重启后端；成功配置会安全保存。
+首次准备需要下载约 8–12 GB 内容，取决于是否选择本地回复模型；下载可续传，
+桌面端最多等待 30 分钟。Linux/NVIDIA 和 Windows 后端见
+[部署说明](docker/README.md)及[桌面 App 说明](studio/apps/README.md)。
+
+如果后端已经在本机或远程服务器运行，只启动桌面客户端，不检查本机 Python 或下载模型：
+
+```bash
+cd studio/apps
+npm run start:remote
+```
+
+### 安装 VoiceMem Python 包
+
+```bash
+git clone https://github.com/lang-jiaqi/VoiceMem-Studio.git
+cd VoiceMem-Studio
 
 # 安装记忆系统（含 ASR / 声纹 / 场景 / 情绪 / 本地 embedding 全套内置组件）
-pip install voicemem
+python -m pip install -e .
 
 # 可选：用我们微调的 Qwen 回复模型
-pip install "voicemem[slm]"
+python -m pip install -e '.[slm]'
 ```
 
 ### 下载所需模型
@@ -527,19 +553,48 @@ https://github.com/user-attachments/assets/0d919f8c-e9ba-4fdb-8078-b049e4b99a28
 
 ## 🚀 Quick Start
 
-### Installation
+### Run VoiceMem Studio
+
+An Apple Silicon Mac needs native ARM64 Python 3.12 and Node.js 22.12 or newer:
+
+```bash
+git clone https://github.com/lang-jiaqi/VoiceMem-Studio.git
+cd VoiceMem-Studio
+npm --prefix studio/apps start
+```
+
+On the first run, `npm start` selects one reply provider, reads its API key without echoing it,
+prepares the required models, and starts the managed MLX backend. A clean setup
+downloads roughly 8–12 GB depending on the reply provider. Downloads resume and
+the desktop waits up to 30 minutes for first-run preparation. See the
+[deployment guide](docker/README.md) and [desktop guide](studio/apps/README.md)
+for Linux/NVIDIA and Windows paths.
+
+For an App-managed backend, **Settings → Components** can change the memory and
+reply model providers, OpenAI-compatible endpoints, model names, and keys, then
+restart the service. Successful settings are stored with OS-backed encryption.
+
+To connect the desktop client to an already running local or remote backend,
+without checking local Python or downloading models:
+
+```bash
+cd studio/apps
+npm run start:remote
+```
+
+### Install the VoiceMem Python Package
 
 **Prerequisite:** Python 3.10+
 
 ```bash
-git clone https://github.com/xzf-thu/VoiceMem.git
-cd VoiceMem
+git clone https://github.com/lang-jiaqi/VoiceMem-Studio.git
+cd VoiceMem-Studio
 
 # Install the memory system (bundles ASR / speaker ID / scene / emotion / local embedding)
-pip install voicemem
+python -m pip install -e .
 
 # Optional: run our fine-tuned Qwen reply model
-pip install "voicemem[slm]"
+python -m pip install -e '.[slm]'
 ```
 
 ### Required Model Download

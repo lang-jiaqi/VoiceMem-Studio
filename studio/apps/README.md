@@ -2,20 +2,34 @@
 
 ## 双风格 UI 与 API 选择
 
-源码运行只需要启动 App：
+Apple Silicon Mac 从仓库根目录启动；首次运行会自动准备 Python 3.12/MLX 环境：
+
+```bash
+npm --prefix studio/apps start
+```
+
+`./scripts/start_studio_app.sh` 是行为相同的兼容入口。`npm start` 只在首次安装或
+`pyproject.toml` 更新后运行环境准备，平时直接复用环境并启动 App。
+需要单独管理后端时，仍可使用 `setup_studio_mlx.sh` 和 `run_studio_mlx.sh`。
+
+Windows 本机 CUDA 使用 WSL2 中已经准备好的 `.venv-cuda`。Intel Mac、无兼容 GPU 的
+Windows，或者任何只想连接已有本机/远程后端的用户，直接运行：
 
 ```bash
 cd studio/apps
-npm start
+npm run start:remote
 ```
+
+远程模式不选择 API，不检查本机 Python、WSL 或 GPU，也不下载推理模型；App 打开连接配置页，
+HTTP 只允许回环地址，远程地址必须使用 HTTPS 或本地 SSH 转发。
 
 启动前会检查 Electron、PixiJS 和 Pixi Live2D。缺失时自动按 `package-lock.json` 执行
 `npm ci --include=dev` 下载锁定版本；该项目级安装会启用 Electron 必需的安装脚本，即使全局 npm
 配置关闭了脚本。依赖完整时跳过安装。首次运行需要能够访问 npm registry 和 Electron 下载源。
 
-终端只选择一次 API 并隐藏输入一次 API Key。DeepSeek、Qwen 或 OpenAI 会同时用于 VoiceMem 记忆处理和 Studio 可见回复；Apple Silicon Mac 选择本地 MLX 回复时，只输入 VoiceMem 记忆处理与对话标题所需的 DeepSeek Key。直接回车可沿用环境变量或项目根目录的 `.env`。
+首次且没有已保存配置时，终端只选择一次 API 并隐藏输入一次 API Key。DeepSeek、Qwen 或 OpenAI 会同时用于 VoiceMem 记忆处理和 Studio 可见回复；Apple Silicon Mac 选择本地 MLX 回复时，只输入 VoiceMem 记忆处理与对话标题所需的 DeepSeek Key。直接回车可沿用环境变量或项目根目录的 `.env`。
 
-App 随后自动启动 macOS MLX 或 Windows WSL2/CUDA 后端，检查并下载记忆、感知、转写、回复路由、Breeze TTS 和可选本地回复模型。准备期间只在终端显示进度，不创建连接或等待窗口；所有模型完整并预热成功后才创建并显示风格选择页。API Key 只传给本次准备和后端进程，不写入连接设置。
+App 随后自动启动 macOS MLX 或 Windows WSL2/CUDA 后端，检查并下载记忆、感知、转写、回复路由、Breeze TTS 和可选本地回复模型。准备期间只在终端显示进度，不创建连接或等待窗口；所有模型完整并预热成功后才创建并显示风格选择页。首次后端成功就绪后，API Key 才由系统安全存储加密保存。
 
 首页复用原版 `index.html`，分别进入 `technical.html` 科技风和 `digital.html` 数字人。语言、UI 字号和内容字号在进入后的「设置」中调整。也可单独打开已运行后端的 `http://localhost:8787`。
 
@@ -23,7 +37,9 @@ UI 源码在 `studio/apps/ui/`，由后端 `/ui/` 提供，App 和浏览器共�
 两种风格的文字、ASR、回复、情绪和召回面板使用现有服务事件；脑图保留视觉导航示意，不代表真实节点数量。聊天列表暂存在当前页面，刷新重置；切换历史条目后的新输入会建立新后端会话。原始 `voicemem_qa` 项目保持原样。
 回复旁的小喇叭会重播后端为该条回复实际生成的语音，包括已经播放的打断前缀；音频仅限当前页面并保存在有上限的内存缓存中，刷新后清空。
 
-「设置 → 组件」以可拖动卡片展示语音输入、记忆、回复、语音合成和桌宠。组件都是固定的，不能删除，只能调整位置；布局仅保存在浏览器本机。点击卡片可查看后端、服务商和 API 配置状态，页面只接收“是否已配置”等非敏感信息，不会读取、显示或保存 API Key。需要更换服务商或 Key 时，退出 App 后重新运行 `npm start`，仍只输入一次。
+「设置 → 组件」以可拖动卡片展示语音输入、记忆、回复、语音合成和桌宠。组件都是固定的，不能删除，只能调整位置；布局仅保存在浏览器本机。托管本机后端时，点击“记忆系统”或“回复模型”可以修改服务商、OpenAI-compatible 服务地址、模型名称和 API Key，并由 App 重启后端。新配置启动成功后才会替换旧配置；失败时自动恢复原配置。Key 不会由后端接口返回，App 使用 macOS Keychain 或 Windows DPAPI 加密后保存在应用数据目录。以后运行 `npm start` 会复用已保存配置，不再重复询问。
+
+远程连接模式中的组件配置为只读：Windows 或 Intel Mac App 不应擅自重启远端 Linux 服务，应在服务器 `.env` 中修改相同配置并重启服务。本地 ASR、声纹、感知、Breeze TTS 和回复路由仍属于 CUDA/MLX 后端 profile，不在这个页面中替换。
 
 ---
 
@@ -31,7 +47,7 @@ UI 源码在 `studio/apps/ui/`，由后端 `/ui/` 提供，App 和浏览器共�
 
 主窗口直接加载 Studio 已有的 Web 页面，界面、语音协议、记忆面板与 Web 版一致。
 桌面 App 和桌宠只面向 Windows/macOS；Linux 和 WSL 只运行后端。
-桌面壳负责窗口、配置设置、麦克风授权、桌宠及可选的本机 Docker 自动启动，不包含推理模型或 Python 后端。
+桌面壳负责窗口、连接设置、麦克风授权、桌宠及可选的本机 Docker 自动启动，不包含推理模型或 Python 后端。
 原有 `studio/apps/__init__.py` 保留；桌面包与 Python 包相互独立。
 
 ## 桌面方案
@@ -41,17 +57,20 @@ UI 源码在 `studio/apps/ui/`，由后端 `/ui/` 提供，App 和浏览器共�
 
 ## 直接运行
 
-在 Windows 或 macOS 安装 Node.js 22.12 或更新版本，在本目录执行：
+在 Windows 或 macOS 安装 Node.js 22.12 或更新版本。本机后端已经按上文准备好时，在本目录执行：
 
 ```bash
-npm ci
 npm start
 ```
 
 `npm start` 先补齐缺失的 Node 运行依赖，再自动使用项目根目录已有的 Python 环境：macOS 为 `.venv`，Windows 为 WSL2 中的 `.venv-cuda`。启动流程不创建本地等待页，服务就绪后直接打开风格选择页。
-服务仍在预热时最多等待三分钟；App 退出时会停止它本次启动的后端。
+服务仍在下载或预热时默认最多等待 30 分钟；可在启动前导出
+`VOICEMEM_DESKTOP_STARTUP_TIMEOUT_SECONDS` 调整，但不能小于 60 秒。App 退出时会停止它本次启动的后端。
 它不会自动安装 Python、WSL、驱动或 Python/模型依赖；这些后端环境需要事先按部署文档准备好。
-通过菜单 **Studio → 配置设置**（`Ctrl/Cmd+,`）更改地址。第一次开始语音时会请求麦克风授权。
+通过菜单 **Studio → 连接设置**（`Ctrl/Cmd+,`）更改地址。连接页使用与对话风格选择页一致的 680×430 紧凑窗口；连接成功后进入风格选择。第一次开始语音时会请求麦克风授权。
+
+连接已有服务时使用 `npm run start:remote`。该入口仍会补齐 Electron 和桌宠资源，但不会创建或管理后端进程，
+适用于远程服务器、Intel Mac、已有 Docker 服务，以及希望将客户端和后端分别启动的开发环境。
 
 ## App 内置桌宠
 

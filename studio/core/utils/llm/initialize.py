@@ -20,23 +20,35 @@ def credential(provider, purpose):
     role = "VOICEMEM_MEMORY_API_KEY" if purpose == "memory" else "VOICEMEM_STUDIO_API_KEY"
     return os.environ.get(role) or os.environ.get(credential_name(provider), "")
 
-def configuration(provider=PROVIDER):
-    """Return provider settings without including credential values."""
-    if provider == "deepseek":
-        return {"provider": provider, "config": {"model": MODEL, "base_url": BASE_URL, "system": ""}}
-    if provider == "qwen":
-        return {"provider": provider, "config": {"model": "qwen3.6-flash", "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "system": ""}}
+def configuration(provider=PROVIDER, purpose="reply"):
+    """Return the selected role's non-secret provider settings."""
+    import os
+    defaults = {
+        "deepseek": (MODEL, BASE_URL),
+        "qwen": ("qwen3.6-flash", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+        "openai": ("gpt-4o", "https://api.openai.com/v1"),
+        "local": ("mlx-community/Qwen3.5-4B-4bit", ""),
+    }
+    model, base_url = defaults[provider]
+    prefix = "VOICEMEM_MEMORY" if purpose == "memory" else "VOICEMEM_STUDIO"
     return {"provider": provider, "config": {
-        "model": "gpt-4o", "base_url": "https://api.openai.com/v1", "system": ""}}
+        "model": os.environ.get(f"{prefix}_MODEL") or model,
+        "base_url": os.environ.get(f"{prefix}_BASE_URL") or base_url,
+        "system": "",
+    }}
 
 def create(system, provider=PROVIDER, api_key=None):
     """Create the selected stream adapter; missing credentials raise immediately."""
+    cfg = configuration(provider, "reply")["config"]
     if provider == "local":
         from .local import LocalLLM
+        from pathlib import Path
         from studio.paths import MODELS
-        return LocalLLM(str(MODELS / "llm/Qwen3.5-4B-4bit"), system=system)
+        model = cfg["model"]
+        bundled = MODELS / "llm/Qwen3.5-4B-4bit"
+        return LocalLLM(str(bundled if model == "mlx-community/Qwen3.5-4B-4bit" else Path(model)),
+                        system=system)
     from voicemem.reply import deepseek_reply, openai_reply
-    cfg = configuration(provider)["config"]
     cfg["api_key"] = api_key or credential(provider, "reply")
     if provider == "qwen":
         if not cfg["api_key"]:
