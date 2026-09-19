@@ -292,7 +292,7 @@ credentials or memory data.
 
 The desktop app also owns one optional transparent pet window in the same
 Electron application. Packaging selects the existing `pet/` renderer, animation,
-observer, Cubism 4 model, native motions and Pixi runtime without forking them or
+observer, rattan/white-vine Cubism model, expressions and Pixi runtime without forking them or
 bundling another Electron. The generated HTML connection CSP is adapted for the
 desktop package, and the pet session permits the Cubism Core source plus the
 selected observer. Resource preparation backs up recognized Canvas and older
@@ -300,12 +300,17 @@ Live2D build output before migration, excludes backups from the package, and
 rejects unknown files. Its isolated preload exposes window controls,
 not Docker or settings APIs; IPC validates the pet's exact main frame and document.
 The pet session permits bundled resources, the Cubism Core source and the selected
-`/ws-pet` endpoint, denies device permissions, and does not start a conversation. Service changes close
+`/ws-pet` endpoint and denies device permissions. Its call button sends a trusted,
+main-frame-only IPC request to toggle the existing Studio page's voice control with
+a user gesture; the App renderer retains microphone permissions, capture, playback,
+and conversation ownership. Desktop voice capture may continue while the App window
+is hidden, but page navigation, settings, and explicit stop still end it. Service changes close
 the old observer before opening the new one; closing the Studio window closes the
 pet. Position and a 40–150% expanded-window scale live in desktop app data; older
-position-only files default to 100%. The shared renderer has no toolbar: dragging
-any of its four corners resizes around the opposite corner, and dragging the
-character or scene moves the window. Window controllers constrain bounds to
+position-only files default to 100%. The shared renderer uses a portrait call
+background, a single voice toggle and a collapse button, without numbered action
+controls. Dragging any of its four corners resizes around the opposite corner, and
+dragging the character or background moves the window. Window controllers constrain bounds to
 the display work area and resize without restarting the avatar pose. The dot
 keeps its fixed size, and manual collapse suppresses observer-triggered expansion
 until the user explicitly reopens it. Opening or focusing Studio leaves pet
@@ -926,7 +931,12 @@ The optional desktop pet observes the existing pet WebSocket without starting
 another conversation. Its renderer follows output-identified playback checkpoints
 for lifecycle and actual playback RMS for Live2D mouth movement. Pause,
 interruption, drain and disconnect close the mouth. Backchannel, ordinary reply
-and sadness events select separate pools of native model motions. The pet starts
+and sadness events select white-vine expressions and programmatic gestures. While
+speaking, the behavior controller starts a gesture promptly and schedules spaced
+random torso gestures. The model's physics drives both arms from torso rotation;
+brief arm accents are added after physics rather than replacing that output. Pointer
+gaze temporarily overrides natural wandering and fades when the cursor leaves.
+The pet starts
 in the `lie` resting state. Conversation startup and detected user voice select
 the `sit` interaction state; a local silence timer returns it to rest. Both states
 share one Live2D model and scene. VAD transitions come from the

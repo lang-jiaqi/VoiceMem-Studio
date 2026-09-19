@@ -8,7 +8,7 @@ const { EventEmitter } = require('node:events');
 const state = require('../../../pet/state.cjs');
 const [PET_WIDTH, PET_HEIGHT] = state.SIZES.sit;
 
-async function fixture(desktop, saved) {
+async function fixture(desktop, saved, conversation = {}) {
   const windows = [], timers = new Map(), handles = new Map(), ipcMain = new EventEmitter();
   let stored = saved, cursor = { x: 800, y: 600 }, nextTimer = 0, hidden = 0;
   const area = { x: 0, y: 0, width: 1600, height: 1000 };
@@ -59,7 +59,7 @@ async function fixture(desktop, saved) {
     },
   };
   vm.runInNewContext(fs.readFileSync(path.join(directory, desktop ? 'pet-window.cjs' : 'main.cjs'), 'utf8'), context);
-  const controller = desktop ? context.module.exports.createPet({ onHidden: () => hidden++ }) : undefined;
+  const controller = desktop ? context.module.exports.createPet({ onHidden: () => hidden++, ...conversation }) : undefined;
   if (desktop) { await controller.restorePosition(); await controller.open('http://127.0.0.1:8787'); }
   else await Promise.all(ready);
   const prefix = desktop ? 'studio-pet:' : '';
@@ -78,6 +78,24 @@ test('App pet loads the bundled Live2D model in portrait layout', async () => {
   const url = new URL(f.window().webContents.mainFrame.url);
   assert.equal(url.searchParams.get('layout'), 'portrait');
   assert.equal(url.searchParams.get('ws'), 'ws://127.0.0.1:8787/ws-pet');
+});
+
+test('App pet conversation control accepts only the current pet document', async () => {
+  let toggles = 0;
+  const f = await fixture(true, undefined, {
+    onConversationState: async () => true,
+    onToggleConversation: async () => { toggles++; return false; },
+  });
+  assert.equal(await f.initial('conversation-state'), true);
+  assert.equal(await f.initial('toggle-conversation'), false);
+  assert.equal(toggles, 1);
+  f.controller.setConversationState(true);
+  assert.deepEqual(f.window().messages.at(-1), ['studio-pet:conversation-state', true]);
+  f.controller.notifyConversationError('麦克风未启动');
+  assert.deepEqual(f.window().messages.at(-1), ['studio-pet:conversation-error', '麦克风未启动']);
+  const stale = { sender: {}, senderFrame: {} };
+  assert.throws(() => f.initial('toggle-conversation', stale), /restricted/);
+  assert.equal(toggles, 1);
 });
 
 test('pet scale keeps the dot fixed, clamps input and preserves aspect ratio on a small display', () => {

@@ -1,6 +1,6 @@
 # Live2D model package
 
-Place a standard Cubism 4 model folder here. Keep all paths referenced by the
+Place a standard Cubism model3/moc3 folder here. Keep all paths referenced by the
 model JSON relative and intact:
 
 ```text

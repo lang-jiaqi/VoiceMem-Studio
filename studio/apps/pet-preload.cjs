@@ -7,6 +7,10 @@ const on = (name, callback) => ipcRenderer.on(`studio-pet:${name}`, (_event, val
 contextBridge.exposeInMainWorld('pet', {
   initial: () => ipcRenderer.invoke('studio-pet:initial'),
   onMode: callback => on('mode', callback),
+  toggleConversation: () => ipcRenderer.invoke('studio-pet:toggle-conversation'),
+  conversationState: () => ipcRenderer.invoke('studio-pet:conversation-state'),
+  onConversationState: callback => on('conversation-state', callback),
+  onConversationError: callback => on('conversation-error', callback),
   initialScale: () => ipcRenderer.invoke('studio-pet:initial-scale'),
   onScale: callback => on('scale', callback),
   resize: step => send('resize', step), resetSize: () => send('reset-size'),

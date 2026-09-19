@@ -94,7 +94,7 @@ else {
     const pixels = Buffer.alloc(16 * 16 * 4);
     for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) { const i = (y * 16 + x) * 4; pixels[i] = 232; pixels[i+1] = 173; pixels[i+2] = 168; pixels[i+3] = Math.hypot(x-7.5,y-7.5) < 6 ? 255 : 0; }
     tray = new Tray(nativeImage.createFromBitmap(pixels, { width: 16, height: 16 }));
-    tray.setToolTip('VoiceMem 雾铃');
+    tray.setToolTip('VoiceMem 白藤');
     tray.setContextMenu(Menu.buildFromTemplate([{ label: '展开 / 收起', click: toggle },
       { label: '缩小', click: () => resize(-1) }, { label: '放大', click: () => resize(1) }, { label: '恢复原始大小', click: () => setScale(1) },
       { label: '找回小点', click: () => { anchor = { x: area.x+area.width-24,y:area.y+area.height-24 }; collapse(); layout(); win.show(); save(); } },
@@ -121,6 +121,18 @@ else {
           await new Promise(r => setTimeout(r, 100));
         }
         if (!status?.ready || status.renderer !== 'live2d') throw new Error(JSON.stringify(status));
+        await win.webContents.executeJavaScript("avatar.express('blush')");
+        await new Promise(r => setTimeout(r, 250));
+        status = await win.webContents.executeJavaScript('avatar.getStatus()');
+        if (status.expression !== 'blush' || status.expressionError) throw new Error(JSON.stringify(status));
+        if (process.argv.includes('--smoke-body-gesture')) {
+          await win.webContents.executeJavaScript("avatar.setSpeaking(true); avatar.triggerGesture('sway', { amplitude: 1, cooldown: 0 })");
+          await new Promise(r => setTimeout(r, 950));
+          status = await win.webContents.executeJavaScript('avatar.getStatus()');
+          if (status.gesture !== 'sway' || status.parameters.ParamBodyAngleX < 3) throw new Error(JSON.stringify(status));
+        }
+        const screenshot = argOf('screenshot');
+        if (screenshot) fs.writeFileSync(screenshot, (await win.webContents.capturePage()).toPNG());
         console.log('SMOKE PASS', JSON.stringify(status)); app.exit(0);
       } catch (e) { console.error(e); app.exit(1); }
     } else {

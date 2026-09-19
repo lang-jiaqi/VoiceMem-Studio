@@ -17,7 +17,7 @@ test('pet observes only the selected service and bundled local assets', () => {
   assert.equal(observerUrl('https://studio.example.com'), 'wss://studio.example.com/ws-pet');
   assert.equal(observerUrl('http://[::1]:8787'), 'ws://[::1]:8787/ws-pet');
   assert.throws(() => observerUrl('http://untrusted.example.com'));
-  for (const url of [asset('index.html'), asset('assets/live2d/hiyori/hiyori_pro_t11.moc3'), CUBISM_CORE, ws]) assert.equal(resourceAllowed(url, root, ws), true);
+  for (const url of [asset('index.html'), asset('assets/live2d/rattan/rattan.moc3'), CUBISM_CORE, ws]) assert.equal(resourceAllowed(url, root, ws), true);
   for (const url of [asset('../launcher.html'), asset('../.pet-runtime-other/secret'), 'file:///etc/passwd', `${ws}?other=1`,
     'ws://localhost:8787/ws-pet', 'ws://127.0.0.1:8787/ws', 'https://studio.example.com/script.js']) {
     assert.equal(resourceAllowed(url, root, ws), false, url);
@@ -37,7 +37,7 @@ test('pet window controls reject another renderer, frame or document', () => {
   assert.equal(trustedSender(event, { ...window, isDestroyed: () => true }, page), false);
 });
 
-test('pet bundle includes the Live2D runtime, model and required licenses', async t => {
+test('pet bundle includes the Live2D runtime, rattan model and provenance notice', async t => {
   const destination = await fs.mkdtemp(path.join(process.env.VOICEMEM_TEST_TMP || os.tmpdir(), 'studio-pet-test-'));
   t.after(() => fs.rm(destination, { recursive: true, force: true }));
   const inventory = await preparePet({ destination });
@@ -59,9 +59,22 @@ test('pet bundle includes the Live2D runtime, model and required licenses', asyn
     }
   }
   assert.equal(inventory.some(file => /checks|package-lock|\.env/.test(file)), false);
-  assert.equal(inventory.filter(file => file.endsWith('.png')).length, 3);
+  assert.equal(inventory.filter(file => file.endsWith('.png')).length, 6);
+  assert.ok(inventory.includes('assets/scene/call-background.png'));
+  assert.equal(inventory.includes('debug-panel.js'), false);
+  assert.equal(inventory.includes('scene.js'), false);
+  assert.doesNotMatch(html, /动作 0|debug-panel\.js|curtains\.png|scene\.js/);
+  assert.match(html, /id="talkButton"/);
+  assert.doesNotMatch(html, /随时陪你聊聊|call-identity|callState/);
   assert.ok(inventory.includes('THIRD_PARTY_NOTICES.md'));
-  assert.ok(inventory.includes('assets/live2d/hiyori/README-LICENSE.txt'));
+  assert.ok(inventory.includes('assets/live2d/rattan/README-SOURCE.md'));
+  const model = JSON.parse(await fs.readFile(
+    path.join(destination, 'assets/live2d/rattan/rattan.model3.json'), 'utf8'));
+  assert.equal(model.FileReferences.Textures.length, 5);
+  assert.ok(model.FileReferences.Textures.every(file => file.includes('rattan.2048/')));
+  assert.equal(model.FileReferences.Expressions.length, 22);
+  assert.deepEqual(model.Groups.find(group => group.Name === 'LipSync').Ids,
+    ['ParamMouthOpenY']);
   await fs.writeFile(path.join(destination, 'unexpected-private-file'), 'synthetic fixture');
   await assert.rejects(preparePet({ destination }), /Unexpected files/);
   assert.equal(await fs.readFile(path.join(destination, 'unexpected-private-file'), 'utf8'), 'synthetic fixture');
@@ -96,20 +109,19 @@ test('desktop preload exposes the same reduced window API as the new pet', async
   assert.deepEqual(await exposed(path.join(__dirname, '../pet-preload.cjs')), await exposed(path.resolve(__dirname, '../../../pet/preload.cjs')));
 });
 
-test('distinct backchannels rotate pet actions 6, 7, and 8', async () => {
-  const actions = [];
+test('backchannels trigger named gestures without a numbered action panel', async () => {
+  const gestures = [];
   let socket;
   class WebSocket {
     static OPEN = 1;
     constructor() { socket = this; this.readyState = 1; }
     close() {}
   }
-  const math = Object.create(Math); math.random = () => 0;
   const context = {
-    URLSearchParams, WebSocket, Math: math, performance: { now: () => 1000 },
+    URLSearchParams, WebSocket, performance: { now: () => 1000 },
     setTimeout: () => 1, clearTimeout() {}, location: { search: '?ws=ws://test' },
     window: { avatar: {
-      playAction: action => actions.push(action), wake() {}, sleep() {},
+      triggerGesture: gesture => gestures.push(gesture), express() {}, wake() {}, sleep() {},
       setState() {}, setSpeaking() {}, feedAudioLevel() {}, setEmotion() {},
     } },
   };
@@ -119,7 +131,66 @@ test('distinct backchannels rotate pet actions 6, 7, and 8', async () => {
   for (let i = 1; i <= 3; i++) socket.onmessage({ data: JSON.stringify({
     type: 'backchannel', session_id: 'session', event_id: `bc-${i}`,
   }) });
-  assert.deepEqual(actions, [6, 7, 8]);
+  assert.deepEqual(gestures, ['backchannel', 'backchannel', 'backchannel']);
+});
+
+test('pointer gaze overrides idle wandering and speaking schedules a spaced body gesture', () => {
+  const { AvatarBehaviorController } = require('../../../pet/avatar-behavior-controller.js');
+  const { AvatarParameterController } = require('../../../pet/avatar-parameter-controller.js');
+  const parameters = new AvatarParameterController();
+  const behavior = new AvatarBehaviorController(parameters, { random: () => 0 });
+  behavior.setState('speaking');
+  behavior.setPointerGaze(.8, -.6);
+  behavior.update(.1);
+  assert.equal(parameters.layers.get('pointer-eyes').values.ParamEyeBallX, .68);
+  assert.equal(parameters.layers.get('pointer-eyes').values.ParamEyeBallY, -.39);
+  behavior.update(.1);
+  assert.equal(behavior.gesture?.name, 'nod');
+  for (let i = 0; i < 5; i++) behavior.update(.1);
+  assert.ok(parameters.layers.get('gesture').values.ParamBodyAngleY < -3);
+  assert.ok(behavior.armAccents.Param47 > .15);
+  assert.ok(behavior.nextSpeakingGesture > behavior.time + 3);
+  for (let i = 0; i < 9; i++) behavior.update(.1);
+  assert.equal(behavior.armAccents, null);
+  behavior.setPointerGaze(null, null);
+  assert.equal(parameters.layers.get('pointer-eyes').remove, true);
+  behavior.setState('idle');
+  assert.equal(behavior.nextSpeakingGesture, Infinity);
+});
+
+test('arm accents add to model physics only during a gesture', () => {
+  const { Live2DRenderer } = require('../../../pet/live2d-renderer.js');
+  const renderer = new Live2DRenderer({ addEventListener() {} });
+  const applied = [];
+  renderer.model = { internalModel: { coreModel: {
+    addParameterValueById: (id, value) => applied.push([id, value]),
+  } } };
+  renderer.applyArmAccents();
+  assert.deepEqual(applied, []);
+  renderer.setArmAccents({ Param47: .24, Param50: -.18 });
+  renderer.applyArmAccents();
+  assert.deepEqual(applied, [['Param47', .24], ['Param50', -.18]]);
+  renderer.nativeMotion = true;
+  renderer.applyArmAccents();
+  assert.equal(applied.length, 2);
+  renderer.nativeMotion = false;
+  renderer.setArmAccents(null);
+  renderer.applyArmAccents();
+  assert.equal(applied.length, 2);
+});
+
+test('a backchannel does not defer the first speaking gesture for several seconds', () => {
+  const { AvatarBehaviorController } = require('../../../pet/avatar-behavior-controller.js');
+  const { AvatarParameterController } = require('../../../pet/avatar-parameter-controller.js');
+  const behavior = new AvatarBehaviorController(new AvatarParameterController(), { random: () => 0 });
+  behavior.setState('listening');
+  assert.equal(behavior.triggerGesture('backchannel'), true);
+  behavior.setState('speaking');
+  behavior.update(.2);
+  assert.equal(behavior.gesture.name, 'backchannel');
+  assert.ok(behavior.nextSpeakingGesture < 1);
+  for (let i = 0; i < 16; i++) behavior.update(.1);
+  assert.equal(behavior.gesture?.name, 'nod');
 });
 
 test('native body motions keep live audio control of mouth opening', () => {
@@ -133,4 +204,17 @@ test('native body motions keep live audio control of mouth opening', () => {
   renderer.nativeMotion = true;
   renderer.applyParameters();
   assert.deepEqual(applied, [['ParamMouthOpenY', .72]]);
+});
+
+test('rattan expressions are dispatched through the Live2D expression manager', async () => {
+  const { Live2DRenderer } = require('../../../pet/live2d-renderer.js');
+  const renderer = new Live2DRenderer({ addEventListener() {} });
+  let selected = '';
+  renderer.model = {
+    expression: async name => { selected = name; return true; },
+    internalModel: { expressionManager: { resetExpression() {} } },
+  };
+  assert.equal(renderer.playExpression('blush', 0), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(selected, 'blush');
 });

@@ -11,7 +11,7 @@
     ParamEyeBallX: [-1, 1, 0, .1], ParamEyeBallY: [-1, 1, 0, .1],
     ParamBrowLY: [-1, 1, 0, .22], ParamBrowRY: [-1, 1, 0, .22],
     ParamBrowLAngle: [-1, 1, 0, .22], ParamBrowRAngle: [-1, 1, 0, .22],
-    ParamMouthOpenY: [0, 1, 0, .065], ParamMouthForm: [-1, 1, .86, .18],
+    ParamMouthOpenY: [0, 2.1, 0, .065], ParamMouthForm: [-1, 1, 0, .18],
     ParamCheek: [0, 1, .3, .24], ParamBreath: [0, 1, .5, .3]
   };
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));

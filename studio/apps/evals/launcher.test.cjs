@@ -179,6 +179,24 @@ test('conversation pages omit top mode links and the pet appears only in the bac
   assert.equal(shouldShowPet(true, { isDestroyed: () => true }, undefined), false);
 });
 
+test('digital page bundles a looping video with a still-image fallback', async () => {
+  const assets = path.join(__dirname, '../ui/assets');
+  const [html, css, script, video, image] = await Promise.all([
+    fs.readFile(path.join(__dirname, '../ui/digital.html'), 'utf8'),
+    fs.readFile(path.join(__dirname, '../ui/digital.css'), 'utf8'),
+    fs.readFile(path.join(__dirname, '../ui/digital.js'), 'utf8'),
+    fs.readFile(path.join(assets, 'digital-background.mp4')),
+    fs.readFile(path.join(assets, 'digital-background.png')),
+  ]);
+  assert.match(html, /<img id="bg" src="assets\/digital-background\.png"/);
+  assert.match(html, /<video id="bgVideo" autoplay muted loop playsinline/);
+  assert.match(html, /<source src="assets\/digital-background\.mp4" type="video\/mp4">/);
+  assert.match(css, /\.backdrop img,\.backdrop video\{[^}]*object-fit:cover/);
+  assert.match(script, /document\.hidden \|\| state\.memory \|\| backgroundMotion\.matches/);
+  assert.equal(video.toString('ascii', 4, 8), 'ftyp');
+  assert.equal(image.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+});
+
 test('normal Linux entry points reject desktop startup before loading Electron', { skip: process.platform !== 'linux' }, async () => {
   for (const entry of ['../launch.cjs', '../../../pet/launch.cjs']) {
     await assert.rejects(promisify(execFile)(process.execPath, [path.resolve(__dirname, entry)]), error => {

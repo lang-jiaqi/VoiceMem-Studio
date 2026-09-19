@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../ui/studio-client.js'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-function fixture() {
+function fixture({ desktop = false } = {}) {
   const sockets = [], nodes = [], sources = [], events = [], notices = [], states = [], contexts = [], listeners = {};
   let grant;
   class Socket {
@@ -39,19 +39,35 @@ function fixture() {
   const context = {URL, ArrayBuffer, Float32Array, Int16Array, setTimeout, clearTimeout, console,
     AudioContext:Context, AudioWorkletNode:Node, WebSocket:Socket,
     location:{href:'http://localhost:8787/ui/technical.html',protocol:'http:'},
-    document:{addEventListener(name, callback) {listeners[name] = callback;}},
+    document:{hidden:false, addEventListener(name, callback) {listeners[name] = callback;}},
     navigator:{mediaDevices:{getUserMedia:() => new Promise(resolve => {grant = resolve;})}},
     VMUI:{notify:message => notices.push(message)}, atob:text => Buffer.from(text, 'base64').toString('binary'),
   };
   context.window = {addEventListener(name, callback) {listeners[name] = callback;}};
+  if (desktop) context.window.studioModelServices = {};
   vm.runInNewContext(source, context);
   const api = context.window.VMStudio;
   const client = api.create({onEvent:e => events.push(e), onState:state => states.push(state)});
   async function connected() {
     const sending = client.send('fixture'); await tick(); sockets[0].receive({type:'session_ready',mode:'llm_tts'}); await sending;
   }
-  return {api, client, sockets, nodes, sources, events, notices, states, contexts, listeners, connected, grant:stream => grant(stream)};
+  return {api, client, sockets, nodes, sources, events, notices, states, contexts, listeners,
+    document:context.document, connected, grant:stream => grant(stream)};
 }
+test('desktop voice remains active when minimized while a browser session still ends', async () => {
+  const desktop = fixture({ desktop: true });
+  const starting = desktop.client.start(); await tick();
+  desktop.sockets[0].receive({ type: 'session_ready' }); await tick();
+  desktop.document.hidden = true; desktop.listeners.visibilitychange();
+  assert.equal(desktop.states.at(-1), true);
+  desktop.grant({ getTracks: () => [{ stop() {} }] }); await starting;
+  assert.equal(desktop.sockets[0].readyState, 1);
+  desktop.client.cancel();
+
+  const browser = fixture(); await browser.connected();
+  browser.document.hidden = true; browser.listeners.visibilitychange();
+  assert.equal(browser.sockets[0].readyState, 3);
+});
 test('text waits for session readiness and uses the existing user_text contract', async () => {
   const f = fixture(); const sent = f.client.send('hello'); await tick();
   assert.equal(f.sockets[0].sent.length, 0);

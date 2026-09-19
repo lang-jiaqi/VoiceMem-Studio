@@ -2,11 +2,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 
-const sourceFiles = [
-  'style.css', 'state.cjs', 'renderer.js', 'scene.js', 'voicemem-link.js',
-  'audio-lip-sync.js', 'avatar-behavior-controller.js', 'avatar-controller.js',
-  'avatar-parameter-controller.js', 'debug-panel.js', 'live2d-renderer.js',
-  'assets/scene/curtains.png', 'assets/live2d/README.md',
+const hiyoriFiles = [
   'assets/live2d/hiyori/README-LICENSE.txt',
   'assets/live2d/hiyori/hiyori_pro_t11.moc3',
   ...['model3.json', 'physics3.json', 'pose3.json', 'cdi3.json']
@@ -15,6 +11,27 @@ const sourceFiles = [
     .map(file => `assets/live2d/hiyori/hiyori_pro_t11.2048/${file}`),
   ...Array.from({ length: 10 }, (_, index) =>
     `assets/live2d/hiyori/motion/hiyori_m${String(index + 1).padStart(2, '0')}.motion3.json`),
+];
+
+const rattanFiles = [
+  'assets/live2d/rattan/README-SOURCE.md',
+  ...['model3.json', 'moc3', 'physics3.json', 'cdi3.json']
+    .map(suffix => `assets/live2d/rattan/rattan.${suffix}`),
+  'assets/live2d/rattan/idle.motion3.json',
+  ...Array.from({ length: 20 }, (_, index) =>
+    `assets/live2d/rattan/exp/${index + 1}.exp3.json`),
+  'assets/live2d/rattan/exp/loli.exp3.json',
+  'assets/live2d/rattan/exp/大Q.exp3.json',
+  ...Array.from({ length: 5 }, (_, index) =>
+    `assets/live2d/rattan/rattan.2048/texture_0${index}.png`),
+];
+
+const sourceFiles = [
+  'style.css', 'state.cjs', 'renderer.js', 'voicemem-link.js',
+  'audio-lip-sync.js', 'avatar-behavior-controller.js', 'avatar-controller.js',
+  'avatar-parameter-controller.js', 'live2d-renderer.js',
+  'assets/scene/call-background.png', 'assets/live2d/README.md',
+  ...rattanFiles,
   'node_modules/pixi.js/dist/browser/pixi.min.js', 'node_modules/pixi.js/LICENSE',
   'node_modules/pixi-live2d-display/dist/cubism4.min.js', 'node_modules/pixi-live2d-display/LICENSE',
   'THIRD_PARTY_NOTICES.md',
@@ -22,6 +39,9 @@ const sourceFiles = [
 
 // Recognize the previous generated layout only to preserve it during migration.
 const legacyFiles = [
+  'debug-panel.js',
+  // The Hiyori model bundled by the previous Live2D release.
+  ...hiyoriFiles,
   // Canvas/PNG pet bundled by the immediately preceding App release.
   'style.css', 'state.cjs', 'renderer.js', 'scene.js', 'voicemem-link.js', 'avatar-rig.js',
   'assets/avatar/calm.png', 'assets/avatar/talk.png', 'assets/avatar/blink.png',

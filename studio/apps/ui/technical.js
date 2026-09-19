@@ -314,6 +314,7 @@ const voice = VMStudio.create({
     $('mic').setAttribute('aria-pressed',String(on));
     $('startTalk').textContent=on?'结束对话':'开始对话';
     $('startTalk').setAttribute('aria-pressed',String(on));
+    window.studioModelServices?.reportConversationState(on);
   },
   onInterim(text) { $('liveEcho').textContent=text;$('liveEcho').classList.remove('empty');$('composer').value=text;renderPerception(text); },
   onFinal(text) {if(send(text))$('composer').value='';}

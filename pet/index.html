@@ -1,21 +1,27 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' https://cubism.live2d.com; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; media-src 'self' blob:"><title>雾铃</title><link rel="stylesheet" href="style.css"></head>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' https://cubism.live2d.com; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; media-src 'self' blob:"><title>白藤</title><link rel="stylesheet" href="style.css"></head>
 <body data-mode="dot">
-  <button id="dot" aria-label="唤醒雾铃" title="点击唤醒 · 拖动移动"></button>
+  <button id="dot" aria-label="唤醒白藤" title="点击唤醒 · 拖动移动"></button>
   <main id="character" hidden>
-    <div id="bubble" hidden></div>
     <div id="stage">
-      <div id="scene" aria-hidden="true"><div id="scene-plate"></div><div class="curtain left"></div><div class="curtain right"></div><canvas id="leaves"></canvas><div id="scene-light"></div></div>
-      <canvas id="live" hidden aria-label="可动的雾铃" title="拖动移动 · 双击收起"></canvas>
+      <canvas id="live" hidden aria-label="可动的白藤" title="拖动移动 · 双击收起"></canvas>
+      <div class="call-shade" aria-hidden="true"></div>
+      <header class="call-header">
+        <button id="collapseCall" type="button" aria-label="收起通话窗口" title="收起到桌面小点">—</button>
+      </header>
+      <p id="bubble" role="status" hidden></p>
+      <footer class="call-footer">
+        <p id="callHint">点击下方按钮，开始语音对话</p>
+        <button id="talkButton" type="button" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v2M9 21h6"/></svg><span id="talkLabel">开始对话</span></button>
+      </footer>
     </div>
     <div class="resize-corner" data-resize-corner="nw" title="拖动调整大小" aria-hidden="true"></div>
     <div class="resize-corner" data-resize-corner="ne" title="拖动调整大小" aria-hidden="true"></div>
     <div class="resize-corner" data-resize-corner="sw" title="拖动调整大小" aria-hidden="true"></div>
     <div class="resize-corner" data-resize-corner="se" title="拖动调整大小" aria-hidden="true"></div>
   </main>
-  <script src="scene.js"></script>
   <script src="avatar-parameter-controller.js"></script><script src="avatar-behavior-controller.js"></script>
   <script src="audio-lip-sync.js"></script><script src="live2d-renderer.js"></script>
   <script src="avatar-controller.js"></script>
-  <script src="debug-panel.js"></script><script src="renderer.js"></script><script src="voicemem-link.js"></script>
+  <script src="renderer.js"></script><script src="voicemem-link.js"></script>
 </body></html>

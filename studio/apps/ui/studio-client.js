@@ -170,7 +170,9 @@
     function fail(owner, error) {
       if (!active(owner)) return;
       end();
-      VMUI.notify(error.message || 'Studio 连接失败，请检查后端是否已启动。');
+      const message = error.message || 'Studio 连接失败，请检查后端是否已启动。';
+      VMUI.notify(message);
+      window.studioModelServices?.reportConversationError?.(message);
     }
     function phase(owner, value) {
       clearTimeout(owner.thinking);
@@ -350,7 +352,11 @@
           owner.socket.send(pcm.buffer);
         };
         phase(owner, 'listening');
-      } catch (error) { if (active(owner)) { stopMic(owner); VMUI.notify(`麦克风未启动：${error.message}`); } }
+      } catch (error) { if (active(owner)) {
+        stopMic(owner);
+        const message = `麦克风未启动：${error.message}`;
+        VMUI.notify(message); window.studioModelServices?.reportConversationError?.(message);
+      } }
     }
     async function send(text) {
       stopReplay();
@@ -361,7 +367,7 @@
     }
     function toggle() { if (run?.mic) end(); else void start(); }
     window.addEventListener('pagehide', end);
-    document.addEventListener('visibilitychange', () => { if (document.hidden) end(); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden && !window.studioModelServices) end(); });
     document.addEventListener('settings-open', end);
     let language = window.VMSettings?.language || 'zh-CN';
     document.addEventListener('display-settings-change', () => {

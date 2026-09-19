@@ -4,6 +4,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const runtime = require('./runtime.cjs');
 const { createPet } = require('./pet-window.cjs');
+const { controlConversation } = require('./pet-conversation.cjs');
 const { shouldShowPet } = require('./desktop-visibility.cjs');
 
 app.setName('VoiceMem Studio');
@@ -348,7 +349,10 @@ else {
     } catch (error) { configError = error.message; }
     installMenu();
     try {
-      pet = createPet({ onHidden: () => {
+      pet = createPet({
+        onToggleConversation: () => controlConversation(studio, activeOrigin, true),
+        onConversationState: () => controlConversation(studio, activeOrigin),
+        onHidden: () => {
         petEnabled = false;
         Menu.getApplicationMenu().getMenuItemById('show-pet').checked = false;
       } });
@@ -393,6 +397,14 @@ else {
       return managedConfiguration
         ? { managed: true, services: runtime.publicModelServices(managedConfiguration.services), reconfiguring }
         : { managed: false, services: null, reconfiguring: false };
+    });
+    ipcMain.on('studio-desktop:conversation-state', (event, active) => {
+      try { assertStudio(event); if (typeof active === 'boolean') pet?.setConversationState(active); }
+      catch { /* Ignore messages from stale or unrelated pages. */ }
+    });
+    ipcMain.on('studio-desktop:conversation-error', (event, message) => {
+      try { assertStudio(event); if (typeof message === 'string') pet?.notifyConversationError(message.slice(0, 300)); }
+      catch { /* Ignore messages from stale or unrelated pages. */ }
     });
     ipcMain.handle('studio-desktop:update-model-service', (event, role, value) => {
       assertStudio(event);

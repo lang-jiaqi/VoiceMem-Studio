@@ -25,10 +25,13 @@
   class Live2DRenderer {
     constructor(canvas) {
       this.canvas = canvas; this.app = null; this.model = null; this.path = '';
-      this.parameters = Object.create(null); this.active = false; this.error = null;
+      this.parameters = Object.create(null); this.armAccents = null; this.active = false; this.error = null;
       this.nativeMotion = false;
+      this.expressionTimer = 0; this.expressionEpoch = 0;
+      this.currentExpression = ''; this.expressionError = null;
       this.contextLost = false; this.width = 0; this.height = 0; this.resolution = 0;
       this.applyParameters = this.applyParameters.bind(this);
+      this.applyArmAccents = this.applyArmAccents.bind(this);
       canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); this.contextLost = true; });
       canvas.addEventListener('webglcontextrestored', () => { this.contextLost = false; if (this.path) this.loadModel(this.path).catch(() => {}); });
     }
@@ -59,6 +62,7 @@
         // once after physics so controlled facial parameters remain authoritative.
         internal.on('afterMotionUpdate', this.applyParameters);
         internal.on('beforeModelUpdate', this.applyParameters);
+        internal.on('beforeModelUpdate', this.applyArmAccents);
         this.app.stage.addChild(this.model); this.active = true; this.resize();
         return this;
       } catch (error) { this.error = String(error?.message || error); this.destroyModel(); throw error; }
@@ -73,12 +77,40 @@
         try { core.setParameterValueById(id, value); } catch {}
       }
     }
+    applyArmAccents() {
+      const core = this.model?.internalModel?.coreModel;
+      if (!core || !this.armAccents || this.nativeMotion) return;
+      for (const [id, offset] of Object.entries(this.armAccents)) {
+        if (Number.isFinite(offset)) core.addParameterValueById(id, offset);
+      }
+    }
     setParameters(values) { this.parameters = values || this.parameters; }
+    setArmAccents(values) { this.armAccents = values; }
     playMotion(group, index = 0) {
       if (!this.model) return false;
       this.nativeMotion = true;
       this.model.motion(group, index, 3).then(started => { if (!started) this.nativeMotion = false; })
         .catch(() => { this.nativeMotion = false; });
+      return true;
+    }
+    playExpression(name, durationMs = 1800) {
+      if (!this.model || typeof name !== 'string' || !name) return false;
+      const epoch = ++this.expressionEpoch;
+      this.expressionError = null;
+      clearTimeout(this.expressionTimer); this.expressionTimer = 0;
+      this.model.expression(name).then(started => {
+        if (epoch !== this.expressionEpoch || !this.model) return;
+        if (!started) { this.expressionError = `Expression unavailable: ${name}`; return; }
+        this.currentExpression = name;
+        const duration = Math.max(0, Number(durationMs) || 0);
+        if (duration) this.expressionTimer = setTimeout(() => {
+          if (epoch !== this.expressionEpoch || !this.model) return;
+          this.model.internalModel?.expressionManager?.resetExpression();
+          this.expressionTimer = 0; this.currentExpression = '';
+        }, duration);
+      }).catch(error => {
+        if (epoch === this.expressionEpoch) this.expressionError = String(error?.message || error);
+      });
       return true;
     }
     resize() {
@@ -108,17 +140,23 @@
       return this.model.containsPoint(new root.PIXI.Point(x - rect.left, y - rect.top));
     }
     destroyModel() {
+      clearTimeout(this.expressionTimer); this.expressionTimer = 0; this.expressionEpoch++;
+      this.currentExpression = ''; this.expressionError = null;
       if (!this.model) return;
       try {
         this.model.internalModel?.off('afterMotionUpdate', this.applyParameters);
         this.model.internalModel?.off('beforeModelUpdate', this.applyParameters);
+        this.model.internalModel?.off('beforeModelUpdate', this.applyArmAccents);
         this.app?.stage.removeChild(this.model); this.model.destroy({ children: true, texture: true, baseTexture: true });
       } catch {}
       this.model = null;
+      this.armAccents = null;
       this.nativeMotion = false;
     }
     destroy() { this.destroyModel(); this.app?.destroy(false, { children: true }); this.app = null; this.active = false; }
-    getStatus() { return { renderer: 'live2d', ready: Boolean(this.model), active: this.active, model: this.path, error: this.error, contextLost: this.contextLost }; }
+    getStatus() { return { renderer: 'live2d', ready: Boolean(this.model), active: this.active,
+      model: this.path, error: this.error, contextLost: this.contextLost,
+      expression: this.currentExpression, expressionError: this.expressionError }; }
   }
   return { Live2DRenderer };
 });

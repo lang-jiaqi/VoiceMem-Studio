@@ -1,0 +1,56 @@
+{
+  "Version": 3,
+  "FileReferences": {
+    "Moc": "rattan.moc3",
+    "Textures": [
+      "rattan.2048/texture_00.png",
+      "rattan.2048/texture_01.png",
+      "rattan.2048/texture_02.png",
+      "rattan.2048/texture_03.png",
+      "rattan.2048/texture_04.png"
+    ],
+    "Physics": "rattan.physics3.json",
+    "DisplayInfo": "rattan.cdi3.json",
+    "Expressions": [
+      { "Name": "tiny", "File": "exp/1.exp3.json" },
+      { "Name": "microphone", "File": "exp/2.exp3.json" },
+      { "Name": "loading", "File": "exp/3.exp3.json" },
+      { "Name": "question", "File": "exp/4.exp3.json" },
+      { "Name": "shadow", "File": "exp/5.exp3.json" },
+      { "Name": "star-eyes", "File": "exp/6.exp3.json" },
+      { "Name": "heart-eyes", "File": "exp/7.exp3.json" },
+      { "Name": "cry", "File": "exp/8.exp3.json" },
+      { "Name": "blush", "File": "exp/9.exp3.json" },
+      { "Name": "dizzy", "File": "exp/10.exp3.json" },
+      { "Name": "eye-roll", "File": "exp/11.exp3.json" },
+      { "Name": "sweat", "File": "exp/12.exp3.json" },
+      { "Name": "earrings", "File": "exp/13.exp3.json" },
+      { "Name": "claws", "File": "exp/14.exp3.json" },
+      { "Name": "chest-cover", "File": "exp/15.exp3.json" },
+      { "Name": "halo", "File": "exp/16.exp3.json" },
+      { "Name": "veil", "File": "exp/17.exp3.json" },
+      { "Name": "ponytail", "File": "exp/18.exp3.json" },
+      { "Name": "tongue", "File": "exp/19.exp3.json" },
+      { "Name": "floating-head", "File": "exp/20.exp3.json" },
+      { "Name": "loli", "File": "exp/loli.exp3.json" },
+      { "Name": "big-q", "File": "exp/大Q.exp3.json" }
+    ],
+    "Motions": {
+      "Idle": [
+        { "File": "idle.motion3.json", "FadeInTime": 0.5, "FadeOutTime": 0.5 }
+      ]
+    }
+  },
+  "Groups": [
+    {
+      "Target": "Parameter",
+      "Name": "LipSync",
+      "Ids": ["ParamMouthOpenY"]
+    },
+    {
+      "Target": "Parameter",
+      "Name": "EyeBlink",
+      "Ids": ["ParamEyeROpen", "ParamEyeLOpen"]
+    }
+  ]
+}

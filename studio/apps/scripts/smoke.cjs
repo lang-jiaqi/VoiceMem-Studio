@@ -59,8 +59,8 @@ async function main() {
     const archive = require('@electron/asar');
     await archive.createPackage(payload, appEntry);
     const files = archive.listPackage(appEntry);
-    assert.ok(files.includes('/.pet-runtime/avatar-rig.js'));
-    assert.ok(files.includes('/.pet-runtime/assets/scene/curtains.png'));
+    assert.ok(files.includes('/.pet-runtime/avatar-controller.js'));
+    assert.ok(files.includes('/.pet-runtime/assets/scene/call-background.png'));
     assert.equal(files.some(file => /previous-|node_modules|vendor\/|models\/|checks\//.test(file)), false);
   }
   const profile = path.join(directory, 'profile'), project = path.join(directory, 'project'), bin = path.join(directory, 'bin');
@@ -142,28 +142,30 @@ async function main() {
     const petTarget = await until(async () => (await pages()).find(page => page.url.includes('/.pet-runtime/index.html')));
     petClient = await devtools(petTarget.webSocketDebuggerUrl);
     async function petState() {
-      const result = await petClient.send('Runtime.evaluate', { expression: 'JSON.stringify({ ...window.petRig.status(), node:typeof require, settings:typeof window.studioDesktop, mode:document.body.dataset.mode, canvas2d:!!document.getElementById("live").getContext("2d"), scene:!!document.getElementById("leaves"), pixi:typeof window.PIXI })', returnByValue: true });
+      const result = await petClient.send('Runtime.evaluate', { expression: 'JSON.stringify({ ...window.avatar.getStatus(), node:typeof require, settings:typeof window.studioDesktop, mode:document.body.dataset.mode, callButton:!!document.getElementById("talkButton"), numberedActions:!!document.getElementById("avatar-debug"), pixi:typeof window.PIXI })', returnByValue: true });
       return JSON.parse(result.result.value);
     }
     await until(async () => { const state = await petState(); if (state.error) throw new Error(state.error); return state.ready && state.pose === 'lie'; });
     assert.equal((await petState()).node, 'undefined');
     assert.equal((await petState()).settings, 'undefined');
-    assert.equal((await petState()).canvas2d, true);
-    assert.equal((await petState()).scene, true);
-    assert.equal((await petState()).pixi, 'undefined');
+    assert.equal((await petState()).callButton, true);
+    assert.equal((await petState()).numberedActions, false);
+    assert.equal((await petState()).pixi, 'object');
     await until(() => observers.get(backend).size === 1);
     broadcast(backend, { type: 'conversation_started' });
     await until(async () => (await petState()).pose === 'sit');
     broadcast(backend, { type: 'backchannel' });
-    await until(async () => (await petState()).action === 'tilted-smile');
+    await until(async () => (await petState()).gesture === 'backchannel');
     broadcast(backend, { type: 'playback_checkpoint', output_id: 'smoke-output', state: 'playing' });
+    broadcast(backend, { type: 'avatar_audio_level', output_id: 'smoke-output', rms: .7, rendered_samples: 2400 });
     await until(async () => (await petState()).parameters.ParamMouthOpenY > 0.05, 3000);
     broadcast(backend, { type: 'playback_checkpoint', output_id: 'smoke-output', state: 'paused' });
-    await until(async () => (await petState()).parameters.ParamMouthOpenY === 0);
+    await until(async () => !(await petState()).speaking);
     broadcast(backend, { type: 'playback_checkpoint', output_id: 'smoke-output', state: 'playing' });
+    broadcast(backend, { type: 'avatar_audio_level', output_id: 'smoke-output', rms: .7, rendered_samples: 4800 });
     await until(async () => (await petState()).parameters.ParamMouthOpenY > 0.05, 3000);
     broadcast(backend, { type: 'answer_interrupt' });
-    await until(async () => (await petState()).parameters.ParamMouthOpenY === 0);
+    await until(async () => !(await petState()).speaking);
     const petScreenshot = await petClient.send('Page.captureScreenshot');
     await fs.writeFile(path.join(directory, 'pet.png'), Buffer.from(petScreenshot.data, 'base64'));
     await petClient.send('Runtime.evaluate', { expression: 'window.pet.collapse()' });
@@ -187,9 +189,10 @@ async function main() {
     petClient = await devtools(targets.find(page => page.url.includes('/.pet-runtime/index.html')).webSocketDebuggerUrl);
     await until(async () => (await petState()).ready);
     broadcast(replacement, { type: 'playback_checkpoint', output_id: 'disconnect-output', state: 'playing' });
+    broadcast(replacement, { type: 'avatar_audio_level', output_id: 'disconnect-output', rms: .7, rendered_samples: 2400 });
     await until(async () => (await petState()).parameters.ParamMouthOpenY > 0.05, 3000);
     for (const socket of observers.get(replacement)) socket.destroy();
-    await until(async () => (await petState()).parameters.ParamMouthOpenY === 0);
+    await until(async () => !(await petState()).speaking);
     const hidePet = !process.argv.includes('--keep-pet-on-exit');
     if (hidePet) {
       await petClient.send('Runtime.evaluate', { expression: 'setTimeout(() => window.close(), 100)' });
@@ -204,7 +207,7 @@ async function main() {
     assert.equal(application.exitCode, 0, `App exited by signal ${application.signalCode}`);
     await until(() => observers.get(replacement).size === 0);
     console.log(JSON.stringify({ passed: true, packaged: !!process.env.VOICEMEM_DESKTOP_BINARY, asar, dockerStartedOnce: true, reusedWebUi: true,
-      rendererIsolated: true, canvasPetLoaded: true, backchannelTilt: true, petPlaybackAndDisconnect: true, petServiceSwitch: true,
+      rendererIsolated: true, live2dPetLoaded: true, backchannelGesture: true, petPlaybackAndDisconnect: true, petServiceSwitch: true,
       petHiddenSeparately: hidePet, petClosedWithStudio: !hidePet, appExit: true, screenshots: directory }, null, 2));
   } catch (error) {
     console.error(appOutput.slice(-6000));

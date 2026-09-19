@@ -5,8 +5,9 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { observerUrl, resourceAllowed, trustedSender } = require('./pet-policy.cjs');
 
-/** Own one optional pet window; observation never opens a conversation or captures audio. */
-function createPet({ onHidden = () => {} } = {}) {
+/** Own one optional pet window; the App renderer remains responsible for microphone and playback. */
+function createPet({ onHidden = () => {}, onToggleConversation = async () => false,
+  onConversationState = async () => false } = {}) {
   const root = path.join(__dirname, '.pet-runtime');
   const { SIZES, RESIZE_CORNERS, clampScale, scaledSize, resizeFromCorner, selectPose, fitBounds } = require(path.join(root, 'state.cjs'));
   const positionFile = path.join(app.getPath('userData'), 'pet-position.json');
@@ -78,6 +79,14 @@ function createPet({ onHidden = () => {} } = {}) {
     if (!trustedSender(event, window, page)) throw new Error('Pet IPC is restricted to the local pet window.');
     return scale;
   });
+  ipcMain.handle('studio-pet:toggle-conversation', event => {
+    if (!trustedSender(event, window, page)) throw new Error('Pet IPC is restricted to the local pet window.');
+    return onToggleConversation();
+  });
+  ipcMain.handle('studio-pet:conversation-state', event => {
+    if (!trustedSender(event, window, page)) throw new Error('Pet IPC is restricted to the local pet window.');
+    return onConversationState();
+  });
   listen('toggle', toggle);
   listen('collapse', collapse);
   listen('activate', pose => { if (manuallyCollapsed) return; if (['sit', 'lie'].includes(pose)) setMode(pose); else if (pose === undefined && mode === 'dot') setMode('lie'); });
@@ -127,7 +136,7 @@ function createPet({ onHidden = () => {} } = {}) {
     page = url.href;
     const created = new BrowserWindow({
       ...fitBounds(anchor, scaledSize(mode, scale), screen.getDisplayNearestPoint(anchor).workArea),
-      title: '雾铃 · VoiceMem Studio', frame: false, transparent: true, alwaysOnTop: true,
+      title: '白藤 · VoiceMem Studio', frame: false, transparent: true, alwaysOnTop: true,
       skipTaskbar: true, resizable: false, maximizable: false, fullscreenable: false, show: false, hasShadow: false,
       webPreferences: { preload: path.join(__dirname, 'pet-preload.cjs'), session: petSession,
         contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
@@ -152,7 +161,10 @@ function createPet({ onHidden = () => {} } = {}) {
       scale = clampScale(saved.scale);
     } catch (error) { if (error.code !== 'ENOENT') console.error('[desktop-pet] Ignoring invalid saved position.'); }
   }
-  return { open, close, restorePosition, resize, resetSize: () => setScale(1), resetPosition: () => { anchor = home(); layout(); save(); } };
+  return { open, close, restorePosition, resize,
+    setConversationState: active => { if (window && !window.isDestroyed()) window.webContents.send('studio-pet:conversation-state', Boolean(active)); },
+    notifyConversationError: message => { if (window && !window.isDestroyed()) window.webContents.send('studio-pet:conversation-error', message); },
+    resetSize: () => setScale(1), resetPosition: () => { anchor = home(); layout(); save(); } };
 }
 
 module.exports = { createPet };

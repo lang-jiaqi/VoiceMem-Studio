@@ -4,12 +4,8 @@
   const behavior = new AvatarBehaviorController(parameters);
   const lipSync = new AudioLipSync();
   const renderer = new Live2DRenderer(canvas);
-  const actions = [
-    ['Idle', 0], ['Idle', 1], ['Flick', 0], ['FlickDown', 0], ['Idle', 2],
-    ['FlickUp', 0], ['Tap', 0], ['Tap', 1], ['Tap@Body', 0], ['Flick@Body', 0]
-  ];
   let pose = 'lie', active = false, modelError = null;
-  let frame = 0, last = performance.now(), frames = 0, fpsAt = last, fps = 0, modelPath = '';
+  let frame = 0, last = performance.now(), frames = 0, fpsAt = last, fps = 0, modelPath = '', action = '';
 
   async function loadModel(path) {
     modelPath = String(path || ''); modelError = null;
@@ -27,9 +23,10 @@
     if (behavior.state === 'sleeping' && now - last < 100) { frame = requestAnimationFrame(tick); return; }
     const dt = Math.min(.1, Math.max(0, (now - last) / 1000)); last = now;
     behavior.update(dt);
-    const mouthOpen = lipSync.playing ? lipSync.update(dt, now) : .34 + Math.sin(now * .0022) * .035;
+    const mouthOpen = lipSync.playing ? lipSync.update(dt, now) : 0;
     parameters.setLayer('lip-sync', { ParamMouthOpenY: mouthOpen }, { priority: 100, transitionMs: 16 });
-    const values = parameters.update(dt); renderer.setParameters(values); renderer.update(dt * 1000);
+    const values = parameters.update(dt); renderer.setParameters(values);
+    renderer.setArmAccents(behavior.armAccents); renderer.update(dt * 1000);
     frames++; if (now - fpsAt >= 1000) { fps = frames * 1000 / (now - fpsAt); frames = 0; fpsAt = now; }
     frame = requestAnimationFrame(tick);
   }
@@ -40,7 +37,7 @@
     await renderer.show(pose); last = performance.now(); cancelAnimationFrame(frame); frame = requestAnimationFrame(tick);
     window.dispatchEvent(new Event('pet-ready'));
   }
-  function hide() { active = false; cancelAnimationFrame(frame); lipSync.stop(); renderer.hide(); }
+  function hide() { active = false; cancelAnimationFrame(frame); lipSync.stop(); behavior.setPointerGaze(null, null); renderer.hide(); }
   const avatar = {
     loadModel,
     setState(state) { behavior.setState(state); },
@@ -48,18 +45,11 @@
     setSpeaking(value) { lipSync.setPlaying(value); behavior.speaking = Boolean(value); if (value) behavior.setState('speaking'); },
     feedAudioLevel(rms, timestamp) { lipSync.feed(rms, timestamp); },
     playMotion(group, index = 0) { return renderer.playMotion(group, index); },
-    playAction(number) {
-      const motion = actions[Number(number) - 1];
-      return motion ? renderer.playMotion(...motion) : false;
-    },
+    express(name) { const accepted = renderer.playExpression(name); if (accepted) action = name; return accepted; },
+    setPointerGaze(x, y) { behavior.setPointerGaze(x, y); },
     triggerGesture(name, options) {
       const accepted = behavior.triggerGesture(name, options);
-      if (accepted) {
-        const motions = { backchannel: ['Tap', Math.random() < .5 ? 0 : 1], nod: ['Tap@Body', 0],
-          'tilt-smile': ['Tap', Math.random() < .5 ? 0 : 1] };
-        const motion = motions[String(name).toLowerCase()];
-        if (motion) renderer.playMotion?.(...motion);
-      }
+      if (accepted) action = String(name).toLowerCase();
       return accepted;
     },
     sleep() { behavior.setState('sleeping'); window.pet?.activate?.('lie'); },
@@ -67,11 +57,11 @@
     show, hide,
     hitTest(x, y) { return renderer.hitTest(x, y); },
     getStatus() { return { ...renderer.getStatus(), pose, active, state: behavior.state, emotion: behavior.emotion,
-      gesture: behavior.gesture?.name || null, speaking: lipSync.playing, rms: lipSync.rms,
+      action, gesture: behavior.gesture?.name || null, speaking: lipSync.playing, rms: lipSync.rms,
       mouthOpen: lipSync.value, fps: Math.round(fps), modelPath, modelError, parameters: parameters.output }; },
     destroy() { hide(); renderer.destroy(); }
   };
   window.avatar = avatar;
-  const requested = new URLSearchParams(location.search).get('model') || 'assets/live2d/hiyori/hiyori_pro_t11.model3.json';
+  const requested = new URLSearchParams(location.search).get('model') || 'assets/live2d/rattan/rattan.model3.json';
   setTimeout(() => loadModel(requested), 100);
 })();

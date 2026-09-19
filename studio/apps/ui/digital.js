@@ -13,6 +13,25 @@ let current = conversations[0], replyMessage = null;
 const state = {get messages(){return current.messages;},busy:false,listening:false,memory:false};
 let toastTimer, typeTimer, markTimer;
 const reduced = VMUI.reduced;
+const backgroundVideo = $('bgVideo');
+const backgroundMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+function syncBackgroundPlayback(){
+  if(document.hidden || state.memory || backgroundMotion.matches){
+    backgroundVideo.pause();
+    backgroundVideo.classList.remove('playing');
+    return;
+  }
+  const attempt = backgroundVideo.play();
+  attempt?.catch(() => backgroundVideo.classList.remove('playing'));
+}
+backgroundVideo.addEventListener('playing', () => {
+  if(document.hidden || state.memory || backgroundMotion.matches){backgroundVideo.pause();return;}
+  backgroundVideo.classList.add('playing');
+});
+backgroundVideo.addEventListener('pause', () => backgroundVideo.classList.remove('playing'));
+backgroundVideo.addEventListener('error', () => backgroundVideo.classList.remove('playing'));
+backgroundMotion.addEventListener('change', syncBackgroundPlayback);
 
 function renderRail(){
   $('pinList').replaceChildren();$('chatList').replaceChildren();
@@ -226,6 +245,7 @@ function tick(now){
 }
 function setMemory(on){
   state.memory = on;
+  syncBackgroundPlayback();
   document.querySelector('.log').inert=on;
   $('memoryIn').inert=!on;
   document.body.classList.toggle('memory-on', on);
@@ -276,7 +296,7 @@ addEventListener('resize', resizeInk);
 const voiceInput=VMStudio.create({
   onEvent: handleStudio,
   onPhase(value){document.body.classList.toggle('talking', value === 'speaking');},
-  onState(on){state.listening=on;document.body.classList.toggle('listening',on);$('micBtn').setAttribute('aria-label',on?'停止说话':'开始说话');$('micBtn').setAttribute('aria-pressed',String(on));$('startTalk').textContent=on?'结束对话':'开始对话';$('startTalk').setAttribute('aria-pressed',String(on));},
+  onState(on){state.listening=on;document.body.classList.toggle('listening',on);$('micBtn').setAttribute('aria-label',on?'停止说话':'开始说话');$('micBtn').setAttribute('aria-pressed',String(on));$('startTalk').textContent=on?'结束对话':'开始对话';$('startTalk').setAttribute('aria-pressed',String(on));window.studioModelServices?.reportConversationState(on);},
   onInterim(text){$('said').classList.add('on');$('said').textContent=text;$('say').value=text;syncSend();},
   onFinal:send
 });
@@ -287,7 +307,7 @@ addEventListener('click', e => {
     setRail(false);
 }, true);
 
-renderRail(); renderLog(); syncSend(); seedBlots(); resizeInk();
+renderRail(); renderLog(); syncSend(); seedBlots(); resizeInk(); syncBackgroundPlayback();
 if(innerWidth <= 1024){document.body.classList.add('rail-collapsed');setRail(false);}
 
 window.addEventListener('memory-domain-select',e=>{
@@ -298,9 +318,9 @@ window.addEventListener('memory-domain-select',e=>{
 });
 document.querySelector('.switch').addEventListener('keydown',e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();setMemory(!state.memory);$(state.memory?'tabMem':'tabLog').focus();}});
 addEventListener('keydown',e=>{if(e.key==='Escape'){setDrawer(false);setRail(innerWidth>1024 && !document.body.classList.contains('rail-collapsed'));voiceInput.cancel();}});
-document.addEventListener('visibilitychange',()=>{cancelAnimationFrame(raf);raf=0;lastT=0;if(!document.hidden && ink!==inkTarget)raf=requestAnimationFrame(tick);});
-addEventListener('pageshow',e=>{if(e.persisted){selectConversation(current);resizeInk();if(ink!==inkTarget&&!raf)raf=requestAnimationFrame(tick);}});
+document.addEventListener('visibilitychange',()=>{syncBackgroundPlayback();cancelAnimationFrame(raf);raf=0;lastT=0;if(!document.hidden && ink!==inkTarget)raf=requestAnimationFrame(tick);});
+addEventListener('pageshow',e=>{syncBackgroundPlayback();if(e.persisted){selectConversation(current);resizeInk();if(ink!==inkTarget&&!raf)raf=requestAnimationFrame(tick);}});
 document.addEventListener('settings-open',()=>voiceInput.cancel());
-addEventListener('pagehide',()=>{cancelAnimationFrame(raf);clearTimeout(typeTimer);clearTimeout(markTimer);clearTimeout(toastTimer);});
+addEventListener('pagehide',()=>{backgroundVideo.pause();cancelAnimationFrame(raf);clearTimeout(typeTimer);clearTimeout(markTimer);clearTimeout(toastTimer);});
 
 })();
