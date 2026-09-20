@@ -31,17 +31,27 @@ class DeploymentTests(unittest.TestCase):
         rules = (ROOT / '.dockerignore').read_text().splitlines()
         self.assertIn('**', rules)
         for rule in ('**/.env', '**/.env.*', '**/.venv*', 'prompt/logs',
-                     'results', 'voicemem_memoryspace', 'studio/models', 'models'):
+                     'results', 'voicemem_memoryspace', 'studio/models',
+                     'studio/tools/**', 'studio/docs/**', 'studio/pet', 'models'):
             self.assertIn(rule, rules)
-        dockerfile = (ROOT / 'docker/Dockerfile.cuda').read_text()
+        dockerfile = (ROOT / 'studio/deploy/Dockerfile.cuda').read_text()
         self.assertNotIn('COPY . .', dockerfile)
         self.assertNotIn('COPY .env', dockerfile)
         self.assertIn('USER studio', dockerfile)
-        self.assertIn('python docker/smoke_check.py', dockerfile)
+        self.assertIn('python studio/deploy/smoke_check.py', dockerfile)
         self.assertIn('ln -s /home/studio/.cache/studio cache', dockerfile)
+        self.assertNotIn('COPY voice/', dockerfile)
+        self.assertIn('!studio/resources/voice/noctelle_ref_short.wav', rules)
+        self.assertIn('studio/resources/**', rules)
+        self.assertIn('dockerfile: studio/deploy/Dockerfile.cuda',
+                      (ROOT / 'compose.yaml').read_text())
+        self.assertIn('COPY studio/ ./studio/', dockerfile)
+        self.assertIn('python studio/deploy/smoke_check.py', dockerfile)
+        self.assertIn('Path(__file__).resolve().parents[2]',
+                      (ROOT / 'studio/deploy/smoke_check.py').read_text())
 
     def test_image_uses_pinned_breeze_source_and_shared_studio_entry(self):
-        text = (ROOT / 'docker/Dockerfile.cuda').read_text()
+        text = (ROOT / 'studio/deploy/Dockerfile.cuda').read_text()
         self.assertRegex(text, r'ARG BREEZE_REV=[0-9a-f]{40}\n')
         self.assertIn('torch==2.8.0', text)
         self.assertIn("'.[studio-cuda]'", text)
@@ -52,11 +62,11 @@ class DeploymentTests(unittest.TestCase):
         import tomllib
         config = tomllib.loads((ROOT / 'pyproject.toml').read_text())
         cuda = config['project']['optional-dependencies']['studio-cuda']
-        dockerfile = (ROOT / 'docker/Dockerfile.cuda').read_text()
+        dockerfile = (ROOT / 'studio/deploy/Dockerfile.cuda').read_text()
         for requirement in ('torch==2.8.0', 'torchaudio==2.8.0', 'torchvision==0.23.0'):
             self.assertIn(requirement, cuda)
             self.assertIn(requirement, dockerfile)
-        smoke = (ROOT / 'docker/smoke_check.py').read_text()
+        smoke = (ROOT / 'studio/deploy/smoke_check.py').read_text()
         self.assertIn("torch.version.cuda != '12.8'", smoke)
         self.assertIn("metadata.version(name)", smoke)
         self.assertNotIn('12.4', smoke)
@@ -65,10 +75,10 @@ class DeploymentTests(unittest.TestCase):
     def test_compose_is_valid_and_preserves_gpu_and_data_boundaries(self):
         env = {key: value for key, value in os.environ.items()
                if not key.startswith(('COMPOSE_', 'STUDIO_'))}
-        env['STUDIO_ENV_FILE'] = str(ROOT / '.env.example')
+        env['STUDIO_ENV_FILE'] = str(ROOT / 'studio/.env.example')
         env.pop('TZ', None)
         result = subprocess.run(
-            ['docker', 'compose', '--env-file', str(ROOT / '.env.example'),
+            ['docker', 'compose', '--env-file', str(ROOT / 'studio/.env.example'),
              '-f', str(ROOT / 'compose.yaml'), 'config', '--format', 'json'],
             cwd=ROOT, env=env, text=True, capture_output=True, check=True)
         config = json.loads(result.stdout)
@@ -87,7 +97,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(len(settings), 2)
         self.assertTrue(all(volume['read_only'] for volume in settings))
         self.assertEqual({volume['target'] for volume in settings}, {
-            '/opt/voicemem-studio/studio/harness', '/opt/voicemem-studio/prompt/tts.json'})
+            '/opt/voicemem-studio/studio/harness', '/opt/voicemem-studio/studio/prompt/tts.json'})
         self.assertTrue(service['init'])
         self.assertNotIn('privileged', service)
 
@@ -101,8 +111,12 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('原生 Apple Silicon', result.stderr)
 
     def test_native_mlx_setup_installs_upstream_pet_dependencies(self):
-        script = (ROOT / 'scripts/setup_studio_mlx.sh').read_text()
-        self.assertIn('npm ci --prefix "$studio_root/pet" --include=dev', script)
+        wrapper = (ROOT / 'scripts/setup_studio_mlx.sh').read_text()
+        script = (ROOT / 'studio/scripts/setup_mlx.sh').read_text()
+        self.assertIn('studio/scripts/setup_mlx.sh', wrapper)
+        self.assertIn('npm ci --prefix "$pet_root" --include=dev', script)
+        self.assertIn('studio/pet', script)
+        self.assertIn('[[ ! -e .env && -f studio/.env.example ]]', script)
 
     def test_headless_mode_never_starts_a_desktop_process(self):
         from unittest.mock import patch

@@ -74,7 +74,7 @@ class Reply:
         ready = asyncio.Event()
         display = asyncio.create_task(self._send_reply_display(
             pending, send, ready, timeline.output_id, context_space, memory_vm))
-        from voicemem.prompt_trace import prompt_scope
+        from studio.core.utils.logging_utils.prompt_trace import prompt_scope
         try:
             with prompt_scope(output_id=timeline.output_id, session=context_session,
                               space=context_space, early=bool(getattr(pending, "early_ok", False))):

@@ -10,15 +10,12 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from studio.web.pet_bridge import PetHub, PetSupervisor, TeeSocket, loopback_ws_url
+from studio.core.voicemem import shared_embed_model
 
 from voicemem.leftbrain.local_e5_embedder import LocalE5Embedder, shared_e5  # noqa: F401
 from voicemem.leftbrain.local_embedder import (  # noqa: F401
     LocalEmbedder, resolve, resolve_path, shared_model,
 )
-
-def shared_embed_model():
-    """Return the local embedding model shared with memory retrieval."""
-    return shared_model(resolve_path(resolve()))
 from voicemem.llm_config import resolve_model
 
 HERE = Path(__file__).resolve().parent

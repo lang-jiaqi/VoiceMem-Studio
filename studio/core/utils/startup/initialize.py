@@ -2,7 +2,7 @@
 from importlib import metadata
 import platform
 import sys
-from studio.paths import ROOT, MODELS
+from studio.paths import ROOT, MODELS, STUDIO, VOICE
 from studio.core.utils.models.initialize import models
 
 
@@ -80,17 +80,19 @@ def inspect(args, stage="all"):
             errors.append(f'依赖版本不匹配：{name}={installed}，需要 {expected}')
         elif args.verbose:
             print(f'[startup] {name} {installed}', flush=True)
-    assets = ['studio/web/voicemem.html', 'studio/web/index.html',
-              'studio/web/mic-capture-worklet.js', 'studio/web/pcm-player-worklet.js',
-              'studio/web/images/background.webp', 'prompt/tts.json']
+    from studio.prompt_config import prompt_directory
+    assets = [(f'studio/web/{name}', STUDIO / 'web' / name) for name in (
+        'voicemem.html', 'index.html', 'mic-capture-worklet.js',
+        'pcm-player-worklet.js', 'images/background.webp')]
+    assets.append(('studio/prompt/tts.json', prompt_directory() / 'tts.json'))
     if args.mode == 'llm_tts' and stage != 'memory':
-        assets += ['voice/noctelle_ref_short.wav', 'voice/noctelle_ref_short.txt']
-    for relative in assets:
-        path = ROOT / relative
+        assets += [(f'voice/{name}', VOICE / name) for name in (
+            'noctelle_ref_short.wav', 'noctelle_ref_short.txt')]
+    for relative, path in assets:
         if not path.is_file() or path.stat().st_size == 0:
             errors.append(f'缺少资源：{relative}（不会生成替代参考录音）')
     try:
-        from voicemem.prompt_config import tts_prompts
+        from studio.prompt_config import tts_prompts
         tts_prompts()
         from studio.harness.persona.policy import SYSTEM_PROMPT
         from studio.harness.speaking_style.policy import PROMPT
@@ -127,7 +129,7 @@ def inspect(args, stage="all"):
         if not ready and not reusable:
             print('[startup]   ' + '；'.join(model.problems(MODELS)), flush=True)
     if args.backchannel:
-        count = sum(1 for _ in (ROOT / 'voice/backchannel').glob('*.wav'))
+        count = sum(1 for _ in (VOICE / 'backchannel').glob('*.wav'))
         print(f'[startup] 已审核附和录音：{count} 段' + ('；缺失，只保留静音等待' if count == 0 else ''), flush=True)
     for error in errors:
         print(f'[startup] 错误：{error}', flush=True)

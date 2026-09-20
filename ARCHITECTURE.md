@@ -111,12 +111,16 @@ moving model inference onto the event loop. GPU and Torch schedulers remain
 process-scoped. Speculative generation captures its memory instance and space
 before scheduling; cancellation also reaps pending route work.
 
-Interactive startup without `--llm` asks once for DeepSeek, Qwen, OpenAI, or an
-MLX-local reply model before loading inference. Remote selections are shared by
-VoiceMem memory work and visible Studio replies; the local reply option uses
-DeepSeek for memory work. Explicit `--llm`, `--check`,
-realtime mode, and non-interactive commands never prompt. Non-interactive startup
-defaults to DeepSeek reply, Breeze TTS, and the `studio-zh` Memory Space.
+The App's first local launch chooses the VoiceMem memory API, prepares the
+memory-stage models, then chooses the Studio Agent reply API. It passes separate
+`--memory-llm` and `--llm` values into one Studio backend. The direct Python CLI
+retains its simpler compatibility behavior: an interactive launch without
+`--llm` asks once for DeepSeek, Qwen, OpenAI, or an MLX-local reply model;
+remote selections are also used for VoiceMem memory work, while local replies
+default memory work to DeepSeek. Explicit `--memory-llm` and `--llm` select
+the roles separately. `--check`, explicit provider flags, realtime mode, and
+non-interactive commands do not prompt. Non-interactive startup defaults to
+DeepSeek reply, Breeze TTS, and the `studio-zh` Memory Space.
 An explicit `--space` selects another existing or new space; stored language and
 memory data are preserved when the default selection changes.
 Qwen is selectable with `--llm qwen`: `qwen3.6-flash` uses the international
@@ -129,8 +133,9 @@ and weights before opening memory.
 Repository `.env` files supply credentials and deployment options without overriding
 exported environment variables. Both platforms use `python -m studio` after
 activating their separately installed environment; `python web/run.py` remains
-the compatibility entry point. Optional `scripts/run_studio_cuda.sh` and
-`scripts/run_studio_mlx.sh` select the corresponding interpreter and backend,
+the compatibility entry point. `studio/scripts/run_cuda.sh` and
+`studio/scripts/run_mlx.sh` select the corresponding interpreter and backend;
+the root `scripts/run_studio_*.sh` paths are compatibility wrappers. They
 enable verbose terminal logging, and forward arguments to that same entry point.
 The backend defaults to CUDA on Linux and MLX on macOS, with CUDA devices
 defaulting to `cuda:0`. Environment variables and explicit CLI flags remain
@@ -150,7 +155,8 @@ model classes and factories live in `core/utils/<component>/`.
 
 ### Deployment boundary
 
-Linux/NVIDIA deployment uses `compose.yaml` and `docker/Dockerfile.cuda` to run
+Linux/NVIDIA deployment uses the root compatibility `compose.yaml` and
+`studio/deploy/Dockerfile.cuda` to run
 the same Studio entry point and in-process Breeze provider. The image pins the
 independent Breeze source revision and CUDA dependency profile. The default
 image tag is `voicemem-studio:torch2.8-cu128`, with Torch/TorchAudio 2.8.0,
@@ -170,13 +176,15 @@ explicitly binds `0.0.0.0` inside its isolated network namespace so Compose can
 publish the service on the host's loopback address.
 
 Apple Silicon retains native MLX deployment through the existing launch script;
-`scripts/setup_studio_mlx.sh` prepares the matching environment without replacing
+`studio/scripts/setup_mlx.sh` prepares the matching environment without replacing
 an existing environment or credential file. No Metal-in-Linux-container path or
 host inference proxy is added. Neither deployment changes memory semantics,
 provider contracts, speech segmentation or model scheduling.
-`npm start` is the canonical source entry and runs setup only when the environment
-marker is absent or the dependency definition changed. `scripts/start_studio_app.sh`
-is a compatibility alias. The lower-level setup and backend launchers remain
+`npm start` is the canonical source entry and runs local Python setup after the
+VoiceMem API choice, only when the environment marker is absent or the dependency
+definition changed. `studio/scripts/start_app.sh` owns the Mac App shortcut;
+`scripts/start_studio_app.sh` and `scripts/setup_studio_mlx.sh` are compatibility wrappers.
+The lower-level backend launchers remain
 available independently.
 The native setup also installs the locked desktop-pet dependencies. Headless
 containers disable spawning Electron through `STUDIO_DESKTOP_PET=0` while
@@ -185,11 +193,25 @@ never auto-spawns the desktop pet even when the environment flag is enabled.
 Native macOS launches keep the optional automatic pet lifecycle by default.
 
 `studio/core/voicemem.py` is the integration boundary for creating VoiceMem and
-opening its native stream. The current deployment is one process: memory is
+opening its native stream; Studio perception obtains VoiceMem's process-shared
+embedding model through the same bridge rather than importing the Web transport.
+The current deployment is one process: memory is
 initialized before Studio starts accepting connections. There is no memory RPC
 server or second startup command. Streaming ASR, final ASR, VAD, EOT, and their
 worker/epoch guards remain in VoiceMem because the memory package also uses them.
 `studio/core/utils/asr/` initializes shared recognizers from Studio weight paths.
+`studio/paths.py` owns Python resource lookup: reviewed voice assets are in
+`studio/resources/voice/` and pet assets are in `studio/pet/`; legacy repository
+siblings remain a compatibility fallback. The repository root still owns runtime Memory Spaces,
+results, and legacy model reuse, while weights default to `studio/models/`.
+The startup loader reads `.env` before importing `studio.paths`, so optional
+model and voice directory overrides are effective on a fresh process.
+VoiceMem-owned prompts retain `voicemem.prompt_config` as their path authority;
+Studio startup inspects that effective prompt directory rather than assuming
+the repository root. The desktop pet preparation follows the same Studio-first,
+legacy-second source rule. The App-managed Python backend requires the package
+entry point and root package metadata, while Docker startup separately requires
+Compose; local MLX/WSL startup is not coupled to a Studio Compose file.
 
 `studio/web/` owns browser assets, HTTP/WebSocket transport, and the pet bridge.
 `studio/apps/` owns the Windows/macOS Electron desktop client and pet. Linux is
@@ -238,28 +260,32 @@ origin and require user approval; remote connections require HTTPS, while HTTP
 is accepted only on loopback. Settings and browser state live in the desktop
 application-data directory, not in the backend's memory or credential files.
 
-The source desktop entry (`npm start`) first prepares a missing or stale Apple
-Silicon Python environment, then verifies its locked Electron, PixiJS,
+The source desktop entry (`npm start`) first verifies its locked Electron, PixiJS,
 and Pixi Live2D files. Missing files trigger `npm ci --include=dev`; a complete
 installation performs no package-manager or network work. The managed install
 explicitly enables lifecycle scripts so a user-level npm `ignore-scripts`
 setting cannot leave Electron without its platform binary. It then owns an optional local backend lifecycle.
 The separate `npm run start:remote` entry performs the same locked client-resource
 preparation but removes managed-backend state before Electron starts. It opens
-the connection configuration immediately, without first waiting on the default
-loopback service and without checking local Python, WSL, accelerators,
+the connection configuration with an empty, required address, without first
+waiting on the default loopback service and without checking local Python, WSL, accelerators,
 credentials, or inference models. This is the source entry for Intel Macs,
 clients without a compatible local GPU, and already running local or remote services.
-Before Electron starts it asks once for a provider and reads one matching API
-key with masked terminal input when no encrypted App model configuration exists.
-Later launches reuse the App configuration without another terminal prompt.
-Remote selections and their key are shared by
-VoiceMem memory work and visible Studio replies. The local MLX reply selection
-uses the same single prompt for the DeepSeek key required by memory work and
-conversation titles. A
-short-lived preparation process checks and acquires the shared memory,
+Without encrypted App model configuration, local startup first selects the
+VoiceMem memory provider and reads its key through masked terminal input, then
+prepares the missing or stale Apple Silicon Python environment. A short-lived
+preparation process checks and acquires the shared memory,
 perception, and transcription models. Keys are inherited only by preparation,
-Electron, and the backend process, never command arguments. After the first
+Electron, and the backend process, never command arguments. After preparation,
+the user selects the Studio Agent's dialogue-model API; a different provider
+requires its own masked key, while the same provider reuses the memory key.
+The last menu option clears managed state and opens only the connection page;
+the address is required before the style selector. This is not a second reply
+service: VoiceMem's selected API is used for memory work, while Studio owns
+the complete agent (memory integration, ASR, dialogue, TTS, and UI). The `start:remote` shortcut
+avoids even the memory preparation. VoiceMem initialization remains inside the
+eventual Studio backend, not a second service. Later managed launches reuse
+the App configuration without another terminal prompt. After the first
 backend reaches readiness, Electron persists them only through OS-backed
 `safeStorage`; the connection settings file remains secret-free.
 Electron starts `.venv/bin/python` with the MLX backend on macOS, or invokes
@@ -291,7 +317,7 @@ runtime and pet display resources, not inference weights, Python, recordings,
 credentials or memory data.
 
 The desktop app also owns one optional transparent pet window in the same
-Electron application. Packaging selects the existing `pet/` renderer, animation,
+Electron application. Packaging selects the `studio/pet/` renderer, animation,
 observer, rattan/white-vine Cubism model, expressions and Pixi runtime without forking them or
 bundling another Electron. The generated HTML connection CSP is adapted for the
 desktop package, and the pet session permits the Cubism Core source plus the
@@ -319,9 +345,13 @@ with its own saved position and scale. Native users can disable the backend's
 automatic pet with the existing `STUDIO_DESKTOP_PET=0` to avoid duplicate windows;
 containers already do this. The standalone launch and Web playback contracts remain unchanged.
 
-Original `web/run.py`
-and moved provider modules remain thin compatibility entry points; executable
-Studio implementations have one owner under `studio/`.
+Original `web/run.py` and moved provider modules remain thin compatibility
+entry points; executable Studio implementations have one owner under `studio/`.
+The old top-level `harness/` forwarding package is removed: Studio policies
+are imported through `studio.harness` only. Studio-specific offline speech/TTS
+development scripts live in `studio/tools/`; they are never part of startup.
+The root `web/` compatibility launcher stays separate from VoiceMem's own Web
+demo and is not a directory to copy wholesale during migration.
 
 ### Memory plane
 
@@ -357,11 +387,11 @@ Owned by:
 
 - `studio/harness/`: Studio Web persona, context directives, and dialogue
   controls;
-- `prompt/llm_*.md` and `prompt/llm_context.json`: package/default LLM prompt
+- `studio/prompt/llm_*.md` and `studio/prompt/llm_context.json`: package/default LLM prompt
   inputs;
-- `prompt/tts.json`: TTS tone and backchannel synthesis configuration;
-- `prompt_config.py`: validated prompt loading and caching;
-- `prompt_trace.py`: asynchronous request tracing;
+- `studio/prompt/tts.json`: TTS tone and backchannel synthesis configuration;
+- `studio/prompt_config.py`: validated Studio prompt loading and caching;
+- `studio/core/utils/logging_utils/prompt_trace.py`: asynchronous request tracing;
 - `studio/core/utils/logging_utils/component.py`: runtime log routing;
 - `evals/`: Studio behavioral and latency regressions.
 
@@ -725,9 +755,15 @@ compatibility.
 ### Prompt ownership
 
 The Studio Web system prompt and dialogue context live in `studio/harness/`.
-Package/default prompt files live in `prompt/llm_*.md` and
-`prompt/llm_context.json`. TTS tone configuration is loaded from
-`prompt/tts.json`.
+Legacy reply/default prompt files live in `studio/prompt/llm_*.md` and
+`studio/prompt/llm_context.json`. TTS tone configuration is loaded from
+`studio/prompt/tts.json`. The installed Studio package owns these files,
+its parser, legacy reply persona and request trace implementation;
+`voicemem.prompt_config`, `voicemem.persona` and `voicemem.prompt_trace`
+are compatibility aliases in this checkout,
+not a dependency for Studio. `STUDIO_PROMPT_DIR` can replace the complete
+configuration directory; the older `VOICEMEM_PROMPT_DIR` remains a fallback.
+Request logs remain external runtime data under the ignored root `prompt/logs/`.
 
 Prompt configuration is parsed and cached by `prompt_config.py`; malformed or
 incomplete configuration fails validation rather than changing behavior
@@ -1028,7 +1064,7 @@ network-provider performance require the corresponding native environment.
 | Three-way reply routing | `studio/core/utils/reply_modes/` and Web composition root |
 | TTS provider | `studio/core/utils/tts/providers.py` or provider module, then config |
 | GPU scheduling | `voicemem/utils/gpu_loop.py` |
-| Prompt parsing | `voicemem/prompt_config.py` and `prompt/` schema |
+| Studio prompt parsing | `studio/prompt_config.py` and `studio/prompt/` schema |
 | Prompt tracing | `voicemem/prompt_trace.py` |
 | Early generation | `ReplySink`, EOT callback, and cancellation path |
 | Capture echo control | Browser mic worklet and server echo guard |

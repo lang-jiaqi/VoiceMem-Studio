@@ -16,7 +16,7 @@ import uuid
 import numpy as np
 
 from studio.paths import MODELS, ROOT
-from voicemem.prompt_config import tts_prompts
+from studio.prompt_config import tts_prompts
 
 
 def source_directory() -> Path:
@@ -155,7 +155,7 @@ class BreezeCUDATTS:
             return
         if self._closed:
             raise RuntimeError('Breeze CUDA provider is closed')
-        from voicemem.prompt_trace import record_request
+        from studio.core.utils.logging_utils.prompt_trace import record_request
         record_request('tts', 'breeze_cuda', {
             'model': self.model_name, 'text': text,
             'instruct': instruction or self.instruction,

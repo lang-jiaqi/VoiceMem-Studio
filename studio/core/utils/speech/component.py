@@ -1,12 +1,12 @@
 """Studio speech implementation."""
 import asyncio
 from studio.core.utils.dialogue.component import backchannel_policy_summary
-from studio.web import transport as utils
 
 class Speech:
     def _backchannel_tts(self):
         if self.MODE == "realtime":
-            rt = str(getattr(utils, "RT_VOICE", "") or "")
+            from studio.core.utils.tts.providers import TTS_VOICE
+            rt = str(TTS_VOICE or "")
             if rt not in self._TTS_SHARED_VOICES:
                 print(f"[backchannel] Realtime 音色 {rt!r} 在 TTS API 里没有对应的，"
                       f"合出来会是另一个人的声音 → 这条路关闭附和。"

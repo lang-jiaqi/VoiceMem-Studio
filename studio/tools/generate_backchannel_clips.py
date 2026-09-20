@@ -11,7 +11,7 @@ import time
 import wave
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 
@@ -21,15 +21,16 @@ async def generate(output: Path, ref_audio: Path, *, tokens=None,
     if not mx.metal.is_available():
         raise RuntimeError("Breeze backchannel generation requires Apple Silicon Metal")
 
-    from harness.turn_taking.backchannel import (
+    from studio.core.utils.turn_taking.backchannel import (
         BackchannelVoice,
         ZH_AFFIRMATIVE_TOKENS,
         ZH_QUESTION_TOKENS,
         _STYLES,
     )
-    from voicemem.breeze_tts import BreezeMLXTTS
+    from studio.core.utils.tts.component import BreezeMLXTTS
 
-    model = ROOT / "models/tts/Breeze-TTS-2-mlx-4bit"
+    from studio.paths import MODELS
+    model = MODELS / "tts/Breeze-TTS-2-mlx-4bit"
     tts = BreezeMLXTTS(
         model=str(model) if (model / "config.json").is_file() else None,
         ref_audio=str(ref_audio),
@@ -84,10 +85,11 @@ async def generate(output: Path, ref_audio: Path, *, tokens=None,
 
 
 if __name__ == "__main__":
+    from studio.paths import VOICE
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=ROOT / "voice/backchannel")
+    parser.add_argument("--output", type=Path, default=VOICE / "backchannel")
     parser.add_argument("--ref-audio", type=Path,
-                        default=ROOT / "voice/noctelle_ref_short.wav")
+                        default=VOICE / "noctelle_ref_short.wav")
     parser.add_argument("--tokens", nargs="+",
                         help="generate only these acknowledgement tokens")
     parser.add_argument("--styles", nargs="+", type=int,

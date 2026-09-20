@@ -115,7 +115,7 @@ class FinalAsrTests(unittest.IsolatedAsyncioTestCase):
 
 
 class WarmupTests(unittest.TestCase):
-    def test_warmup_decodes_and_respects_disabled_option(self):
+    def test_warmup_decodes_even_with_legacy_disabled_option(self):
         tree = studio_tree()
         fn = next(n for n in tree.body if getattr(n, "name", "") == "_warm_final_asr")
         ns = dict(os=os, time=time)
@@ -128,7 +128,7 @@ class WarmupTests(unittest.TestCase):
         self.assertEqual(calls, [16000])
         with patch.dict(os.environ, {"VOICEMEM_FINAL_ASR": "0"}):
             ns["_warm_final_asr"](vm)
-        self.assertEqual(calls, [16000])
+        self.assertEqual(calls, [16000, 16000])
 
 
 class BpeCacheTests(unittest.TestCase):

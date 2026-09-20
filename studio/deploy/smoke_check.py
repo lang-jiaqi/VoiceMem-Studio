@@ -7,12 +7,12 @@ import tempfile
 
 
 def main():
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(root))
     from studio.core.utils.tts.cuda import source_directory
     from studio.core.utils.cli.component import parse_args
     from studio.core.utils.tts.segmentation import SpeechBuffer
-    from voicemem.prompt_config import tts_prompts
+    from studio.prompt_config import tts_prompts
 
     if sys.version_info[:2] != (3, 12):
         raise RuntimeError('The Studio image requires Python 3.12')
@@ -49,14 +49,15 @@ def main():
     assert all(callable(item) for item in (load_runtime, FastBreezeStreamingRuntime, build_app, VoiceAgent))
     load_warmup_profile(source / 'configs/fast.json')
     tts_prompts()
-    for relative in ('voice/noctelle_ref_short.wav', 'voice/noctelle_ref_short.txt',
+    for relative in ('studio/resources/voice/noctelle_ref_short.wav',
+                     'studio/resources/voice/noctelle_ref_short.txt',
                      'studio/web/voicemem.html', 'studio/web/index.html',
                      'studio/web/images/background.webp', 'studio/web/pcm-player-worklet.js',
                      'studio/web/mic-capture-worklet.js'):
         path = root / relative
         if not path.is_file() or not path.stat().st_size:
             raise RuntimeError(f'Missing runtime asset: {relative}')
-    if not list((root / 'voice/backchannel').glob('*.wav')):
+    if not list((root / 'studio/resources/voice/backchannel').glob('*.wav')):
         raise RuntimeError('Missing reviewed backchannel clips')
     buffer = SpeechBuffer()
     buffer.append('你好，我们完整地说完这句话。', 0.0)

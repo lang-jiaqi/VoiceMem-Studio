@@ -16,10 +16,10 @@ import sys
 import tempfile
 import time
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 TARGET = ROOT / "voicemem_memoryspace/demo-zh"
-FIXTURE = ROOT / "evals/fixtures/demo_zh_clean10.json"
+FIXTURE = ROOT / "studio/tools/fixtures/demo_zh_clean10.json"
 STAGING = ROOT / "results/seed-staging"
 
 

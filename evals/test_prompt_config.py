@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest.mock import patch
 import httpx
 from voicemem import persona
-from voicemem.prompt_config import tts_prompts, context_prompts
+from studio.prompt_config import tts_prompts, context_prompts
 from voicemem.reply import deepseek_reply
 from voicemem.breeze_tts import BreezeMLXTTS
 from studio.core.utils.turn_taking.initialize import backchannel
@@ -76,9 +76,10 @@ class PromptConfigTests(unittest.TestCase):
         self.directory = Path(self.tmp.name)
         for name in ('llm_system_zh.md', 'llm_system_en.md', 'llm_tone_rule_zh.md',
                      'llm_tone_rule_en.md', 'llm_context.json', 'tts.json'):
-            shutil.copyfile(ROOT / 'prompt' / name, self.directory / name)
+            shutil.copyfile(ROOT / 'studio' / 'prompt' / name, self.directory / name)
         self.env = {**os.environ, 'VOICEMEM_PROMPT_DIR': str(self.directory),
                     'TEST_REPO': str(ROOT), 'PYTHONPATH': str(ROOT)}
+        self.env.pop('STUDIO_PROMPT_DIR', None)
         for key in ('VOICEMEM_BREEZE_REF_AUDIO', 'VOICEMEM_BREEZE_REF_TEXT',
                     'VOICEMEM_BREEZE_INSTRUCTION', 'VOICEMEM_SPEAK_BASE',
                     'VOICEMEM_SYSTEM_PROMPT', 'VOICEMEM_DIALOGUE_CONTROLS'):
@@ -160,26 +161,42 @@ class PromptConfigTests(unittest.TestCase):
     def test_templates_are_declared_as_wheel_data_and_not_ignored(self):
         import tomllib
         config = tomllib.loads((ROOT / 'pyproject.toml').read_text())
-        files = config['tool']['setuptools']['data-files']['prompt']
-        self.assertEqual(len(files), 6)
+        patterns = config['tool']['setuptools']['package-data']['studio']
+        files = [
+            'llm_system_zh.md', 'llm_system_en.md', 'llm_tone_rule_zh.md',
+            'llm_tone_rule_en.md', 'llm_context.json', 'tts.json',
+        ]
         for name in files:
-            self.assertTrue((ROOT / name).is_file())
-            ignored = subprocess.run(['git', 'check-ignore', name], cwd=ROOT,
+            relative = Path('studio/prompt') / name
+            self.assertTrue(any(relative.relative_to('studio').match(p) for p in patterns), name)
+            self.assertTrue((ROOT / relative).is_file())
+            ignored = subprocess.run(['git', 'check-ignore', str(relative)], cwd=ROOT,
                                      capture_output=True, text=True)
             self.assertEqual(ignored.returncode, 1, name)
 
     def test_default_persona_additions_preserve_the_existing_core(self):
-        zh = (ROOT / 'prompt/llm_system_zh.md').read_text(encoding='utf-8')
+        zh = (ROOT / 'studio/prompt/llm_system_zh.md').read_text(encoding='utf-8')
         for addition in ('超级智能', '不好为人师', '全心全意', '最可惜', '默默支持'):
             self.assertIn(addition, zh)
         for existing in ('【接住眼前这句话】', '【说得像聊天】', '【让记忆改变回应】',
                          '【清楚自己的存在方式】'):
             self.assertIn(existing, zh)
 
-        en = (ROOT / 'prompt/llm_system_en.md').read_text(encoding='utf-8')
+        en = (ROOT / 'studio/prompt/llm_system_en.md').read_text(encoding='utf-8')
         for addition in ('superintelligent', 'not inclined to lecture',
                          'wholeheartedly', 'most regrettable', 'quiet support'):
             self.assertIn(addition, en)
+
+    def test_studio_prompt_override_takes_precedence_over_legacy_name(self):
+        self.env['STUDIO_PROMPT_DIR'] = str(self.directory)
+        self.env['VOICEMEM_PROMPT_DIR'] = str(self.directory / 'missing')
+        result = self.run_probe()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_legacy_prompt_module_is_a_compatibility_alias(self):
+        import studio.prompt_config as studio_config
+        import voicemem.prompt_config as legacy_config
+        self.assertIs(legacy_config, studio_config)
 
 
 if __name__ == '__main__':

@@ -87,6 +87,18 @@ async function validateProject(directory) {
   return root;
 }
 
+async function validateBackendProject(directory) {
+  if (!directory || !path.isAbsolute(directory)) throw new Error('请选择包含 Studio 后端的绝对路径。');
+  const root = await fs.realpath(directory);
+  for (const name of ['pyproject.toml', 'studio/__main__.py']) {
+    try {
+      if ((await fs.stat(path.join(root, name))).isFile()) continue;
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    throw new Error(`所选目录缺少 ${name}，无法启动 Studio Python 后端。`);
+  }
+  return root;
+}
+
 function command(file, args, { cwd, signal, timeoutMs = 60000, spawnImpl = spawn } = {}) {
   return new Promise((resolve, reject) => {
     const control = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(timeoutMs)]);
@@ -242,7 +254,7 @@ async function managedBackendCommand(directory, memoryProvider, replyProvider, {
   if (platform === 'darwin' && arch !== 'arm64') {
     throw new Error('本机 MLX 后端需要 Apple Silicon；Intel Mac 请运行 npm run start:remote 连接已有服务。');
   }
-  const root = await validateProject(directory);
+  const root = await validateBackendProject(directory);
   const backend = platform === 'darwin' ? 'mlx' : 'cuda';
   const args = ['-m', 'studio', '--backend', backend, '--memory-llm', memoryProvider, '--llm', replyProvider,
     '--host', '127.0.0.1', '--port', '8787', '--verbose'];
@@ -398,7 +410,7 @@ async function waitForStudio(url, { signal, timeoutMs = 180000, intervalMs = 150
 
 module.exports = { DEFAULTS, MANAGED_STARTUP_TIMEOUT_MS, MANAGED_PROVIDERS, MEMORY_PROVIDERS, managedStartupTimeout,
   serverUrl, settings, sameOrigin, audioPermission, loadSettings, saveSettings,
-  validateProject, command, managedLaunch, MODEL_SERVICE_DEFAULTS, modelEndpoint,
+  validateProject, validateBackendProject, command, managedLaunch, MODEL_SERVICE_DEFAULTS, modelEndpoint,
   modelService, modelServices, modelServicesFromLaunch, updateModelService,
   publicModelServices, modelServiceEnvironment, loadModelServices, saveModelServices,
   appendWslEnvironment, managedBackendCommand,

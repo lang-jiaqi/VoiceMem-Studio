@@ -94,11 +94,12 @@ npm --prefix studio/apps start
 `npm start` 会在首次运行时自动调用 Apple Silicon 环境准备脚本；
 `./scripts/start_studio_app.sh` 仍作为兼容入口，行为相同。
 
-首次运行会在终端选择回复服务并隐藏输入 API Key，然后自动检查、下载模型并启动
-本机 MLX 后端。之后可在“设置 → 组件”中更换记忆/回复模型服务并重启后端；成功配置会安全保存。
+首次运行依次选择 VoiceMem 记忆 API、准备记忆相关模型、选择 Studio Agent 对话 API，
+再启动本机 MLX 后端；最后一项可只连接已有 Studio 服务，但须先手动输入服务地址。
+不同服务商分别隐藏输入 Key。之后可在“设置 → 组件”中更换记忆/回复模型服务并重启后端；成功配置会安全保存。
 首次准备需要下载约 8–12 GB 内容，取决于是否选择本地回复模型；下载可续传，
 桌面端最多等待 30 分钟。Linux/NVIDIA 和 Windows 后端见
-[部署说明](docker/README.md)及[桌面 App 说明](studio/apps/README.md)。
+[部署说明](studio/deploy/README.md)及[桌面 App 说明](studio/apps/README.md)。
 
 如果后端已经在本机或远程服务器运行，只启动桌面客户端，不检查本机 Python 或下载模型：
 
@@ -249,7 +250,7 @@ python web/run.py --mode llm_tts --space demo-zh --lang zh --confirm_ms 200 --ve
 ```
 
 默认使用 DeepSeek 回复；启动检查和模型自动下载见 [Studio 说明](studio/README.md)。
-Linux/NVIDIA Docker 与 macOS 原生 MLX 的安装和启动见 [部署说明](docker/README.md)。
+Linux/NVIDIA Docker 与 macOS 原生 MLX 的安装和启动见 [部署说明](studio/deploy/README.md)。
 
 然后访问：
 
@@ -563,11 +564,13 @@ cd VoiceMem-Studio
 npm --prefix studio/apps start
 ```
 
-On the first run, `npm start` selects one reply provider, reads its API key without echoing it,
-prepares the required models, and starts the managed MLX backend. A clean setup
+On the first run, `npm start` selects a VoiceMem memory API, prepares its models,
+then separately selects the Studio Agent dialogue API and starts the managed MLX backend.
+The UI-only option requires an explicit existing Studio address before connecting.
+Keys are entered without echoing them. A clean setup
 downloads roughly 8–12 GB depending on the reply provider. Downloads resume and
 the desktop waits up to 30 minutes for first-run preparation. See the
-[deployment guide](docker/README.md) and [desktop guide](studio/apps/README.md)
+[deployment guide](studio/deploy/README.md) and [desktop guide](studio/apps/README.md)
 for Linux/NVIDIA and Windows paths.
 
 For an App-managed backend, **Settings → Components** can change the memory and
@@ -720,7 +723,7 @@ asyncio.run(main())
 ### Interactive Demo with VoiceMem
 
 The demo lives in the repo (the pip package ships the library only) — make sure you have cloned it and are in the repo root.
-See the [deployment guide](docker/README.md) for Linux/NVIDIA Docker and native Apple Silicon MLX setup.
+See the [deployment guide](studio/deploy/README.md) for Linux/NVIDIA Docker and native Apple Silicon MLX setup.
 
 ```bash
 python -m studio

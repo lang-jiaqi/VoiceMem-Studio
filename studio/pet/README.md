@@ -3,13 +3,13 @@
 置顶的 Electron 桌宠，使用标准 Cubism model3/moc3 Live2D 模型。
 
 桌宠面向 Windows/macOS 本地桌面；Linux/WSL 后端只广播事件，不自动创建桌宠窗口。
-使用 [Studio 桌面 App](../studio/apps/README.md) 时，桌宠已内置，无需在本目录安装依赖或单独启动。
+使用 [Studio 桌面 App](../apps/README.md) 时，桌宠已内置，无需在本目录安装依赖或单独启动。
 以下命令仍适用于独立桌宠；App 打包直接复用这里的渲染与动画文件。
 
 ## 启动
 
 ```bash
-cd pet
+cd studio/pet
 npm install
 npm start
 ```

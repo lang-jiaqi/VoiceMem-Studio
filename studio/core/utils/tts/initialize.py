@@ -1,10 +1,10 @@
 """Initialize the reviewed Breeze voice and preserve the shared GPU scheduler."""
 from functools import lru_cache
 import os
-from studio.paths import MODELS, ROOT
+from studio.paths import MODELS, VOICE
 
 MODEL = MODELS / "tts/Breeze-TTS-2-mlx-4bit"
-REFERENCE = ROOT / "voice/noctelle_ref_short.wav"
+REFERENCE = VOICE / "noctelle_ref_short.wav"
 
 def create():
     """Keep VoiceMem's plain-function factory contract while sharing the model."""

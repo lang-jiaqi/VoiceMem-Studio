@@ -6,7 +6,7 @@ const { spawnSync } = require('node:child_process');
 if (process.platform === 'darwin' && process.arch === 'arm64') {
   const root = path.resolve(__dirname, '../../..');
   const marker = path.join(root, '.venv/.voicemem-studio-setup-complete');
-  const setup = path.join(root, 'scripts/setup_studio_mlx.sh');
+  const setup = path.join(root, 'studio/scripts/setup_mlx.sh');
   const sources = [path.join(root, 'pyproject.toml'), setup];
   const stale = !fs.existsSync(marker) || sources.some(file => fs.statSync(file).mtimeMs > fs.statSync(marker).mtimeMs);
   if (stale) {

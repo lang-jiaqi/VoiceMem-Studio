@@ -11,11 +11,11 @@ import threading
 import time
 
 from studio.core.utils.tts.cuda import BreezeCUDATTS
-from studio.paths import MODELS, ROOT
+from studio.paths import MODELS, VOICE
 
 
 async def benchmark(args):
-    tts = BreezeCUDATTS(ref_audio=str(ROOT / 'voice/noctelle_ref_short.wav'),
+    tts = BreezeCUDATTS(ref_audio=str(VOICE / 'noctelle_ref_short.wav'),
                         device=args.device, depth_mode=args.depth_mode)
     stopped = threading.Event()
     asr_thread = None

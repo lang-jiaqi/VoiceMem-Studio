@@ -345,7 +345,10 @@ else {
         persistInitialManaged = !stored;
         managedConfiguration = managed;
       }
-      current = managed ? { ...runtime.DEFAULTS } : await runtime.loadSettings(configurationFile);
+      current = managed ? { ...runtime.DEFAULTS }
+        : process.env.VOICEMEM_DESKTOP_REQUIRE_ADDRESS === '1'
+          ? { ...runtime.DEFAULTS, serverUrl: '' }
+          : await runtime.loadSettings(configurationFile);
     } catch (error) { configError = error.message; }
     installMenu();
     try {
@@ -362,7 +365,10 @@ else {
       Menu.getApplicationMenu().getMenuItemById('show-pet').checked = false;
       dialog.showErrorBox('桌宠资源缺失', `Studio 仍可正常使用。源码运行请先执行 npm run prepare:pet；安装包请重新安装。\n${error.message}`);
     }
-    ipcMain.handle('studio-desktop:state', event => { assertLauncher(event); return { settings: current, status, platform: process.platform, version: app.getVersion() }; });
+    ipcMain.handle('studio-desktop:state', event => { assertLauncher(event); return {
+      settings: current, status, platform: process.platform, version: app.getVersion(),
+      addressRequired: process.env.VOICEMEM_DESKTOP_REQUIRE_ADDRESS === '1',
+    }; });
     ipcMain.handle('studio-desktop:choose-project', async event => {
       assertLauncher(event);
       const result = await dialog.showOpenDialog(launcher, { title: '选择已配置好的 VoiceMem-Studio 项目', properties: ['openDirectory'] });
@@ -372,6 +378,9 @@ else {
     ipcMain.handle('studio-desktop:connect', async (event, value) => {
       assertLauncher(event);
       const next = runtime.settings(value);
+      if (process.env.VOICEMEM_DESKTOP_REQUIRE_ADDRESS === '1' && next.autoStartDocker) {
+        throw new Error('只启动 UI 时不能启动本机 Docker，请填写已有 Studio 服务的地址。');
+      }
       if (next.autoStartDocker && (!current.autoStartDocker || next.projectDir !== current.projectDir)) {
         const answer = await dialog.showMessageBox(launcher, {
           type: 'question', title: '启用本机 Docker 自动启动', message: '允许 App 按所选项目的 Compose 配置启动服务？',

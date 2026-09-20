@@ -107,7 +107,7 @@ def main(argv=None):
         if not args.no_file_log:
             from .utils.logging_utils.component import setup_file_logging
             setup_file_logging(ROOT, args.log_file, concise=not args.verbose)
-        from voicemem.prompt_trace import configure
+        from studio.core.utils.logging_utils.prompt_trace import configure
         configure(ROOT / 'prompt/logs')
         from .voiceagent import VoiceAgent
         agent = VoiceAgent(args)

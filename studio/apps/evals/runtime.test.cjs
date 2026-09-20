@@ -14,6 +14,14 @@ async function temporary(t) {
   return directory;
 }
 
+async function backendProject(t) {
+  const directory = await temporary(t);
+  await fs.mkdir(path.join(directory, 'studio'));
+  await fs.writeFile(path.join(directory, 'pyproject.toml'), 'fixture');
+  await fs.writeFile(path.join(directory, 'studio/__main__.py'), 'fixture');
+  return directory;
+}
+
 test('server URL allows HTTPS and local HTTP but not unsafe origins or credentials', () => {
   for (const url of ['http://localhost:8787', 'http://127.0.0.1:8787/', 'http://[::1]:8787', 'https://studio.example.com/']) assert.equal(r.serverUrl(url), new URL(url).origin);
   for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'http://studio.example.com', 'http://localhost.evil.test', 'https://user:secret@studio.example.com', 'http://0.0.0.0:8787', 'https://studio.example.com/path', 'https://studio.example.com/?key=secret']) assert.throws(() => r.serverUrl(url));
@@ -117,8 +125,7 @@ test('managed startup uses a long first-run timeout with a validated override', 
 });
 
 test('managed macOS backend uses MLX and keeps credentials out of arguments', async t => {
-  const directory = await temporary(t);
-  for (const file of ['compose.yaml', 'pyproject.toml']) await fs.writeFile(path.join(directory, file), 'fixture');
+  const directory = await backendProject(t);
   const python = path.join(directory, '.venv/bin/python');
   await fs.mkdir(path.dirname(python), { recursive: true });
   await fs.writeFile(python, 'fixture');
@@ -133,16 +140,14 @@ test('managed macOS backend uses MLX and keeps credentials out of arguments', as
 });
 
 test('managed macOS backend directs Intel users to remote mode', async t => {
-  const directory = await temporary(t);
-  for (const file of ['compose.yaml', 'pyproject.toml']) await fs.writeFile(path.join(directory, file), 'fixture');
+  const directory = await backendProject(t);
   await assert.rejects(r.managedBackendCommand(directory, 'deepseek', 'deepseek', {
     platform: 'darwin', arch: 'x64', env: {},
   }), /npm run start:remote/);
 });
 
 test('managed Windows backend starts WSL CUDA without changing Docker', async t => {
-  const directory = await temporary(t);
-  for (const file of ['compose.yaml', 'pyproject.toml']) await fs.writeFile(path.join(directory, file), 'fixture');
+  const directory = await backendProject(t);
   const calls = [];
   const specification = await r.managedBackendCommand(directory, 'openai', 'qwen', {
     platform: 'win32', env: { OPENAI_API_KEY: 'memory-secret', DASHSCOPE_API_KEY: 'reply-secret' },
@@ -172,8 +177,7 @@ test('managed Windows backend starts WSL CUDA without changing Docker', async t 
 });
 
 test('managed Windows backend reports a missing WSL Python environment clearly', async t => {
-  const directory = await temporary(t);
-  for (const file of ['compose.yaml', 'pyproject.toml']) await fs.writeFile(path.join(directory, file), 'fixture');
+  const directory = await backendProject(t);
   await assert.rejects(r.managedBackendCommand(directory, 'deepseek', 'deepseek', {
     platform: 'win32', env: {},
     run: async (_file, args) => {
@@ -184,9 +188,8 @@ test('managed Windows backend reports a missing WSL Python environment clearly',
 });
 
 test('VoiceMem preparation finishes before Electron startup continues', async t => {
-  const directory = await temporary(t);
+  const directory = await backendProject(t);
   const root = await fs.realpath(directory);
-  for (const file of ['compose.yaml', 'pyproject.toml']) await fs.writeFile(path.join(directory, file), 'fixture');
   const python = path.join(root, '.venv/bin/python');
   await fs.mkdir(path.dirname(python), { recursive: true }); await fs.writeFile(python, 'fixture');
   let specification;
@@ -200,6 +203,14 @@ test('VoiceMem preparation finishes before Electron startup continues', async t 
   assert.equal(specification.file, python);
   assert.deepEqual(specification.args.slice(-2), ['--prepare-stage', 'memory']);
   assert.equal(specification.options.stdio, 'inherit');
+});
+
+test('managed Python backend needs Studio but not the optional Compose deployment', async t => {
+  const directory = await backendProject(t);
+  assert.equal(await r.validateBackendProject(directory), await fs.realpath(directory));
+  await assert.rejects(r.validateProject(directory), /ENOENT|完整/);
+  await fs.rm(path.join(directory, 'studio/__main__.py'));
+  await assert.rejects(r.validateBackendProject(directory), /studio\/__main__\.py/);
 });
 
 test('Docker startup preserves compose overrides and uses the published port', async t => {

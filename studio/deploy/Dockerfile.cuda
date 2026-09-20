@@ -54,12 +54,6 @@ WORKDIR /opt/voicemem-studio
 COPY pyproject.toml README.md LICENSE ./
 COPY voicemem/ ./voicemem/
 COPY studio/ ./studio/
-COPY prompt/llm_system_zh.md prompt/llm_system_en.md \
-     prompt/llm_tone_rule_zh.md prompt/llm_tone_rule_en.md \
-     prompt/llm_context.json prompt/tts.json ./prompt/
-COPY voice/noctelle_ref_short.wav voice/noctelle_ref_short.txt ./voice/
-COPY voice/backchannel/ ./voice/backchannel/
-COPY docker/smoke_check.py ./docker/smoke_check.py
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install -e '.[studio-cuda]' \
@@ -73,7 +67,7 @@ RUN groupadd --gid 10001 studio \
 
 ENV STUDIO_DESKTOP_PET=0
 USER studio
-RUN python docker/smoke_check.py
+RUN python studio/deploy/smoke_check.py
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30m --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/', timeout=3).close()"]

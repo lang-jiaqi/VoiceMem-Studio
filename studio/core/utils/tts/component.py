@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from voicemem.utils.audio.stream_io import resample
-from voicemem.prompt_config import tts_prompts
+from studio.prompt_config import tts_prompts
 
 SAMPLE_RATE = 24000
 
@@ -156,7 +156,7 @@ class BreezeMLXTTS:
         if not text.strip():
             return
         async with self._lock:
-            from voicemem.prompt_trace import record_request
+            from studio.core.utils.logging_utils.prompt_trace import record_request
             record_request("tts", "breeze_mlx", {
                 "model": self.model_name, "text": text,
                 "instruct": instruction or self.instruction,

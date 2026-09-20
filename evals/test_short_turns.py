@@ -135,7 +135,9 @@ class CaptureBackchannelTests(unittest.IsolatedAsyncioTestCase):
         elif not growing:
             texts = [texts[-1]] * 3
         frames = []
-        for text in texts:
+        # The current policy requires two seconds of sustained speech before an ack.
+        for index in range(108):
+            text = texts[min(index, len(texts) - 1)]
             st = state(text)
             st.eot_score = .9 if early else 0
             frames.append((st, 1200))

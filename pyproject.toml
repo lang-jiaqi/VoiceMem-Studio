@@ -101,13 +101,6 @@ Issues = "https://github.com/lang-jiaqi/VoiceMem-Studio/issues"
 include = ["voicemem*", "studio*"]
 exclude = ["studio.models*"]
 
-[tool.setuptools.data-files]
-"prompt" = [
-    "prompt/llm_system_zh.md", "prompt/llm_system_en.md",
-    "prompt/llm_tone_rule_zh.md", "prompt/llm_tone_rule_en.md",
-    "prompt/llm_context.json", "prompt/tts.json",
-]
-
 # data/ 下的 prompt 文本是运行时读的（见 leftbrain/mem0_additive_prompt_build.py），
 # 不显式声明的话 wheel 里不会有，装完一调用就 FileNotFoundError。
 [tool.setuptools.package-data]
@@ -118,6 +111,8 @@ exclude = ["studio.models*"]
 # pip 装完照 README 跑第一个例子就是 LibsndfileError——那是别人对这个项目的
 # 第一印象。voicemem.sample_audio() 会先找仓库里的 assets/，没有再回落到这份。
 "*" = ["data/*.txt", "*.txt", "assets/*.wav"]
+
+"studio" = ["prompt/*.md", "prompt/*.json"]
 
 "studio.web" = ["*.html", "*.js", "images/*.webp"]
 "studio.apps" = ["ui/*.html", "ui/*.css", "ui/*.js", "ui/*.webp", "ui/assets/*.jpg", "ui/ref/*.js"]

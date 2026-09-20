@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
-const state = require('../../../pet/state.cjs');
+const state = require('../../pet/state.cjs');
 const [PET_WIDTH, PET_HEIGHT] = state.SIZES.sit;
 
 async function fixture(desktop, saved, conversation = {}) {
@@ -46,7 +46,7 @@ async function fixture(desktop, saved, conversation = {}) {
   };
   const read = () => { if (!stored) throw Object.assign(new Error('Missing fixture'), { code: 'ENOENT' }); return JSON.stringify(stored); };
   const write = (_file, value) => { stored = JSON.parse(value); };
-  const directory = desktop ? path.resolve(__dirname, '..') : path.resolve(__dirname, '../../../pet');
+  const directory = desktop ? path.resolve(__dirname, '..') : path.resolve(__dirname, '../../pet');
   const context = { __dirname: directory, module: { exports: {} }, console, URLSearchParams, Buffer, process: { argv: [] },
     setTimeout: callback => { const id = ++nextTimer; timers.set(id, callback); return id; }, clearTimeout: id => timers.delete(id),
     require: name => {

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from voicemem.prompt_config import read_prompt, tts_prompts
+from studio.prompt_config import read_prompt, tts_prompts
 
 TONES: dict[str, str] = tts_prompts()["tones"]
 DEFAULT = "平静"
@@ -72,6 +72,6 @@ def instruction(tag: str, base: str = "") -> str:
     return f"{base}{tone}" if base else tone
 
 def prompt_rule(lang: str = "zh") -> str:
-    """Actual voice-control protocol, editable in root prompt/."""
+    """Actual voice-control protocol, loaded from Studio's effective prompt directory."""
     lang = "en" if str(lang).lower().startswith("en") else "zh"
     return read_prompt(f"llm_tone_rule_{lang}.md") + "\n"

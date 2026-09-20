@@ -6,6 +6,7 @@ from pathlib import Path
 def load_environment(root=None):
     """Load repository credentials and options without replacing exported values."""
     from dotenv import load_dotenv
+    # Bootstrap .env before importing studio.paths: its resource roots read the environment.
     root = Path(root) if root is not None else Path(__file__).resolve().parents[4]
     load_dotenv(root / '.env', override=False)
     load_dotenv(root / '.env.qwen', override=False)

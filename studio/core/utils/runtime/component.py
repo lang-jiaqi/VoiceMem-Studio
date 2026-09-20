@@ -7,8 +7,7 @@ import re
 import threading
 from pathlib import Path
 from studio.core.utils.dialogue.component import CONTEXT
-from voicemem.prompt_config import tts_prompts
-from studio.web import transport as utils
+from studio.prompt_config import tts_prompts
 from studio.core.utils.session_context.component import SessionBuffer
 from voicemem import gate
 from studio.paths import ROOT as _ROOT

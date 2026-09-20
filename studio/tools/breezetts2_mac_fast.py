@@ -5,20 +5,20 @@
 """Breeze TTS 2 Mac: cached depth decoding + one host read per acoustic frame.
 
 直接运行（默认 4bit，默认有声音，Apple Silicon / 原生 arm64 Python）：
-  uv run --python 3.12 breezetts2_mac_fast.py
-  uv run --python 3.12 breezetts2_mac_fast.py --text "你好，我正在本地生成流式语音。"
+  uv run --python 3.12 studio/tools/breezetts2_mac_fast.py
+  uv run --python 3.12 studio/tools/breezetts2_mac_fast.py --text "你好，我正在本地生成流式语音。"
 
 可选的整帧图编译（首次编译可能较慢，预热耗时单独显示）：
-  uv run --python 3.12 breezetts2_mac_fast.py --depth-mode compiled
+  uv run --python 3.12 studio/tools/breezetts2_mac_fast.py --depth-mode compiled
 
 相同文本、seed、分块参数下比较原生实现：
-  uv run --python 3.12 breezetts2_mac_fast.py --depth-mode native --output breeze_native
+  uv run --python 3.12 studio/tools/breezetts2_mac_fast.py --depth-mode native --output breeze_native
 
 检查实际加载权重的缓存 logits（额外耗时，之后正常播放）：
-  uv run --python 3.12 breezetts2_mac_fast.py --verify-depth
+  uv run --python 3.12 studio/tools/breezetts2_mac_fast.py --verify-depth
 
 首次成功运行后可离线：
-  HF_HUB_OFFLINE=1 uv run --offline --python 3.12 breezetts2_mac_fast.py
+  HF_HUB_OFFLINE=1 uv run --offline --python 3.12 studio/tools/breezetts2_mac_fast.py
 
 变化：每个声学帧内缓存 depth 的 K/V，前两位置只预填充一次；后续每次只算
 一个新位置。所有 depth 采样留在 MLX 数组上，一帧生成完成后才一次读回 CPU。
@@ -45,9 +45,9 @@ Python 回调调度。进程间按块传输，推理不等待声音播完。播�
 时长指标；打印实际设备延迟、音频提交时间和设备 underflow 次数。
 
 单独检查同一播放链路（不加载模型）：
-  uv run --python 3.12 breezetts2_mac_fast.py --play-wav breeze_fast_2.wav
-  uv run --python 3.12 breezetts2_mac_fast.py --list-audio-devices
-  uv run --python 3.12 breezetts2_mac_fast.py --device 设备编号
+  uv run --python 3.12 studio/tools/breezetts2_mac_fast.py --play-wav breeze_fast_2.wav
+  uv run --python 3.12 studio/tools/breezetts2_mac_fast.py --list-audio-devices
+  uv run --python 3.12 studio/tools/breezetts2_mac_fast.py --device 设备编号
 
 
 Sources:

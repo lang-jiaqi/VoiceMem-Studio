@@ -1,6 +1,6 @@
 """Synthesize a fixed-voice Breeze sample without starting the memory demo.
 
-Run from the repo: python3 tools/test_breeze_tts.py
+Run from the repo: python3 studio/tools/test_breeze_tts.py
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import sys
 import time
 import wave
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 
@@ -21,8 +21,9 @@ async def synthesize(args):
     import mlx.core as mx
     if not mx.metal.is_available():
         raise RuntimeError("Breeze requires an Apple Silicon terminal with Metal access")
-    from voicemem.breeze_tts import BreezeMLXTTS
-    model = ROOT / "models/tts/Breeze-TTS-2-mlx-4bit"
+    from studio.core.utils.tts.component import BreezeMLXTTS
+    from studio.paths import MODELS
+    model = MODELS / "tts/Breeze-TTS-2-mlx-4bit"
     tts = BreezeMLXTTS(
         model=os.environ.get("VOICEMEM_BREEZE_MLX_MODEL") or
               (str(model) if (model / "config.json").is_file() else None),
@@ -51,8 +52,9 @@ async def synthesize(args):
 
 
 if __name__ == "__main__":
+    from studio.paths import VOICE
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--text", default="你好呀，我是诺可。今天过得怎么样？可以慢慢跟我说，我在听。")
-    p.add_argument("--ref-audio", default=str(ROOT / "voice/noctelle_ref.wav"))
+    p.add_argument("--ref-audio", default=str(VOICE / "noctelle_ref_short.wav"))
     p.add_argument("--output", type=Path, default=ROOT / "results/breeze_noctelle.wav")
     asyncio.run(synthesize(p.parse_args()))

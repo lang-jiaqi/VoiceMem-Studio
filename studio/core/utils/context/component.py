@@ -1,7 +1,6 @@
 """Studio context implementation."""
 from studio.core.utils.dialogue.component import CONTEXT, system_prompt
 from voicemem import gate
-from voicemem import persona
 from studio.core.utils.speaking_style.component import content_emotion_note
 
 class Context:

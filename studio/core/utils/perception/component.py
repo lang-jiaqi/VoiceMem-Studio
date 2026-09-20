@@ -1,10 +1,9 @@
-from studio.paths import MODELS
 """Studio perception implementation."""
-import os
 import asyncio
 import re
 import time
-from studio.web import transport as utils
+from studio.core.voicemem import shared_embed_model
+from studio.paths import MODELS
 
 class Perception:
     def _mentioned(self, name: str, text: str) -> bool:
@@ -27,9 +26,9 @@ class Perception:
                 sents += vs
             self._PROTO["labels"] = labels
             self._PROTO["V"] = np.array(
-                utils.shared_embed_model().encode(sents, normalize_embeddings=True),
+                shared_embed_model().encode(sents, normalize_embeddings=True),
                 dtype=np.float32)
-        q = np.array(utils.shared_embed_model().encode([text], normalize_embeddings=True),
+        q = np.array(shared_embed_model().encode([text], normalize_embeddings=True),
                      dtype=np.float32)[0]
         sims = self._PROTO["V"] @ q
         i = int(np.argmax(sims))

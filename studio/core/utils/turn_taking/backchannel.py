@@ -234,7 +234,7 @@ class Backchannel:
 
 #
 
-from voicemem.prompt_config import tts_prompts
+from studio.prompt_config import tts_prompts
 _STYLES = tts_prompts()["backchannel_styles"]
 
 def _cache_root():
@@ -294,8 +294,8 @@ class BackchannelVoice:
         if self.lang != "zh":
             return False
         from pathlib import Path
-        from studio.paths import ROOT as root
-        bundled_ref = root / "voice" / "noctelle_ref_short.wav"
+        from studio.paths import VOICE
+        bundled_ref = VOICE / "noctelle_ref_short.wav"
         ref = getattr(self.tts, "ref_audio", None)
         try:
             return bool(ref and Path(ref).read_bytes() == bundled_ref.read_bytes())
@@ -312,9 +312,9 @@ class BackchannelVoice:
         if not self._uses_bundled_voice() or "/" in token or "\\" in token:
             return b""
         from pathlib import Path
-        from studio.paths import ROOT as root
+        from studio.paths import VOICE
         try:
-            clip = (root / "voice" / "backchannel" /
+            clip = (VOICE / "backchannel" /
                     self._bundled_filename(token, style_idx))
             if not clip.is_file():
                 return b""
@@ -338,8 +338,8 @@ class BackchannelVoice:
         return (token, 0) if token else None
 
     def _bundled_jobs(self):
-        from studio.paths import ROOT as root
-        return [job for path in sorted((root / "voice/backchannel").glob("OK_*.wav"))
+        from studio.paths import VOICE
+        return [job for path in sorted((VOICE / "backchannel").glob("OK_*.wav"))
                 if (job := self._bundled_job(path.name))]
 
     def _tokens(self) -> list[str]:

@@ -27,7 +27,7 @@ CUDA 小版本兼容对运行时编译有限制，是否可用还需通过 Breez
 
 ```bash
 # 仅首次创建；已有 .env 不会被覆盖
-cp -n .env.example .env
+cp -n studio/.env.example .env
 # 编辑 .env，填写 DEEPSEEK_API_KEY
 docker compose up -d --build
 docker compose logs -f studio
@@ -45,13 +45,13 @@ docker compose logs -f studio
 Compose 只分配宿主机 GPU 0，容器内部 ASR/Router/TTS 都使用 `cuda:0`。
 容器默认时区为 `Asia/Shanghai`，可在 `.env` 中用 `TZ` 覆盖；Mac 保持宿主机时区。
 Docker 使用 `STUDIO_DESKTOP_PET=0` 禁用本地 Electron 窗口，但保留 `/ws-pet` 事件通道。
-Mac 原生启动保留上游随服务启动桌宠的行为，环境准备脚本同时安装 `pet/package-lock.json` 中的依赖。
+Mac 原生启动保留上游随服务启动桌宠的行为，环境准备脚本同时安装 `studio/pet/package-lock.json` 中的依赖。
 
-也可以从 Windows/macOS 的 [Studio 桌面 App](../studio/apps/README.md) 连接后端。
+也可以从 Windows/macOS 的 [Studio 桌面 App](../apps/README.md) 连接后端。
 App 和桌宠在用户电脑运行；Linux/WSL 只运行后端，不自动启动桌宠，也不需要 Electron。
 Windows 的本机 CUDA 路线使用 WSL2；已有 Docker Desktop 的用户可复用同一个 Linux 镜像。
 App 的 Windows Docker 启动适配只操作已配置好的本机 Compose 服务，不构建或拉取镜像，不修改 `.env` 或卷。
-Windows/WSL 整体运行仍需实机验收，见 [平台设计与实现状态](../studio/apps/PLATFORMS.md)。
+Windows/WSL 整体运行仍需实机验收，见 [平台设计与实现状态](../apps/PLATFORMS.md)。
 
 默认使用 Debian 官方 HTTPS 软件源。网络较慢时，可选用镜像构建参数；
 安全更新仍使用官方源，签名校验保持开启：
@@ -100,7 +100,7 @@ docker compose run --rm --no-deps studio --check
 镜像不包含模型权重、`.env`、私人记忆、运行录音、对话日志或虚拟环境。
 Breeze CUDA 源码从独立仓库按固定提交构建，权重在首次运行时下载。
 Studio 参考声音和附和素材来自仓库已有的审核录音，不生成替代声音。
-用户配置 `studio/harness/` 和 `prompt/tts.json` 作为只读绑定挂载；编辑后重启容器生效。
+用户配置 `studio/harness/` 和 `studio/prompt/tts.json` 作为只读绑定挂载；编辑后重启容器生效。
 这两个配置路径需要保留在宿主机仓库中，不能用空目录替代。
 
 | Compose 卷 | 内容 |

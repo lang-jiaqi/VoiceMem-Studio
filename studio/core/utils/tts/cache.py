@@ -1,6 +1,6 @@
 """Depth cache optimization from the user-supplied breezetts2_mac_fast.py.
 
-Source implementation is preserved in tools/breezetts2_mac_fast.py.
+Source implementation is preserved in studio/tools/breezetts2_mac_fast.py.
 Requires mlx-audio==0.5.1 and mlx==0.32.2.
 """
 from __future__ import annotations

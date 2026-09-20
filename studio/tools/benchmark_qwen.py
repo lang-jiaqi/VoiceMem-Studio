@@ -1,3 +1,5 @@
+"""Standalone Qwen reply-stream latency check; requires a DashScope API key."""
+
 import os
 import time
 from openai import OpenAI

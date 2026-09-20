@@ -39,24 +39,26 @@ Windows 的 Docker 路线需要已运行的 Docker Desktop、启用 WSL2 后端�
 本机模型路径必须属于实际运行后端的文件系统：Windows、WSL 和容器路径不是同一个命名空间，不能直接混用。
 远程模式的模型和 API Key 留在服务器，不能拿客户端目录代替服务器配置。
 
-首次 `npm start` 在终端选择一次 API 并以隐藏输入读取密钥。托管后端启动后，“设置 → 组件”
+首次 `npm start` 在终端分别选择 VoiceMem 记忆 API 与 Studio Agent 对话 API，分别读取需要的密钥。托管后端启动后，“设置 → 组件”
 可分别修改记忆和回复的服务商、OpenAI-compatible 地址、模型名与 Key，并由 App 受控重启。
 成功配置使用系统安全存储加密，下次启动直接复用；远程连接仍只读，由服务器管理配置和重启。
 
 ## 源码 App 启动流程
 
 ```text
-npm start        → 自动准备缺失的 Apple Silicon 环境
-                 → 首次选择 API / 输入 Key，或读取已加密配置
-                 → 检查并下载记忆、感知、转写模型
+npm start        → 首次选择 VoiceMem API / 输入 Key，或读取已加密配置
+                 → 检查本机环境并准备记忆、感知、转写模型（非独立 VoiceMem 服务）
+                 → 首次选择 Studio Agent 对话 API / 输入不同服务商的 Key
                  ├─ Apple Silicon Mac：启动受控的原生 MLX 后端
                  └─ Windows 本机：通过 wsl.exe 启动 WSL2/CUDA 后端
                  → 检查并下载回复、TTS 模型 → 严格预热
                  → 创建风格选择页 → 主界面 + 桌宠
 
+                 → Studio API 的最后一项：仅 UI，输入已有 Studio 地址后连接
+
 npm run start:remote
                  → 不检查或启动本机后端
-                 → 打开配置页 → 连接已有本机或 HTTPS 远程服务
+                 → 打开空地址配置页 → 必须手动输入地址并连接已有服务
 ```
 
 准备和等待期间只使用终端，不创建本地连接/状态窗口。启动失败时显示原生错误框并退出。
@@ -71,7 +73,7 @@ Mac 的启动适配应传入 `STUDIO_DESKTOP_PET=0`，桌宠由 App 唯一管理
 ## 当前实现与待验证边界
 
 - 已实现：共享 App + 桌宠、配置文案、Windows/macOS 打包配置、连接现有服务、Linux/WSL 禁止自动拉起桌宠。
-- 已实现代码并做模拟测试：`npm start` 的首次 provider/密钥步骤、组件内模型服务配置、安全持久化与失败回退、VoiceMem 模型准备、Mac MLX 受控进程和 Windows `wsl.exe` CUDA 受控进程；App 退出时结束自己启动的进程。
+- 已实现代码并做模拟测试：`npm start` 的记忆/回复独立 provider 与密钥步骤、UI-only 必填地址、组件内模型服务配置、安全持久化与失败回退、VoiceMem 模型准备、Mac MLX 受控进程和 Windows `wsl.exe` CUDA 受控进程；App 退出时结束自己启动的进程。
 - 已实现代码并做模拟测试：Windows Docker CLI 本机 named-pipe 检查和 Compose 启动；只启动已有镜像和配置。
   不自动启动 Docker Desktop 本身，不构建、拉取或重建容器。
 - 尚未实现：安装包内置 Python/模型环境；本地 ASR、TTS、感知和声纹模型继续由后端 profile 管理。

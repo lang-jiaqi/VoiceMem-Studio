@@ -82,8 +82,21 @@ async function listFiles(directory) {
   return actual;
 }
 
+async function petSource(apps, env = process.env) {
+  if (env.STUDIO_PET_DIR) {
+    const explicit = path.resolve(env.STUDIO_PET_DIR);
+    if (!(await fs.stat(explicit)).isDirectory()) throw new Error(`Studio pet source is not a directory: ${explicit}`);
+    return explicit;
+  }
+  const bundled = path.resolve(apps, '../pet');
+  try {
+    if ((await fs.stat(bundled)).isDirectory()) return bundled;
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  return path.resolve(apps, '../../pet');
+}
+
 async function preparePet({ apps = path.resolve(__dirname, '..'), destination = path.join(apps, '.pet-runtime') } = {}) {
-  const source = path.resolve(apps, '../../pet');
+  const source = await petSource(apps);
   const sourceOf = file => path.join(file.startsWith('node_modules/') ? apps : source, file);
   const inventory = ['index.html', ...sourceFiles];
   const html = desktopHtml(await fs.readFile(path.join(source, 'index.html'), 'utf8'));
@@ -110,4 +123,4 @@ async function preparePet({ apps = path.resolve(__dirname, '..'), destination = 
 
 if (require.main === module) preparePet().then(files => console.log(`[desktop] Pet resources prepared: ${files.length} files`))
   .catch(error => { console.error(error.message); process.exitCode = 1; });
-module.exports = { sourceFiles, desktopHtml, preparePet };
+module.exports = { sourceFiles, desktopHtml, petSource, preparePet };

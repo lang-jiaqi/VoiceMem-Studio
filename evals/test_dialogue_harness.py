@@ -57,8 +57,8 @@ class BackchannelTests(unittest.TestCase):
                 self.assertIsNotNone(self.offer(bc, 0, text=text))
 
     def offer(self, bc, now, text="这件事情说来话长", available=None):
-        bc.offer(text=text, silence=0, spoke=True, speech_s=1, now=now)
-        return bc.offer(text=text, silence=.1, spoke=True, speech_s=1,
+        bc.offer(text=text, silence=0, spoke=True, speech_s=2.1, now=now)
+        return bc.offer(text=text, silence=.1, spoke=True, speech_s=2.1,
                         now=now, unfinished=is_unfinished(text), available=available)
 
     @patch.dict(os.environ, {"VOICEMEM_BACKCHANNEL_EMIT": "1"})
@@ -67,14 +67,14 @@ class BackchannelTests(unittest.TestCase):
         with patch('random.Random.random', return_value=0):
             self.assertIsNotNone(self.offer(bc, 0))
             bc.reset_turn()
-            self.assertIsNone(self.offer(bc, .899))
-            self.assertIsNotNone(self.offer(bc, .9))
+            self.assertIsNone(self.offer(bc, 1.999))
+            self.assertIsNotNone(self.offer(bc, 2.0))
 
     @patch.dict(os.environ, {"VOICEMEM_BACKCHANNEL_EMIT": "1"})
     def test_one_offer_per_pause_and_only_playable_continuers(self):
         bc = Backchannel(policy=backchannel_policy(), rng=random.Random(1))
         self.assertEqual(self.offer(bc, 0, available={"嗯"}), "嗯")
-        self.assertEqual(self.offer(bc, 1, text="我就是觉得", available={"嗯"}), "嗯")
+        self.assertEqual(self.offer(bc, 2, text="我就是觉得", available={"嗯"}), "嗯")
         self.assertIsNone(self.offer(bc, 6, available=set()))
 
     def test_chinese_bank_has_only_the_reviewed_ten_tokens(self):
@@ -147,14 +147,14 @@ class BackchannelTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(len(voice._clips["嗯"]), 1)
 
-    def test_bundled_voice_resolves_repository_audio_directory(self):
-        from studio.paths import ROOT as root
+    def test_bundled_voice_resolves_studio_audio_directory(self):
+        from studio.paths import VOICE
         tts = types.SimpleNamespace(
-            ref_audio=str(root / "voice" / "noctelle_ref_short.wav"))
+            ref_audio=str(VOICE / "noctelle_ref_short.wav"))
         voice = backchannel_module.BackchannelVoice(tts, lang="zh")
         self.assertTrue(voice._uses_bundled_voice())
         self.assertTrue(voice._bundled_pcm("哦", 1))
-        expected = list((root / "voice/backchannel").glob("OK_*.wav"))
+        expected = list((VOICE / "backchannel").glob("OK_*.wav"))
         with tempfile.TemporaryDirectory() as cache, patch(
                 "studio.core.utils.turn_taking.backchannel._cache_root",
                 return_value=Path(cache)):
@@ -186,8 +186,8 @@ class BackchannelTests(unittest.TestCase):
         token = bc.choose(text="我说完了", available={"嗯"}, now=0)
         self.assertEqual(token, "嗯")
         bc.mark_emitted(token, now=0)
-        self.assertIsNone(bc.choose(text="下一句", available={"嗯"}, now=.899))
-        self.assertEqual(bc.choose(text="下一句", available={"嗯"}, now=.9), "嗯")
+        self.assertIsNone(bc.choose(text="下一句", available={"嗯"}, now=1.999))
+        self.assertEqual(bc.choose(text="下一句", available={"嗯"}, now=2.0), "嗯")
 
     def test_count_targets_change_within_each_turn(self):
         curve = SessionFrequencyCurve()
@@ -233,8 +233,8 @@ class BackchannelTests(unittest.TestCase):
             self.assertEqual(offer(6, 6), "嗯")
             self.assertIsNone(offer(8, 8))
             self.assertEqual(offer(10, 10), "嗯")
-            self.assertEqual(offer(11, 11), "嗯")
-            self.assertIsNone(offer(12, 12))
+            self.assertEqual(offer(12, 12), "嗯")
+            self.assertIsNone(offer(13, 13))
             bc.complete_turn()
             self.assertEqual(offer(20, 10), "嗯")
 
@@ -242,10 +242,10 @@ class BackchannelTests(unittest.TestCase):
         bc = Backchannel(policy=backchannel_policy())
         with patch('random.Random.random', return_value=0):
             self.assertIsNotNone(self.offer(bc, 0))
-            self.assertIsNotNone(self.offer(bc, .9))
-            self.assertIsNone(self.offer(bc, 1.8))
+            self.assertIsNotNone(self.offer(bc, 2.0))
+            self.assertIsNone(self.offer(bc, 4.0))
             bc.complete_turn()
-            self.assertIsNotNone(self.offer(bc, 2.7))
+            self.assertIsNotNone(self.offer(bc, 6.0))
         self.assertIn("后段1/2/3次各30%/0次10%",
                       backchannel_policy_summary())
 
@@ -389,15 +389,16 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([t.text for t in turns], ["我就是觉得"])
             self.assertEqual(len(self.calls), 1)
 
-    async def test_web_emits_short_audio_before_turn_and_keeps_cooldown_next_turn(self):
+    async def test_web_requires_sustained_speech_before_emitting_and_keeps_cooldown_next_turn(self):
         stream = self.make_stream(text="我就是觉得")
         stream.src_rate = 24000
         ns = anticipate_namespace()
         sent, turns = [], []
-        # 200ms voiced + enough silence for the unfinished-turn fallback, twice.
+        # More than two seconds of voiced audio + enough silence for the unfinished fallback, twice.
         # Synthetic frames run instantly, so the second turn remains in cooldown.
-        frames = iter(([True] * 10 + [False] * 65) * 2)
+        frames = iter(([True] * 105 + [False] * 65) * 2)
         captured = 0
+        ns['time'] = types.SimpleNamespace(monotonic=lambda: captured * .02)
         def stream_factory(**kwargs):
             stream.turn_end_guard = kwargs['turn_end_guard']
             return stream

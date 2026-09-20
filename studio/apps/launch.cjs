@@ -12,6 +12,7 @@ const PROVIDERS = Object.freeze([
   { id: 'openai', label: 'OpenAI', credential: 'OPENAI_API_KEY' },
   { id: 'local', label: '本地模型 / MLX', credential: '', appleSiliconOnly: true },
 ]);
+const REMOTE = Object.freeze({ id: 'remote', label: '只启动 UI 界面（后台已有完整 Studio 服务）' });
 
 const MANAGED_ENVIRONMENT = Object.freeze([
   'VOICEMEM_DESKTOP_PROJECT_ROOT', 'VOICEMEM_DESKTOP_MEMORY_PROVIDER',
@@ -40,25 +41,28 @@ function savedModelProviders(platform = process.platform, env = process.env, hom
   } catch { return null; }
 }
 
-function selectProvider(value, platform = process.platform, arch = process.arch) {
-  const choices = providerChoices(platform, arch);
+function selectProvider(value, platform = process.platform, arch = process.arch, role = 'reply') {
+  const choices = role === 'memory' ? PROVIDERS.filter(provider => !provider.appleSiliconOnly)
+    : [...providerChoices(platform, arch), REMOTE];
   const selected = String(value || '1').trim().toLowerCase();
   return choices.find((provider, index) => selected === provider.id || selected === String(index + 1));
 }
 
-async function chooseProvider({ platform, arch, input, output, askChoice } = {}) {
-  const choices = providerChoices(platform, arch);
-  output.write('\n选择 API（VoiceMem 记忆与 Studio 回复共用）：\n');
+async function chooseProvider({ platform, arch, input, output, askChoice, role = 'reply' } = {}) {
+  const choices = role === 'memory' ? PROVIDERS.filter(provider => !provider.appleSiliconOnly)
+    : [...providerChoices(platform, arch), REMOTE];
+  output.write(role === 'memory' ? '\n第 1 步：选择 VoiceMem 记忆 API：\n'
+    : '\n第 3 步：选择 Studio Agent 对话 API（最后一项只连接已有 Studio 服务）：\n');
   choices.forEach((provider, index) => output.write(`  ${index + 1}. ${provider.label}\n`));
   while (true) {
     let answer;
-    if (askChoice) answer = await askChoice('shared', choices);
+    if (askChoice) answer = await askChoice(role, choices);
     else {
       const terminal = readline.createInterface({ input, output });
       try { answer = await terminal.question('请选择 [1]：'); }
       finally { terminal.close(); }
     }
-    const provider = selectProvider(answer, platform, arch);
+    const provider = selectProvider(answer, platform, arch, role);
     if (provider) return provider;
     output.write('请输入有效编号或 API 名称。\n');
   }
@@ -93,7 +97,8 @@ async function readSecret(prompt, { input = process.stdin, output = process.stdo
 
 async function launchEnvironment({ platform = process.platform, env = process.env, input = process.stdin,
   arch = process.arch, output = process.stdout, askSecret = readSecret, askChoice,
-  prepareMemory = async () => {}, savedProviders = savedModelProviders(platform, env) } = {}) {
+  prepareEnvironment = async () => {}, prepareMemory = async () => {},
+  savedProviders = savedModelProviders(platform, env) } = {}) {
   const projectDir = path.resolve(__dirname, '../..');
   const next = { ...env, VOICEMEM_DESKTOP_PROJECT_ROOT: projectDir };
   if (savedProviders) {
@@ -101,30 +106,40 @@ async function launchEnvironment({ platform = process.platform, env = process.en
     next.VOICEMEM_DESKTOP_REPLY_PROVIDER = savedProviders.replyProvider;
     next.VOICEMEM_DESKTOP_MANAGED_PROVIDER = savedProviders.replyProvider;
     output.write('\n正在使用 App 中保存的模型服务配置。\n');
+    await prepareEnvironment({ projectDir, env: next });
     return next;
   }
-  const provider = await chooseProvider({ platform, arch, input, output, askChoice });
-  const memoryProvider = provider.id === 'local' ? PROVIDERS[0] : provider;
-  const inherited = String(next.VOICEMEM_MEMORY_API_KEY
-    || (provider.id === 'local' ? '' : next.VOICEMEM_STUDIO_API_KEY)
-    || next[memoryProvider.credential] || '').trim();
+  const memoryProvider = await chooseProvider({ platform, arch, input, output, askChoice, role: 'memory' });
+  const inherited = String(next.VOICEMEM_MEMORY_API_KEY || next[memoryProvider.credential] || '').trim();
   const secret = await askSecret(
-    `请输入 ${memoryProvider.credential}${provider.id === 'local' ? '（供 VoiceMem 记忆处理使用）' : ''}`
+    `请输入 VoiceMem ${memoryProvider.credential}`
       + `${inherited ? '（回车沿用当前环境变量）' : '（回车沿用项目 .env）'}：`,
     { input, output },
   );
   const key = secret || inherited;
   if (secret) next[memoryProvider.credential] = secret;
-  if (key) {
-    next.VOICEMEM_MEMORY_API_KEY = key;
-    if (provider.id !== 'local') next.VOICEMEM_STUDIO_API_KEY = key;
-  }
+  if (key) next.VOICEMEM_MEMORY_API_KEY = key;
   next.VOICEMEM_DESKTOP_MEMORY_PROVIDER = memoryProvider.id;
+  output.write('\n第 2 步：正在检查 VoiceMem 环境并准备记忆、感知和转写模型…\n');
+  await prepareEnvironment({ projectDir, env: next });
+  await prepareMemory({ projectDir, provider: memoryProvider.id, env: next });
+  output.write('VoiceMem 所需模型已准备完成；它将在 Studio 后端进程中初始化。\n');
+  const provider = await chooseProvider({ platform, arch, input, output, askChoice, role: 'reply' });
+  if (provider.id === 'remote') return remoteEnvironment(next);
+  const replyInherited = String(next.VOICEMEM_STUDIO_API_KEY || next[provider.credential] || '').trim();
+  if (provider.id !== 'local' && provider.id !== memoryProvider.id) {
+    const replySecret = await askSecret(
+      `请输入 Studio Agent ${provider.credential}`
+        + `${replyInherited ? '（回车沿用当前环境变量）' : '（回车沿用项目 .env）'}：`,
+      { input, output },
+    );
+    if (replySecret) {
+      next[provider.credential] = replySecret;
+      next.VOICEMEM_STUDIO_API_KEY = replySecret;
+    } else if (replyInherited) next.VOICEMEM_STUDIO_API_KEY = replyInherited;
+  } else if (provider.id === memoryProvider.id && key) next.VOICEMEM_STUDIO_API_KEY = key;
   next.VOICEMEM_DESKTOP_REPLY_PROVIDER = provider.id;
   next.VOICEMEM_DESKTOP_MANAGED_PROVIDER = provider.id;
-  output.write('\n正在检查 VoiceMem 环境并准备记忆、感知和转写模型…\n');
-  await prepareMemory({ projectDir, provider: memoryProvider.id, env: next });
-  output.write('VoiceMem 所需模型已准备完成。\n');
   return next;
 }
 
@@ -136,8 +151,21 @@ function launchArguments(argv = process.argv.slice(2)) {
 function remoteEnvironment(env = process.env) {
   const next = { ...env };
   for (const name of MANAGED_ENVIRONMENT) delete next[name];
+  for (const name of ['VOICEMEM_MEMORY_API_KEY', 'VOICEMEM_STUDIO_API_KEY',
+    'DEEPSEEK_API_KEY', 'DASHSCOPE_API_KEY', 'OPENAI_API_KEY']) delete next[name];
   next.VOICEMEM_DESKTOP_CONFIGURE = '1';
+  next.VOICEMEM_DESKTOP_REQUIRE_ADDRESS = '1';
   return next;
+}
+
+function prepareLocalEnvironment(projectDir, env) {
+  const setup = spawn(process.execPath, [path.join(__dirname, 'scripts/ensure-managed-environment.cjs')], {
+    cwd: projectDir, env, stdio: 'inherit',
+  });
+  return new Promise((resolve, reject) => {
+    setup.once('error', reject);
+    setup.once('exit', code => code === 0 ? resolve() : reject(new Error(`本机 Python 环境准备失败（退出码 ${code}）。`)));
+  });
 }
 
 function startElectron(env, args) {
@@ -159,10 +187,12 @@ async function main() {
     return;
   }
   if (process.platform === 'darwin' && process.arch !== 'arm64') {
-    throw new Error('本机 MLX 后端需要 Apple Silicon；Intel Mac 请运行 npm run start:remote 连接已有服务。');
+    startElectron(remoteEnvironment(), options.electronArgs);
+    return;
   }
-  if (!process.stdin.isTTY) throw new Error('npm start 需要交互终端来选择 API；连接已有服务请运行 npm run start:remote。');
+  if (!process.stdin.isTTY) throw new Error('本机启动需要交互终端来选择 API；只连接已有服务请运行 npm run start:remote。');
   const env = await launchEnvironment({
+    prepareEnvironment: ({ projectDir, env: childEnv }) => prepareLocalEnvironment(projectDir, childEnv),
     prepareMemory: ({ projectDir, provider, env: childEnv }) =>
       runtime.prepareManagedMemory(projectDir, provider, { platform: process.platform, env: childEnv }),
   });
@@ -174,5 +204,5 @@ if (require.main === module) main().catch(error => {
   process.exitCode = error.code === 'CANCELLED' ? 130 : 1;
 });
 
-module.exports = { PROVIDERS, MANAGED_ENVIRONMENT, providerChoices, selectProvider, chooseProvider,
+module.exports = { PROVIDERS, REMOTE, MANAGED_ENVIRONMENT, providerChoices, selectProvider, chooseProvider,
   savedModelProviders, readSecret, launchEnvironment, launchArguments, remoteEnvironment };

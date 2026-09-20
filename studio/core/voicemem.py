@@ -1,4 +1,4 @@
-"""The sole Studio bridge for VoiceMem initialization and native streaming."""
+"""Studio's bridge for VoiceMem initialization, streaming, and shared models."""
 from voicemem import VoiceMem
 
 def open_memory(config):
@@ -19,6 +19,13 @@ def open_memory(config):
 def open_stream(memory, **options):
     """Return the native stream without wrapping workers or cancellation guards."""
     return memory.stream(**options)
+
+
+def shared_embed_model():
+    """Return VoiceMem's process-shared embedding model for Studio perception."""
+    from voicemem.leftbrain.local_embedder import resolve, resolve_path, shared_model
+
+    return shared_model(resolve_path(resolve()))
 
 
 def memory_warmups(memory):

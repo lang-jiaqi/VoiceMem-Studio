@@ -6,7 +6,7 @@ services:
     platform: linux/amd64
     build:
       context: .
-      dockerfile: docker/Dockerfile.cuda
+      dockerfile: studio/deploy/Dockerfile.cuda
     init: true
     restart: unless-stopped
     stop_grace_period: 60s
@@ -34,8 +34,8 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: ./prompt/tts.json
-        target: /opt/voicemem-studio/prompt/tts.json
+        source: ./studio/prompt/tts.json
+        target: /opt/voicemem-studio/studio/prompt/tts.json
         read_only: true
         bind:
           create_host_path: false

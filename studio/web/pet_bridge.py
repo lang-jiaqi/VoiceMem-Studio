@@ -9,9 +9,9 @@ import subprocess
 import sys
 import threading
 import uuid
-from pathlib import Path
+from studio.paths import PET
 
-PET_DIR = Path(__file__).resolve().parents[2] / "pet"
+PET_DIR = PET
 
 # 打包版也可把 DEFAULT_CMD 改成 "open -a /Applications/VoiceMem-Companion.app --args"。
 DEFAULT_CMD = "node launch.cjs"

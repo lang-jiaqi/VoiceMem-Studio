@@ -14,7 +14,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "web")]
 from logging_utils import _Tee
-from voicemem import prompt_trace as trace
+from studio.core.utils.logging_utils import prompt_trace as trace
 from voicemem.breeze_tts import BreezeMLXTTS
 from voicemem.reply import deepseek_reply
 

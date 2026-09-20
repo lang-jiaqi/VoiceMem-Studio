@@ -7,7 +7,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const vm = require('node:vm');
 const { CUBISM_CORE, observerUrl, resourceAllowed, trustedSender } = require('../pet-policy.cjs');
-const { preparePet, sourceFiles } = require('../scripts/prepare-pet.cjs');
+const { preparePet, petSource, sourceFiles } = require('../scripts/prepare-pet.cjs');
 
 test('pet observes only the selected service and bundled local assets', () => {
   const root = path.resolve('/fixture/app/.pet-runtime');
@@ -37,11 +37,25 @@ test('pet window controls reject another renderer, frame or document', () => {
   assert.equal(trustedSender(event, { ...window, isDestroyed: () => true }, page), false);
 });
 
+test('pet build prefers Studio-owned sources and falls back to the legacy repository pet', async t => {
+  const project = await fs.mkdtemp(path.join(os.tmpdir(), 'studio-pet-source-'));
+  t.after(() => fs.rm(project, { recursive: true, force: true }));
+  const apps = path.join(project, 'studio/apps');
+  await fs.mkdir(apps, { recursive: true });
+  assert.equal(await petSource(apps), path.join(project, 'pet'));
+  await fs.mkdir(path.join(project, 'studio/pet'));
+  assert.equal(await petSource(apps), path.join(project, 'studio/pet'));
+  const external = path.join(project, 'reviewed-pet');
+  await fs.mkdir(external);
+  assert.equal(await petSource(apps, { STUDIO_PET_DIR: external }), external);
+});
+
 test('pet bundle includes the Live2D runtime, rattan model and provenance notice', async t => {
   const destination = await fs.mkdtemp(path.join(process.env.VOICEMEM_TEST_TMP || os.tmpdir(), 'studio-pet-test-'));
   t.after(() => fs.rm(destination, { recursive: true, force: true }));
   const inventory = await preparePet({ destination });
-  const source = path.resolve(__dirname, '../../../pet');
+  const source = path.resolve(__dirname, '../../pet');
+  assert.equal(await petSource(path.resolve(__dirname, '..')), source);
   for (const file of sourceFiles) {
     const original = path.join(file.startsWith('node_modules/') ? path.resolve(__dirname, '..') : source, file);
     assert.deepEqual(await fs.readFile(path.join(destination, file)), await fs.readFile(original), file);
@@ -106,7 +120,7 @@ test('desktop preload exposes the same reduced window API as the new pet', async
     } });
     return Object.keys(api).sort();
   }
-  assert.deepEqual(await exposed(path.join(__dirname, '../pet-preload.cjs')), await exposed(path.resolve(__dirname, '../../../pet/preload.cjs')));
+  assert.deepEqual(await exposed(path.join(__dirname, '../pet-preload.cjs')), await exposed(path.resolve(__dirname, '../../pet/preload.cjs')));
 });
 
 test('backchannels trigger named gestures without a numbered action panel', async () => {
@@ -125,7 +139,7 @@ test('backchannels trigger named gestures without a numbered action panel', asyn
       setState() {}, setSpeaking() {}, feedAudioLevel() {}, setEmotion() {},
     } },
   };
-  const link = await fs.readFile(path.resolve(__dirname, '../../../pet/voicemem-link.js'), 'utf8');
+  const link = await fs.readFile(path.resolve(__dirname, '../../pet/voicemem-link.js'), 'utf8');
   vm.runInNewContext(link, context);
   socket.onopen();
   for (let i = 1; i <= 3; i++) socket.onmessage({ data: JSON.stringify({
@@ -135,8 +149,8 @@ test('backchannels trigger named gestures without a numbered action panel', asyn
 });
 
 test('pointer gaze overrides idle wandering and speaking schedules a spaced body gesture', () => {
-  const { AvatarBehaviorController } = require('../../../pet/avatar-behavior-controller.js');
-  const { AvatarParameterController } = require('../../../pet/avatar-parameter-controller.js');
+  const { AvatarBehaviorController } = require('../../pet/avatar-behavior-controller.js');
+  const { AvatarParameterController } = require('../../pet/avatar-parameter-controller.js');
   const parameters = new AvatarParameterController();
   const behavior = new AvatarBehaviorController(parameters, { random: () => 0 });
   behavior.setState('speaking');
@@ -159,7 +173,7 @@ test('pointer gaze overrides idle wandering and speaking schedules a spaced body
 });
 
 test('arm accents add to model physics only during a gesture', () => {
-  const { Live2DRenderer } = require('../../../pet/live2d-renderer.js');
+  const { Live2DRenderer } = require('../../pet/live2d-renderer.js');
   const renderer = new Live2DRenderer({ addEventListener() {} });
   const applied = [];
   renderer.model = { internalModel: { coreModel: {
@@ -180,8 +194,8 @@ test('arm accents add to model physics only during a gesture', () => {
 });
 
 test('a backchannel does not defer the first speaking gesture for several seconds', () => {
-  const { AvatarBehaviorController } = require('../../../pet/avatar-behavior-controller.js');
-  const { AvatarParameterController } = require('../../../pet/avatar-parameter-controller.js');
+  const { AvatarBehaviorController } = require('../../pet/avatar-behavior-controller.js');
+  const { AvatarParameterController } = require('../../pet/avatar-parameter-controller.js');
   const behavior = new AvatarBehaviorController(new AvatarParameterController(), { random: () => 0 });
   behavior.setState('listening');
   assert.equal(behavior.triggerGesture('backchannel'), true);
@@ -194,7 +208,7 @@ test('a backchannel does not defer the first speaking gesture for several second
 });
 
 test('native body motions keep live audio control of mouth opening', () => {
-  const { Live2DRenderer } = require('../../../pet/live2d-renderer.js');
+  const { Live2DRenderer } = require('../../pet/live2d-renderer.js');
   const renderer = new Live2DRenderer({ addEventListener() {} });
   const applied = [];
   renderer.model = { internalModel: { coreModel: {
@@ -207,7 +221,7 @@ test('native body motions keep live audio control of mouth opening', () => {
 });
 
 test('rattan expressions are dispatched through the Live2D expression manager', async () => {
-  const { Live2DRenderer } = require('../../../pet/live2d-renderer.js');
+  const { Live2DRenderer } = require('../../pet/live2d-renderer.js');
   const renderer = new Live2DRenderer({ addEventListener() {} });
   let selected = '';
   renderer.model = {

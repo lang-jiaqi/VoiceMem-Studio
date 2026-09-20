@@ -29,18 +29,23 @@ regressions. Avoid loading unrelated files or sensitive runtime traces.
   and remote reply/speech providers.
 - `voicemem/utils/gpu_loop.py`, `voicemem/utils/torch_lock.py`: process-level
   accelerator scheduling.
-- `web/run.py`: Studio composition root and both reply modes.
-- `web/harness.py`, `harness/`: dialogue policy, pause handling, tone tags, and
-  spoken backchannels.
-- `web/mic-capture-worklet.js`, `web/echo_guard.py`: capture-time echo defense.
-- `web/audio_timeline.py`, `web/pcm-player-worklet.js`: output timing and PCM
-  playback.
-- `prompt/`: editable prompt and TTS configuration; `prompt/logs/` contains
-  sensitive runtime traces.
+- `studio/core/core.py`, `studio/core/voiceagent.py`: Studio service composition
+  and conversation lifecycle; `studio/core/voicemem.py` is its memory bridge.
+- `studio/harness/`: immutable Studio dialogue defaults and Self Harness policy;
+  `studio/core/utils/` implements turn-taking, tone tags, TTS, and components.
+- `studio/web/`: transport, server-owned assets, and the optional pet observer.
+- `studio/apps/`: shared desktop client, browser UI, launcher, and bundled pet.
+- `studio/paths.py`, `studio/scripts/`: resource roots and Mac App/setup entry points.
+- `studio/tools/`: Studio-specific, manually run development and demo scripts;
+  not part of startup or the memory framework.
+- `web/run.py`: compatibility entry; prefer `python -m studio`.
+- `studio/prompt/`, `studio/prompt_config.py`: editable Studio reply/TTS
+  defaults and validated loader; root `prompt/logs/` contains sensitive runtime traces.
 - `evals/`: Studio latency and behavioral regressions.
 - `tests/`: core regressions; new local tests are ignored by default.
 - `evaluation/`, `finetune/`: benchmark and training workflows.
-- `voice/`: reviewed speech assets and local voice-reference material.
+- `studio/resources/voice/`: reviewed speech assets and local voice-reference material.
+- `studio/pet/`: desktop pet source, reviewed Live2D runtime assets, and provenance notices.
 
 ## Standard workflow
 
@@ -128,13 +133,13 @@ and exact targets.
 
 ## Prompt and dialogue policy
 
-- `web/harness.py` owns the Studio Web system prompt, dialogue controls,
-  unfinished-utterance policy, and Web context directives.
-- `harness/backchannel.py` owns whether and how Studio emits spoken
-  backchannels. `harness/speak_tag.py` owns the tone-label protocol.
-- `prompt/llm_*.md` and `prompt/llm_context.json` are package/default prompt
+- `studio/harness/` owns Studio Web persona, speaking, reply-mode, turn-taking,
+  and Self Harness default policies.
+- `studio/core/utils/turn_taking/` owns spoken backchannels and pause handling.
+  `studio/core/utils/tts/control.py` owns the tone-label protocol.
+- `studio/prompt/llm_*.md` and `studio/prompt/llm_context.json` are package/default prompt
   inputs; they do not replace the Web system prompt.
-- `prompt/tts.json` owns shared TTS tone instructions and backchannel synthesis
+- `studio/prompt/tts.json` owns shared TTS tone instructions and backchannel synthesis
   styles.
 - Prompt/config changes require parser validation and the corresponding prompt
   regressions. Do not silently fall back on malformed configuration.
@@ -218,9 +223,9 @@ Common entry points:
 
 ```bash
 python -m pip install -e .
-python web/run.py --mode llm_tts --llm deepseek --space demo-zh --lang zh --confirm_ms 200
-python web/run.py --mode llm_tts --llm local --space demo-zh --lang zh --confirm_ms 200
-python web/run.py --mode realtime --space demo-zh --lang zh
+python -m studio --mode llm_tts --llm deepseek --space demo-zh --lang zh --confirm_ms 200
+python -m studio --mode llm_tts --llm local --space demo-zh --lang zh --confirm_ms 200
+python -m studio --mode realtime --space demo-zh --lang zh
 ```
 
 These are references, not commands to run for every task.

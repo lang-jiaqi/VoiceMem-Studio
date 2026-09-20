@@ -11,7 +11,7 @@
   "scripts": {
     "ensure:deps": "node scripts/ensure-dependencies.cjs",
     "prepare:pet": "node scripts/prepare-pet.cjs",
-    "prestart": "node scripts/ensure-managed-environment.cjs && npm run ensure:deps && npm run prepare:pet",
+    "prestart": "npm run ensure:deps && npm run prepare:pet",
     "start": "node launch.cjs",
     "prestart:remote": "npm run ensure:deps && npm run prepare:pet",
     "start:remote": "node launch.cjs --remote",
