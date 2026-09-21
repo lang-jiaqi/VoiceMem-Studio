@@ -20,8 +20,10 @@
   }
   function tick(now) {
     if (!active) return;
-    if (behavior.state === 'sleeping' && now - last < 100) { frame = requestAnimationFrame(tick); return; }
-    const dt = Math.min(.1, Math.max(0, (now - last) / 1000)); last = now;
+    const elapsed = now - last;
+    const interval = 1000 / avatarFrameRate(behavior.state, Boolean(behavior.pointerGaze));
+    if (elapsed + .5 < interval) { frame = requestAnimationFrame(tick); return; }
+    const dt = Math.min(.1, Math.max(0, elapsed / 1000)); last = now;
     behavior.update(dt);
     const mouthOpen = lipSync.playing ? lipSync.update(dt, now) : 0;
     parameters.setLayer('lip-sync', { ParamMouthOpenY: mouthOpen }, { priority: 100, transitionMs: 16 });

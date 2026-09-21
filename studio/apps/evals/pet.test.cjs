@@ -149,8 +149,12 @@ test('backchannels trigger named gestures without a numbered action panel', asyn
 });
 
 test('pointer gaze overrides idle wandering and speaking schedules a spaced body gesture', () => {
-  const { AvatarBehaviorController } = require('../../pet/avatar-behavior-controller.js');
+  const { AvatarBehaviorController, avatarFrameRate } = require('../../pet/avatar-behavior-controller.js');
   const { AvatarParameterController } = require('../../pet/avatar-parameter-controller.js');
+  assert.equal(avatarFrameRate('sleeping'), 30);
+  assert.equal(avatarFrameRate('idle'), 30);
+  assert.equal(avatarFrameRate('speaking'), 60);
+  assert.equal(avatarFrameRate('sleeping', true), 60);
   const parameters = new AvatarParameterController();
   const behavior = new AvatarBehaviorController(parameters, { random: () => 0 });
   behavior.setState('speaking');

@@ -18,9 +18,12 @@
     curious: { mouth: .1, brow: .34, cheek: .16 }, concerned: { mouth: -.35, brow: .28, cheek: 0 },
     excited: { mouth: .85, brow: .38, cheek: .58 }, sleepy: { mouth: .05, brow: -.12, cheek: .12 }
   };
+  const ACTIVE_FRAME_STATES = new Set(['listening', 'speaking', 'interrupted']);
   const clamp01 = x => Math.max(0, Math.min(1, x));
   const ease = x => { x = clamp01(x); return x * x * (3 - 2 * x); };
   const bell = (t, a, b, c) => ease((t - a) / Math.max(.001, b - a)) * (1 - ease((t - b) / Math.max(.001, c - b)));
+  const avatarFrameRate = (state, pointerActive = false) =>
+    pointerActive || ACTIVE_FRAME_STATES.has(state) ? 60 : 30;
 
   class AvatarBehaviorController {
     constructor(parameters, options = {}) {
@@ -186,5 +189,6 @@
     }
     status() { return { state: this.state, emotion: this.emotion, gesture: this.gesture?.name || null }; }
   }
-  return { AvatarBehaviorController, AVATAR_STATES: Object.keys(STATE), AVATAR_EMOTIONS: Object.keys(EMOTION) };
+  return { AvatarBehaviorController, AVATAR_STATES: Object.keys(STATE), AVATAR_EMOTIONS: Object.keys(EMOTION),
+    avatarFrameRate };
 });

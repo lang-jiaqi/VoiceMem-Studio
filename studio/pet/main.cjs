@@ -49,7 +49,7 @@ else {
       frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, resizable: false,
       maximizable: false, fullscreenable: false, show: false, hasShadow: false,
       webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false,
-        sandbox: true, backgroundThrottling: !smoke } });
+        sandbox: true, backgroundThrottling: false } });
     if(smoke) win.webContents.on('console-message',event=>console.log('RENDER:',event.message));
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     win.webContents.on('will-navigate', e => e.preventDefault());

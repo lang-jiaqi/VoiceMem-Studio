@@ -78,6 +78,12 @@ test('App pet loads the bundled Live2D model in portrait layout', async () => {
   const url = new URL(f.window().webContents.mainFrame.url);
   assert.equal(url.searchParams.get('layout'), 'portrait');
   assert.equal(url.searchParams.get('ws'), 'ws://127.0.0.1:8787/ws-pet');
+  assert.equal(f.window().options.webPreferences.backgroundThrottling, false);
+});
+
+test('standalone pet keeps animation scheduling active while its window is unfocused', async () => {
+  const f = await fixture(false);
+  assert.equal(f.window().options.webPreferences.backgroundThrottling, false);
 });
 
 test('App pet conversation control accepts only the current pet document', async () => {

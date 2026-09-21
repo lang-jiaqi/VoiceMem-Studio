@@ -2,7 +2,12 @@ const dot = document.querySelector('#dot'), character = document.querySelector('
 // Browser preview uses the same interaction UI without desktop privileges.
 const api = window.pet || { initial: async () => 'dot', onMode: () => {}, toggle: () => render(document.body.dataset.mode === 'dot' ? 'sit' : 'dot'), collapse: () => render('dot'), pointer: () => {}, dragStart: () => {}, dragMove: () => {}, dragEnd: () => {}, initialScale: async () => 1, onScale: () => {}, resize: () => {}, resetSize: () => {}, resizeStart: () => {}, resizeMove: () => {}, resizeEnd: () => {}, conversationState: async () => false, toggleConversation: async () => { throw new Error('请在 Studio App 中开启对话。'); } };
 const talkButton = document.querySelector('#talkButton');
-let renderEpoch=0, callStateRevision=0;
+let renderEpoch=0, callStateRevision=0, pointerHit;
+function reportPointer(hit) {
+  hit = Boolean(hit);
+  if (hit === pointerHit) return;
+  pointerHit = hit; api.pointer(hit);
+}
 function callState(active) {
   callStateRevision++;
   talkButton.setAttribute('aria-pressed', String(active));
@@ -56,11 +61,11 @@ character.addEventListener('dblclick', e => { if (!suppressClick && !e.target.cl
 document.addEventListener('keydown',e => { if(e.key==='Escape') api.collapse(); });
 document.addEventListener('pointermove',e => {
   const inside = character.contains(e.target) && !character.hidden;
-  api.pointer(Boolean(gesture || e.target===dot || inside));
+  reportPointer(gesture || e.target===dot || inside);
   if (inside) {
     const bounds = stage.getBoundingClientRect();
     window.avatar.setPointerGaze((e.clientX - bounds.left) / bounds.width * 2 - 1,
       1 - (e.clientY - bounds.top) / bounds.height * 2);
   } else window.avatar.setPointerGaze(null, null);
 });
-document.addEventListener('pointerleave',() => { window.avatar.setPointerGaze(null, null); if (!gesture) api.pointer(false); });
+document.addEventListener('pointerleave',() => { window.avatar.setPointerGaze(null, null); if (!gesture) reportPointer(false); });
