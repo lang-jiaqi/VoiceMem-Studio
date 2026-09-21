@@ -6,10 +6,20 @@ const { spawnSync } = require('node:child_process');
 const minimumNodeVersion = Object.freeze([22, 12, 0]);
 
 const required = Object.freeze([
-  ['Electron', 'node_modules/electron/path.txt'],
+  ['Electron', 'node_modules/electron/path.txt', electronBinaryExists],
   ['PixiJS', 'node_modules/pixi.js/dist/browser/pixi.min.js'],
   ['Pixi Live2D', 'node_modules/pixi-live2d-display/dist/cubism4.min.js'],
 ]);
+
+function electronBinaryExists(apps) {
+  const moduleDirectory = path.join(apps, 'node_modules/electron');
+  try {
+    const executable = fs.readFileSync(path.join(moduleDirectory, 'path.txt'), 'utf8').trim();
+    return Boolean(executable) && fs.existsSync(path.join(moduleDirectory, 'dist', executable));
+  } catch {
+    return false;
+  }
+}
 
 function assertNodeVersion(version = process.versions.node) {
   const parts = String(version).split('.').map(value => Number.parseInt(value, 10));
@@ -28,7 +38,8 @@ function assertNodeVersion(version = process.versions.node) {
 }
 
 function missingDependencies(apps = path.resolve(__dirname, '..')) {
-  return required.filter(([, relative]) => !fs.existsSync(path.join(apps, relative)));
+  return required.filter(([, relative, verify]) =>
+    !fs.existsSync(path.join(apps, relative)) || (verify && !verify(apps)));
 }
 
 function installCommand(env = process.env) {
@@ -38,8 +49,19 @@ function installCommand(env = process.env) {
 
 function installEnvironment(env) {
   const child = { ...env };
+  const incompatible = new Set([
+    'node_env',
+    'npm_config_ignore_scripts',
+    'npm_config_omit',
+    'npm_config_only',
+    'npm_config_production',
+    'electron_skip_binary_download',
+    'electron_skip_download',
+    'npm_config_electron_skip_binary_download',
+    'npm_config_electron_skip_download',
+  ]);
   for (const key of Object.keys(child)) {
-    if (['npm_config_ignore_scripts', 'npm_config_omit'].includes(key.toLowerCase())) delete child[key];
+    if (incompatible.has(key.toLowerCase())) delete child[key];
   }
   child.npm_config_ignore_scripts = 'false';
   child.npm_config_omit = '';
@@ -73,5 +95,5 @@ if (require.main === module) {
   catch (error) { console.error(`[desktop] ${error.message}`); process.exitCode = 1; }
 }
 
-module.exports = { minimumNodeVersion, assertNodeVersion, required, missingDependencies,
+module.exports = { minimumNodeVersion, assertNodeVersion, required, electronBinaryExists, missingDependencies,
   installCommand, installEnvironment, ensureDependencies };

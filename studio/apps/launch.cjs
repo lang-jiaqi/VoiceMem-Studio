@@ -5,6 +5,7 @@ const os = require('node:os');
 const readline = require('node:readline/promises');
 const { spawn } = require('node:child_process');
 const runtime = require('./runtime.cjs');
+const { ensureDependencies } = require('./scripts/ensure-dependencies.cjs');
 
 const PROVIDERS = Object.freeze([
   { id: 'deepseek', label: 'DeepSeek', credential: 'DEEPSEEK_API_KEY' },
@@ -181,6 +182,9 @@ async function main() {
   if (!['darwin', 'win32'].includes(process.platform)) {
     throw new Error('桌面 App 和桌宠仅面向 Windows / macOS。Linux 请启动 Studio 后端，或从其他电脑连接。');
   }
+  // npm runs the same check through prestart. Keep it here as well so direct
+  // source launches repair a fresh checkout instead of failing at require('electron').
+  ensureDependencies();
   const options = launchArguments();
   if (options.remote) {
     startElectron(remoteEnvironment(), options.electronArgs);
