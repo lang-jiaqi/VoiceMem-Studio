@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../ui/studio-client.js'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function fixture({ desktop = false } = {}) {
-  const sockets = [], nodes = [], sources = [], events = [], notices = [], states = [], contexts = [], listeners = {};
+  const sockets = [], nodes = [], sources = [], events = [], notices = [], states = [], contexts = [], listeners = {}, documentEvents = [];
   let grant;
   class Socket {
     static OPEN = 1;
@@ -36,10 +36,11 @@ function fixture({ desktop = false } = {}) {
       sources.push(source); return source;
     }
   }
-  const context = {URL, ArrayBuffer, Float32Array, Int16Array, setTimeout, clearTimeout, console,
+  class CustomEvent { constructor(type, options = {}) { this.type = type; this.detail = options.detail; } }
+  const context = {URL, ArrayBuffer, Float32Array, Int16Array, setTimeout, clearTimeout, console, CustomEvent,
     AudioContext:Context, AudioWorkletNode:Node, WebSocket:Socket,
     location:{href:'http://localhost:8787/ui/technical.html',protocol:'http:'},
-    document:{hidden:false, addEventListener(name, callback) {listeners[name] = callback;}},
+    document:{hidden:false, addEventListener(name, callback) {listeners[name] = callback;}, dispatchEvent(event) {documentEvents.push(event);listeners[event.type]?.(event);}},
     navigator:{mediaDevices:{getUserMedia:() => new Promise(resolve => {grant = resolve;})}},
     VMUI:{notify:message => notices.push(message)}, atob:text => Buffer.from(text, 'base64').toString('binary'),
   };
@@ -51,7 +52,7 @@ function fixture({ desktop = false } = {}) {
   async function connected() {
     const sending = client.send('fixture'); await tick(); sockets[0].receive({type:'session_ready',mode:'llm_tts'}); await sending;
   }
-  return {api, client, sockets, nodes, sources, events, notices, states, contexts, listeners,
+  return {api, client, sockets, nodes, sources, events, notices, states, contexts, listeners, documentEvents,
     document:context.document, connected, grant:stream => grant(stream)};
 }
 test('desktop voice remains active when minimized while a browser session still ends', async () => {
@@ -73,6 +74,32 @@ test('text waits for session readiness and uses the existing user_text contract'
   assert.equal(f.sockets[0].sent.length, 0);
   f.sockets[0].receive({type:'session_ready',mode:'llm_tts'}); await sent;
   assert.deepEqual(f.sockets[0].sent, [{type:'user_text',text:'hello'}]); f.client.cancel();
+});
+test('settings pause the microphone without discarding the session', async () => {
+  const f = fixture(); const starting = f.client.start(); await tick();
+  f.sockets[0].receive({type:'session_ready'}); await tick();
+  let stopped = 0; f.grant({getTracks:() => [{stop() {stopped++;}}]}); await starting;
+  f.listeners['settings-open']();
+  assert.equal(stopped, 1); assert.equal(f.sockets[0].readyState, 1);
+  f.client.cancel();
+});
+test('Self Harness state is published to settings and explicit choices use the typed protocol', async () => {
+  const f = fixture(); await f.connected();
+  const state = {type:'self_harness_state',schema:{},snapshot:{profile:{}},error:''};
+  f.sockets[0].receive(state);
+  assert.equal(f.documentEvents.at(-1).type, 'self-harness-state');
+  assert.equal(JSON.stringify(f.documentEvents.at(-1).detail), JSON.stringify(state));
+  await f.client.getHarness();
+  await f.client.setHarness({turn_taking:{backchannel:'less'}});
+  await f.client.setHarnessPrompt('persona', '多听一点');
+  await f.client.setBackchannelCurve([1.8,.8,1.8,1.6]);
+  assert.deepEqual(f.sockets[0].sent.slice(-4), [
+    {type:'self_harness_get'},
+    {type:'self_harness_update',update:{turn_taking:{backchannel:'less'}}},
+    {type:'harness_prompt_update',name:'persona',value:'多听一点'},
+    {type:'backchannel_curve_update',values:[1.8,.8,1.8,1.6]},
+  ]);
+  f.client.cancel();
 });
 test('cancelled connection rejects pending text and ignores old socket events', async () => {
   const f = fixture(); const sent = f.client.send('hello'); await tick();

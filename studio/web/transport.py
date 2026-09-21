@@ -36,6 +36,15 @@ from studio.core.utils.tts.providers import TTS_VOICE as _TTS_VOICE  # noqa: E40
 RT_VOICE = _TTS_VOICE
 client = None
 
+
+class NoCacheStaticFiles(StaticFiles):
+    """Serve the mutable Studio UI without reusing stale Electron assets."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
 def _openai_client():
 
     global client
@@ -317,5 +326,9 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
     def classic():
         return FileResponse(HERE / "index.html", headers=_NOCACHE)
 
-    app.mount("/ui", StaticFiles(directory=HERE.parent / "apps" / "ui", html=True), name="studio-ui")
+    app.mount(
+        "/ui",
+        NoCacheStaticFiles(directory=HERE.parent / "apps" / "ui", html=True),
+        name="studio-ui",
+    )
     return app

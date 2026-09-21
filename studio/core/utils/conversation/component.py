@@ -22,6 +22,44 @@ class Conversation:
     def __init__(self, agent, sock):
         initialize(self, agent, sock)
 
+    async def publish_self_harness(self, snapshot=None, *, error: str = "") -> None:
+        """Send the current session controls to the owning browser only."""
+        from studio.core.utils.self_harness.component import (
+            public_backchannel_curve_schema, public_prompt_schema, public_schema,
+        )
+        try:
+            await self.sock.send_json({
+                "type": "self_harness_state",
+                "schema": public_schema(),
+                "prompt_schema": public_prompt_schema(),
+                "backchannel_curve_schema": public_backchannel_curve_schema(),
+                "snapshot": snapshot or self.self_harness.snapshot(),
+                "error": error,
+            })
+        except Exception:
+            pass
+
+    async def update_self_harness(self, value) -> None:
+        """Apply one explicit settings-page update to this conversation."""
+        try:
+            self.self_harness.set_explicit(value)
+        except (TypeError, ValueError) as exc:
+            await self.publish_self_harness(error=str(exc))
+
+    async def update_harness_prompt(self, name, value) -> None:
+        """Apply one explicit free-text prompt to the current conversation."""
+        try:
+            self.self_harness.set_prompt(name, value)
+        except (TypeError, ValueError) as exc:
+            await self.publish_self_harness(error=str(exc))
+
+    async def update_backchannel_curve(self, value) -> None:
+        """Apply explicit expected quotas for the four acknowledgement phases."""
+        try:
+            self.self_harness.set_backchannel_curve(value)
+        except (TypeError, ValueError) as exc:
+            await self.publish_self_harness(error=str(exc))
+
     async def publish_user_input(self, pending) -> None:
         """Publish accepted input independently of reply/audio cancellation."""
         from studio.core.utils.contracts.component import input_transcript_event
@@ -657,4 +695,4 @@ class Conversation:
         task.add_done_callback(self.reply_done)
 
     def listen(self):
-        return self.agent._session_anticipate(self.context_session, self.sock, on_speech=self.stop_reply, owner=self.owner, is_busy=self.hearing, said=lambda : self.turn['reply']['text'] if self.hearing() or time.monotonic() < self.turn['echo_until'] else '', on_candidate=self.pause_candidate, on_candidate_reject=self.resume_candidate, on_playback_checkpoint=self.playback_checkpoint, on_filler_done=self.filler_done, on_close=self.close_session, on_early=self.start_early, on_early_cancel=self.drop_early, on_speech_start=self.prewarm_local, textless_confirm_s=0.2, turn_taking=self.turn_taking)
+        return self.agent._session_anticipate(self.context_session, self.sock, on_speech=self.stop_reply, owner=self.owner, is_busy=self.hearing, said=lambda : self.turn['reply']['text'] if self.hearing() or time.monotonic() < self.turn['echo_until'] else '', on_candidate=self.pause_candidate, on_candidate_reject=self.resume_candidate, on_playback_checkpoint=self.playback_checkpoint, on_filler_done=self.filler_done, on_self_harness_get=self.publish_self_harness, on_self_harness_update=self.update_self_harness, on_harness_prompt_update=self.update_harness_prompt, on_backchannel_curve_update=self.update_backchannel_curve, on_close=self.close_session, on_early=self.start_early, on_early_cancel=self.drop_early, on_speech_start=self.prewarm_local, textless_confirm_s=0.2, turn_taking=self.turn_taking)

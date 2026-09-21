@@ -96,6 +96,16 @@ and apply it only when that reply is committed, so a discarded EOT prediction
 cannot alter later turns. Realtime speech-to-speech prompts do not use this text
 control protocol.
 
+The owning browser can read and change the same profile through
+`self_harness_get`, `self_harness_update`, and `self_harness_state` WebSocket
+messages. The server exposes only enum values and display labels, never private
+prompt or TTS instructions. Ordered enum fields are shown as discrete slider
+stops; unordered enums use ordinary choices. An explicit settings choice applies
+immediately, while later conflicting model changes still use the confirmation
+window. The settings page also supports a bounded, session-only Persona prompt
+through `harness_prompt_update`. It is appended as a user instruction and does
+not rewrite the immutable Persona source prompt.
+
 The local Qwen3-0.6B classifier selects ordinary or deep reasoning after ASR.
 Studio combines that depth with VoiceMem memory eligibility into the existing
 `fast`, `medium`, or `slow` reply modes. Missing default weights are downloaded into the
@@ -220,11 +230,23 @@ playback and the pet natively, while local CUDA inference belongs in WSL2 or its
 Docker backend. macOS uses native MLX or a remote service. Both clients share
 the same Web UI and observer contracts. The backend root serves the shared
 frontend from `studio/apps/ui/`, with assets under `/ui/`. Its first page reuses the original mode-selection homepage, with labeled
-image cards linking to the technical or digital-human visual style. Display
-settings live inside each style. The component settings tab presents the fixed
+image cards linking to the technical or digital-human visual style. A centered
+settings shell lives inside each style, with an icon sidebar for appearance,
+text, conversation preferences, and components. The conversation panel mirrors
+Self Harness snapshots and uses a Persona text area, a fixed-choice tone control,
+and discrete sliders only for ordered fields. Backchannel frequency uses a
+four-node curve editor whose nodes are the expected acknowledgement quotas for
+the 0–3s, 3–6s, 6–10s, and 10s+ speech phases. Fractional values are sampled to
+integer per-turn targets while preserving their expectation; the shared
+first-six-second cap and the refractory cooldown still apply. Preset Self Harness
+values provide the initial curve, while an explicit user curve is scoped to the
+current conversation and is reflected in subsequent snapshots. The component
+settings tab presents the fixed
 input, memory, reply, speech, and pet components as a draggable canvas. Only
 normalized card positions are stored in browser local storage; components cannot
-be removed. `/api/components` supplies non-secret provider, model, endpoint, and
+be removed. `/ui` responses use `Cache-Control: no-store`, and the entry pages
+version their settings assets so an Electron reload cannot retain an older
+settings implementation after an update. `/api/components` supplies non-secret provider, model, endpoint, and
 readiness labels. For an App-owned backend, a narrowly scoped isolated preload
 allows the main-frame settings page to update the memory or reply model service
 and request a supervised backend restart. The main process validates endpoints,
@@ -330,7 +352,9 @@ The pet session permits bundled resources, the Cubism Core source and the select
 main-frame-only IPC request to toggle the existing Studio page's voice control with
 a user gesture; the App renderer retains microphone permissions, capture, playback,
 and conversation ownership. Desktop voice capture may continue while the App window
-is hidden, but page navigation, settings, and explicit stop still end it. Service changes close
+is hidden. Opening settings pauses microphone capture but retains the current
+WebSocket so session preferences can be read and changed; page navigation and
+explicit stop still end it. Service changes close
 the old observer before opening the new one; closing the Studio window closes the
 pet. Position and a 40–150% expanded-window scale live in desktop app data; older
 position-only files default to 100%. The shared renderer uses a portrait call
@@ -1019,6 +1043,7 @@ scheduled. A later UI space change cannot redirect an existing write.
 | Factual and affective memory | Memory Space stores | Persistent |
 | Streaming ASR/VAD/EOT/gate state | `VoiceStream` | Input turn/session |
 | Turn-taking phase, latency estimate, and backchannel policy | `TurnTakingStateMachine` | WebSocket session |
+| Self Harness profile, Persona supplement, and confirmation state | `SelfHarnessState` | WebSocket session |
 | Reply router model | `studio/core/utils/reply_modes` | Process |
 | Reply mode | Confirmed `Pending` turn | Turn |
 | Early output buffer | `ReplySink` | Speculative assistant output |

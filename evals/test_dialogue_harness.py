@@ -19,9 +19,13 @@ from studio.core.utils.self_harness.component import (
     StagedSelfHarnessUpdate,
     default_profile,
     profile_context,
+    public_backchannel_curve_schema,
+    public_prompt_schema,
+    public_schema,
     speech_rate_instruction,
     split_control_prefix,
     validate_update,
+    validate_backchannel_curve,
 )
 from studio.core.utils.turn_taking.initialize import (
     Backchannel,
@@ -204,6 +208,24 @@ class BackchannelTests(unittest.TestCase):
                              [1, 2, 2, 3, 3])
             self.assertEqual([curve.draw_target(10, roll) for roll in (0, .799, .8, .99)],
                              [2, 2, 0, 0])
+
+    def test_custom_curve_uses_each_node_as_the_expected_phase_quota(self):
+        policy = backchannel_policy()
+        policy.refractory_s = 0
+        bc = Backchannel(policy=policy, custom_phase_quotas=(0.0, 0.0, 1.5, 0.0))
+
+        def offer(roll):
+            bc.reset_turn()
+            bc.offer(text="我还在继续说", silence=0, spoke=True,
+                     speech_s=6.1, now=0)
+            with patch('random.Random.random', return_value=roll):
+                bc.offer(text="我还在继续说", silence=.15, spoke=True,
+                         speech_s=6.1, now=.1, unfinished=True,
+                         available={"嗯"})
+            return bc._phase_targets[2]
+
+        self.assertEqual(offer(.49), 2)
+        self.assertEqual(offer(.50), 1)
 
     def test_first_six_seconds_have_a_shared_two_clip_cap(self):
         policy = backchannel_policy()
@@ -429,6 +451,21 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SelfHarnessTests(unittest.TestCase):
+    def test_public_schema_contains_only_safe_enum_metadata(self):
+        schema = public_schema()
+        speed = schema["speaking_style"]["speech_rate"]
+        self.assertEqual(speed["default"], "normal")
+        self.assertEqual(speed["labels"]["slow"], "稍慢")
+        self.assertNotIn("tts", speed)
+        self.assertNotIn(
+            "prompt", schema["persona"]["interaction_style"])
+        self.assertEqual(public_prompt_schema(), {
+            "persona": {"default": "", "max_length": 2000}})
+        curve = public_backchannel_curve_schema()
+        self.assertEqual(curve["profiles"]["auto"], [1.8, 0.8, 1.8, 1.6])
+        self.assertEqual([phase["label"] for phase in curve["phases"]],
+                         ["0–3s", "3–6s", "6–10s", "10s+"])
+
     def test_original_prompts_are_exposed_as_immutable_defaults(self):
         from studio.harness.persona.policy import DEFAULT_SYSTEM_PROMPT, SYSTEM_PROMPT
         from studio.harness.reply_modes.policy import (
@@ -532,6 +569,44 @@ class SelfHarnessTests(unittest.TestCase):
         self.assertEqual(state.apply(replacement), replacement)
         self.assertEqual(state.profile["speaking_style"]["tone"], "温和")
         self.assertEqual(state.snapshot()["pending"], {})
+
+    def test_explicit_settings_choice_applies_immediately_and_notifies(self):
+        snapshots = []
+        state = SelfHarnessState(on_change=snapshots.append)
+        state.apply({"speaking_style": {"speech_rate": "slow"}})
+        state.apply({"speaking_style": {"speech_rate": "fast"}})
+        self.assertEqual(state.profile["speaking_style"]["speech_rate"], "slow")
+        self.assertTrue(state.snapshot()["pending"])
+
+        state.set_explicit({"speaking_style": {"speech_rate": "very_fast"}})
+        self.assertEqual(
+            state.profile["speaking_style"]["speech_rate"], "very_fast")
+        self.assertEqual(state.snapshot()["pending"], {})
+        self.assertEqual(
+            snapshots[-1]["profile"]["speaking_style"]["speech_rate"],
+            "very_fast")
+
+        state.set_prompt("persona", "像熟人一样聊，但不要过度热情。")
+        self.assertIn("像熟人一样聊", profile_context(state.snapshot()))
+        self.assertEqual(
+            snapshots[-1]["prompts"]["persona"],
+            "像熟人一样聊，但不要过度热情。")
+        with self.assertRaisesRegex(ValueError, "unknown Harness prompt"):
+            state.set_prompt("tone", "任意语气")
+
+        state.set_backchannel_curve([1.2, 0.4, 2.4, 1.0])
+        self.assertEqual(
+            snapshots[-1]["backchannel_curve"], [1.2, 0.4, 2.4, 1.0])
+        self.assertIn(
+            "1.2 / 0.4 / 2.4 / 1.0", profile_context(state.snapshot()))
+        self.assertEqual(
+            state.profile["turn_taking"]["backchannel"], "auto")
+        state.apply({"turn_taking": {"backchannel": "more"}})
+        self.assertIsNotNone(state.snapshot()["backchannel_curve"])
+        state.apply({"turn_taking": {"backchannel": "more"}})
+        self.assertIsNone(state.snapshot()["backchannel_curve"])
+        with self.assertRaisesRegex(ValueError, "four phase"):
+            validate_backchannel_curve([1, 2])
 
 
 class SpeakingStyleTests(unittest.TestCase):

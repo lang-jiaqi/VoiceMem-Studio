@@ -319,6 +319,7 @@ const voice = VMStudio.create({
   onInterim(text) { $('liveEcho').textContent=text;$('liveEcho').classList.remove('empty');$('composer').value=text;renderPerception(text); },
   onFinal(text) {if(send(text))$('composer').value='';}
 });
+window.VMSettings?.bindHarness(voice);
 $('mic').onclick=()=>voice.toggle();
 $('startTalk').onclick=()=>{ $('composer').focus();voice.toggle(); };
 $('settingsBtn').onclick=()=>window.VMSettings?.open();
@@ -327,7 +328,7 @@ syncConversation();
 switchTab('space');
 if(matchMedia('(max-width:700px)').matches) setSidebar(true);
 
-document.addEventListener('settings-open',()=>{voice.cancel();window.liquidOrb?.stopVoiceDemo();});
+document.addEventListener('settings-open',()=>{voice.pause();window.liquidOrb?.stopVoiceDemo();});
 window.addEventListener('pagehide',()=>{clearInterval(typing);clearTimeout(thoughtTimer);orbState('idle');});
 window.addEventListener('pageshow',e=>{if(e.persisted)syncConversation();});
 

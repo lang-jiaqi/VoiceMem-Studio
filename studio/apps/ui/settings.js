@@ -46,7 +46,20 @@ const en=new Map(pairs),zh=new Map(pairs.map(([a,b])=>[b,a]));
  ['远程服务的模型配置需要在服务器端修改。','Configure models on the remote server.'],
  ['只允许托管的本机后端从 App 重启。','Only an app-managed local backend can be restarted here.'],
  ['拖动组件','Drag component'],['本机','Local'],['本地模型','Local model'],['启动配置','Startup config'],
-].forEach(([a,b])=>{en.set(a,b);zh.set(b,a);});
+ ['外观','Appearance'],['文字','Text'],['对话偏好','Conversation'],['聊天','Chat'],['声音','Voice'],['回答','Answers'],['接话','Turn taking'],['垫话','Backchannels'],
+ ['Persona Prompt','Persona Prompt'],['当前','Current'],['保存','Save'],['例如：多听我说，别急着给建议。','For example: listen first and do not rush to give advice.'],
+ ['选择你喜欢的对话画面。','Choose the conversation view you prefer.'],['调整语言和字号。','Adjust language and text size.'],['查看运行状态或调整布局。','View runtime status or adjust the layout.'],
+ ['聊天节奏','Chat rhythm'],['说话速度','Speaking speed'],['语气','Tone'],['回答长短','Answer length'],['思考时间','Thinking time'],
+ ['附和频率','Acknowledgement frequency'],['等待反馈','Waiting feedback'],['当前对话','Current conversation'],
+ ['前 6 秒合计最多附和 2 次。','At most 2 acknowledgements in the first 6 seconds.'],
+ ['这些设置只在当前对话中生效。你在聊天里说“慢一点”时，这里也会同步。','These settings apply to this conversation. If you say “speak slower,” the control here updates too.'],
+ ['正在连接 Studio…','Connecting to Studio…'],['连接后即可调整当前对话。','Connect to adjust the current conversation.'],
+ ['已同步','Synced'],['正在保存…','Saving…'],['等你在对话里再确认一次','Waiting for your confirmation in chat'],
+ ['默认陪伴方式','Default'],['多倾听、少建议','Listen more, advise less'],['主动推进和给下一步','Actively suggest next steps'],['专业克制','Professional and restrained'],
+ ['很慢','Very slow'],['稍慢','Slower'],['正常','Normal'],['稍快','Faster'],['很快','Very fast'],
+ ['自动','Auto'],['简短','Short'],['详细','Detailed'],['自动判断','Automatic'],['优先快速','Prefer speed'],['优先深思','Prefer deeper thought'],
+ ['默认附和频率','Default frequency'],['不插话','Do not interject'],['少附和','Fewer acknowledgements'],['多附和','More acknowledgements'],['默认等待反馈','Default feedback'],['安静等待','Wait silently'],['更常说明正在思考','More thinking updates'],
+ ].forEach(([a,b])=>{en.set(a,b);zh.set(b,a);});
 // Existing English chrome gets a Chinese equivalent too.
 zh.set('Technical','科技风');zh.set('Chat','对话记录');zh.set('info','事实记忆');zh.set('emo&persona','情绪与人格');zh.set('Speaker ID','说话人 ID');
 function t(value){
@@ -85,6 +98,7 @@ function apply(save=true){
  if(language)language.value=prefs.lang;if(uiScale){uiScale.value=String(Math.round(prefs.uiLevel*100));uiOutput.textContent=Math.round(prefs.uiLevel*100)+'%';contentScale.value=String(Math.round(prefs.contentLevel*100));contentOutput.textContent=Math.round(prefs.contentLevel*100)+'%';}
 }
 let language,uiScale,contentScale,uiOutput,contentOutput,dialog,opener;
+let harnessClient=null,harnessMessage=null,harnessApi=null;
 function controls(){
  const section=document.createElement('section');section.className='display-options';
  section.innerHTML=`<div class="setting-row"><label for="systemLanguage">系统语言</label><select id="systemLanguage"><option value="zh-CN">简体中文</option><option value="en">English</option></select></div>
@@ -98,6 +112,88 @@ function controls(){
  language.onchange=()=>{prefs.lang=language.value;apply();};uiScale.oninput=()=>{prefs.uiLevel=Number(uiScale.value)/100;apply();};contentScale.oninput=()=>{prefs.contentLevel=Number(contentScale.value)/100;apply();};
  section.querySelector('#resetDisplay').onclick=()=>{prefs={lang:'zh-CN',uiLevel:1,contentLevel:1,schema:2};apply();};return section;
 }
+const HARNESS_GROUPS=[
+ {title:'声音',fields:[['speaking_style','speech_rate','说话速度','slider'],['speaking_style','tone','语气','choice']]},
+ {title:'回答',fields:[['speaking_style','reply_length','回答长短','slider'],['reply_modes','reasoning_depth','思考时间','slider']]},
+ {id:'backchannel',title:'垫话',fields:[['turn_taking','backchannel','附和频率','curve'],['turn_taking','work_filler','等待反馈','slider']]},
+];
+const HARNESS_ORDER={
+ 'turn_taking.backchannel':['off','less','auto','more'],
+ 'turn_taking.work_filler':['silent','auto','reassuring'],
+};
+function setupHarnessPanel(panel){
+ let requested=false;
+ const status=panel.querySelector('.harness-status');
+ const body=panel.querySelector('.harness-controls');
+ function label(spec,value){return spec?.labels?.[value]||value||'';}
+ function curveGeometry(values,spec){
+  const xs=[58,220,382,544],top=22,bottom=142,height=bottom-top;
+  const points=values.map((value,index)=>({x:xs[index],y:bottom-(value-spec.min)/(spec.max-spec.min)*height}));
+  let path=`M${points[0].x} ${points[0].y}`;
+  for(let i=1;i<points.length;i++){const previous=points[i-1],point=points[i],mid=(previous.x+point.x)/2;path+=` C${mid} ${previous.y},${mid} ${point.y},${point.x} ${point.y}`;}
+  return{points,path,area:`${path} L${points.at(-1).x} ${bottom} L${points[0].x} ${bottom} Z`,top,bottom};
+ }
+ function render(){
+  const schema=harnessMessage?.schema,snapshot=harnessMessage?.snapshot;
+  if(!schema||!snapshot?.profile){
+   status.textContent=harnessClient?'正在连接 Studio…':'连接后即可调整当前对话。';body.innerHTML='';return;
+  }
+  status.textContent=harnessMessage.error||'已同步';
+  const persona=schema.persona?.interaction_style,promptSpec=harnessMessage.prompt_schema?.persona,curveSpec=harnessMessage.backchannel_curve_schema;
+  const personaValue=snapshot.profile.persona?.interaction_style??persona?.default;
+  const personaPrompt=snapshot.prompts?.persona||'';
+  const promptCard=promptSpec?`<section class="harness-group"><h3>Persona</h3><article class="harness-prompt"><header><span>Persona Prompt</span><small><span>当前</span>：<b>${escapeHtml(label(persona,personaValue))}</b></small></header><textarea maxlength="${promptSpec.max_length}" placeholder="例如：多听我说，别急着给建议。">${escapeHtml(personaPrompt)}</textarea><footer><span class="harness-count">${personaPrompt.length}/${promptSpec.max_length}</span><button type="button" class="harness-prompt-reset">恢复默认</button><button type="button" class="harness-prompt-save">保存</button></footer></article></section>`:'';
+  body.innerHTML=promptCard+HARNESS_GROUPS.map(group=>`<section class="harness-group${group.id?` harness-group-${group.id}`:''}"><h3>${group.title}</h3><div class="harness-grid">${group.fields.map(([domain,name,title,kind])=>{
+   const spec=schema[domain]?.[name];if(!spec)return'';
+   const path=`${domain}.${name}`,values=HARNESS_ORDER[path]||spec.values,current=snapshot.profile[domain]?.[name]??spec.default,index=Math.max(0,values.indexOf(current));
+   const pending=snapshot.pending?.[path];
+   if(kind==='curve'&&curveSpec){
+    const quotas=Array.isArray(snapshot.backchannel_curve)?snapshot.backchannel_curve:curveSpec.profiles[current]||curveSpec.profiles.auto,geometry=curveGeometry(quotas,curveSpec);
+    const baseline=geometry.bottom-(1.5-curveSpec.min)/(curveSpec.max-curveSpec.min)*(geometry.bottom-geometry.top);
+    return `<article class="backchannel-curve" data-values="${escapeHtml(JSON.stringify(quotas))}"><header><strong>${title}</strong><button type="button" class="harness-reset curve-reset" title="恢复默认" aria-label="${title} 恢复默认">↶</button></header><div class="curve-chart"><svg viewBox="0 0 600 190" role="img" aria-label="各阶段附和次数"><line class="curve-baseline" x1="28" y1="${baseline}" x2="574" y2="${baseline}"/>${geometry.points.map(point=>`<line class="curve-guide" x1="${point.x}" y1="14" x2="${point.x}" y2="150"/>`).join('')}<path class="curve-area" d="${geometry.area}"/><path class="curve-line" d="${geometry.path}"/>${geometry.points.map((point,i)=>`<circle class="curve-point point-${i}" cx="${point.x}" cy="${point.y}" r="10"/>`).join('')}</svg>${quotas.map((quota,i)=>`<input class="curve-input" style="--curve-x:${geometry.points[i].x/6}%" type="range" min="${curveSpec.min}" max="${curveSpec.max}" step="${curveSpec.step}" value="${quota}" aria-label="${curveSpec.phases[i].label} 附和 ${quota.toFixed(1)} 次"><span class="curve-label" style="--curve-x:${geometry.points[i].x/6}%"><b>${quota.toFixed(1)}</b><small>${curveSpec.phases[i].label}</small></span>`).join('')}</div><p>前 6 秒合计最多附和 2 次。</p></article>`;
+   }
+   if(kind==='choice')return `<article class="harness-control harness-choice" data-domain="${domain}" data-name="${name}"><header><span>${title}</span><button type="button" class="harness-reset" title="恢复默认" aria-label="${title} 恢复默认" data-default="${escapeHtml(spec.default)}">↶</button></header><strong class="harness-value">${escapeHtml(label(spec,current))}</strong><select aria-label="${title}">${values.map(item=>`<option value="${escapeHtml(item)}" ${item===current?'selected':''}>${escapeHtml(label(spec,item))}</option>`).join('')}</select><small class="harness-pending">${pending?'等你在对话里再确认一次':''}</small></article>`;
+   const dots=values.map((_,i)=>`<i class="${i<=index?'on':''}"></i>`).join('');
+   return `<article class="harness-control harness-slider" data-domain="${domain}" data-name="${name}" data-values="${escapeHtml(JSON.stringify(values))}">
+    <header><span>${title}</span><button type="button" class="harness-reset" title="恢复默认" aria-label="${title} 恢复默认" data-default="${escapeHtml(spec.default)}">↶</button></header>
+    <strong class="harness-value">${escapeHtml(label(spec,current))}</strong>
+    <div class="harness-range-wrap"><div class="harness-track"><span style="width:${values.length>1?index/(values.length-1)*100:0}%"></span><div class="harness-dots">${dots}</div></div><input type="range" min="0" max="${values.length-1}" step="1" value="${index}" aria-label="${title}" aria-valuetext="${escapeHtml(label(spec,current))}"></div>
+    <small class="harness-pending">${pending?'等你在对话里再确认一次':''}</small>
+   </article>`;
+  }).join('')}</div></section>`).join('');
+  const prompt=body.querySelector('.harness-prompt');
+  if(prompt){const textarea=prompt.querySelector('textarea'),count=prompt.querySelector('.harness-count');textarea.oninput=()=>{count.textContent=`${textarea.value.length}/${textarea.maxLength}`;};prompt.querySelector('.harness-prompt-save').onclick=async()=>{status.textContent='正在保存…';try{await harnessClient?.setHarnessPrompt('persona',textarea.value);}catch(error){status.textContent=error.message;}};prompt.querySelector('.harness-prompt-reset').onclick=()=>{textarea.value='';textarea.oninput();void harnessClient?.setHarnessPrompt('persona','');};}
+  for(const card of body.querySelectorAll('.harness-slider')){
+   const input=card.querySelector('input'),value=card.querySelector('.harness-value'),fill=card.querySelector('.harness-track span'),dots=[...card.querySelectorAll('.harness-dots i')];
+   const values=JSON.parse(card.dataset.values),spec=schema[card.dataset.domain][card.dataset.name];
+   const paint=()=>{const index=Number(input.value),selected=values[index];value.textContent=t(label(spec,selected));input.setAttribute('aria-valuetext',label(spec,selected));fill.style.width=`${values.length>1?index/(values.length-1)*100:0}%`;dots.forEach((dot,i)=>dot.classList.toggle('on',i<=index));};
+   const save=async selected=>{if(!harnessClient)return;status.textContent='正在保存…';try{await harnessClient.setHarness({[card.dataset.domain]:{[card.dataset.name]:selected}});}catch(error){status.textContent=error.message;}};
+   input.oninput=paint;input.onchange=()=>void save(values[Number(input.value)]);
+   card.querySelector('.harness-reset').onclick=()=>{input.value=String(Math.max(0,values.indexOf(spec.default)));paint();void save(spec.default);};
+  }
+  for(const card of body.querySelectorAll('.harness-choice')){
+   const select=card.querySelector('select'),value=card.querySelector('.harness-value'),spec=schema[card.dataset.domain][card.dataset.name];
+   const save=async selected=>{if(!harnessClient)return;status.textContent='正在保存…';try{await harnessClient.setHarness({[card.dataset.domain]:{[card.dataset.name]:selected}});}catch(error){status.textContent=error.message;}};
+   select.onchange=()=>{value.textContent=t(label(spec,select.value));void save(select.value);};
+   card.querySelector('.harness-reset').onclick=()=>{select.value=spec.default;value.textContent=t(label(spec,spec.default));void save(spec.default);};
+  }
+  const curve=body.querySelector('.backchannel-curve');
+  if(curve){const inputs=[...curve.querySelectorAll('.curve-input')],labels=[...curve.querySelectorAll('.curve-label b')],svg=curve.querySelector('svg');
+   const paint=()=>{const quotas=inputs.map(input=>Number(input.value)),geometry=curveGeometry(quotas,curveSpec);svg.querySelector('.curve-line').setAttribute('d',geometry.path);svg.querySelector('.curve-area').setAttribute('d',geometry.area);geometry.points.forEach((point,i)=>{svg.querySelector(`.point-${i}`).setAttribute('cy',point.y);labels[i].textContent=quotas[i].toFixed(1);inputs[i].setAttribute('aria-label',`${curveSpec.phases[i].label} 附和 ${quotas[i].toFixed(1)} 次`);});return quotas;};
+   const save=async quotas=>{if(!harnessClient)return;status.textContent='正在保存…';try{await harnessClient.setBackchannelCurve(quotas);}catch(error){status.textContent=error.message;}};
+   inputs.forEach(input=>{input.oninput=paint;input.onchange=()=>void save(paint());});
+   curve.querySelector('.curve-reset').onclick=()=>{status.textContent='正在保存…';void harnessClient?.setBackchannelCurve(null);};
+  }
+  translate(panel);
+ }
+ function activate(){
+  render();if(!harnessClient)return;
+  requested=true;void harnessClient.getHarness().catch(error=>{status.textContent=error.message;});
+ }
+ return{activate,render,get requested(){return requested;}};
+}
+function bindHarness(client){harnessClient=client;if(harnessApi?.requested)harnessApi.activate();else harnessApi?.render();}
+document.addEventListener('self-harness-state',event=>{harnessMessage=event.detail;harnessApi?.render();});
 const COMPONENTS=[
  {id:'input',title:'语音输入',description:'麦克风与流式识别'},
  {id:'memory',title:'记忆系统',description:'记忆检索与整理'},
@@ -210,30 +306,33 @@ function setupComponentBoard(board){
 function openSettings(){
  opener=document.activeElement;
  if(!dialog){dialog=document.createElement('dialog');dialog.className='settings-page';dialog.setAttribute('aria-labelledby','settingsTitle');
- dialog.innerHTML=`<div class="settings-inner"><header class="settings-header"><h1 id="settingsTitle">设置</h1><button type="button" id="closeSettings">返回对话</button></header>
+ dialog.innerHTML=`<div class="settings-shell"><aside class="settings-sidebar"><div class="settings-brand"><span class="settings-logo">V</span><strong id="settingsTitle">设置</strong></div>
  <nav class="settings-tabs" role="tablist" aria-label="设置">
-  <button role="tab" aria-selected="true" aria-controls="settingsStyle">1 · 风格</button>
-  <button role="tab" aria-selected="false" aria-controls="settingsDisplay">2 · 语言与字体</button>
-  <button role="tab" aria-selected="false" aria-controls="settingsHarness">3 · Harness</button>
-  <button role="tab" aria-selected="false" aria-controls="settingsComponents">4 · 组件</button>
- </nav>
- <section class="settings-panel on" id="settingsStyle" role="tabpanel"><h2>选择模式</h2><div class="settings-modes">
-  <a href="technical.html" class="mode-card mode-technical"><div class="mode-orb"></div><strong>科技风</strong><p>专注、清晰，尽在掌握</p></a>
-  <a href="digital.html" class="mode-card mode-digital"><img src="assets/avatar.jpg" alt="银发数字人助手"><strong>数字人</strong><p>有回应，也有陪伴</p></a></div></section>
- <section class="settings-panel" id="settingsDisplay" role="tabpanel"></section>
- <section class="settings-panel settings-empty" id="settingsHarness" role="tabpanel" aria-label="Harness"></section>
- <section class="settings-panel" id="settingsComponents" role="tabpanel"><div class="component-board" aria-label="组件画板"></div></section></div>`;
- dialog.querySelector('#settingsDisplay').append(controls());document.body.append(dialog);
+  <button role="tab" aria-selected="true" aria-controls="settingsStyle"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9c0-1.1-.9-2-2-2h-1.6a2 2 0 0 1-1.8-2.8l.6-1.4A2 2 0 0 0 14.4 3H12Z"/><circle cx="7.5" cy="11.5" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="8.5" cy="16" r="1"/></svg><span>外观</span></button>
+  <button role="tab" aria-selected="false" aria-controls="settingsDisplay"><svg viewBox="0 0 24 24"><path d="M4 19 10.5 5h3L20 19M7 14h10"/></svg><span>文字</span></button>
+  <button role="tab" aria-selected="false" aria-controls="settingsHarness"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg><span>对话偏好</span></button>
+  <button role="tab" aria-selected="false" aria-controls="settingsComponents"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg><span>组件</span></button>
+ </nav></aside>
+ <main class="settings-main"><header class="settings-header"><span class="settings-current">外观</span><button type="button" id="closeSettings" aria-label="返回对话" title="返回对话">×</button></header><div class="settings-scroll">
+ <section class="settings-panel on" id="settingsStyle" role="tabpanel"><div class="settings-panel-copy"><h2>外观</h2><p>选择你喜欢的对话画面。</p></div><div class="settings-modes">
+  <a href="technical.html?v=20260921-4" class="mode-card mode-technical"><div class="mode-orb"></div><strong>科技风</strong><p>专注、清晰，尽在掌握</p></a>
+  <a href="digital.html?v=20260921-4" class="mode-card mode-digital"><img src="assets/avatar.jpg" alt="银发数字人助手"><strong>数字人</strong><p>有回应，也有陪伴</p></a></div></section>
+ <section class="settings-panel" id="settingsDisplay" role="tabpanel"><div class="settings-panel-copy"><h2>文字</h2><p>调整语言和字号。</p></div><div class="settings-panel-body"></div></section>
+ <section class="settings-panel" id="settingsHarness" role="tabpanel"><div class="settings-panel-copy"><h2>对话偏好</h2><p>这些设置只在当前对话中生效。你在聊天里说“慢一点”时，这里也会同步。</p><span class="harness-status" aria-live="polite">正在连接 Studio…</span></div><div class="harness-controls"></div></section>
+ <section class="settings-panel" id="settingsComponents" role="tabpanel"><div class="settings-panel-copy"><h2>组件</h2><p>查看运行状态或调整布局。</p></div><div class="component-board" aria-label="组件画板"></div></section>
+ </div></main></div>`;
+ dialog.querySelector('#settingsDisplay .settings-panel-body').append(controls());document.body.append(dialog);
  const componentApi=setupComponentBoard(dialog.querySelector('.component-board'));
+ harnessApi=setupHarnessPanel(dialog.querySelector('#settingsHarness'));
  const tabs=[...dialog.querySelectorAll('.settings-tabs button')],panels=[...dialog.querySelectorAll('.settings-panel')];
- function showPanel(index){tabs.forEach((tab,i)=>{const on=i===index;tab.setAttribute('aria-selected',String(on));tab.tabIndex=on?0:-1;panels[i].classList.toggle('on',on);});if(index===3)componentApi.activate();}
+ function showPanel(index){tabs.forEach((tab,i)=>{const on=i===index;tab.setAttribute('aria-selected',String(on));tab.tabIndex=on?0:-1;panels[i].classList.toggle('on',on);});dialog.querySelector('.settings-current').textContent=tabs[index].querySelector('span').textContent;if(index===2)harnessApi.activate();if(index===3)componentApi.activate();}
  tabs.forEach((tab,i)=>{tab.tabIndex=i?-1:0;tab.onclick=()=>showPanel(i);tab.onkeydown=e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();const next=e.key==='Home'?0:e.key==='End'?tabs.length-1:(i+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;showPanel(next);tabs[next].focus();};});
  dialog.querySelector('#closeSettings').onclick=()=>dialog.close();dialog.addEventListener('close',()=>{document.dispatchEvent(new Event('settings-close'));opener?.focus();});
  const current=dialog.querySelector('.mode-'+document.body.dataset.style);current?.setAttribute('aria-current','page');current?.addEventListener('click',e=>{e.preventDefault();dialog.close();});
  }
  apply(false);document.dispatchEvent(new Event('settings-open'));dialog.showModal();dialog.querySelector('#closeSettings').focus();
 }
-window.VMSettings={graphLabel(value){const labels={work:'工作',health:'健康',person:'人物',research:'研究',projects:'项目',entertainment:'娱乐',you:'你','经济':'财务'};return prefs.lang==='en'?(value==='经济'?'finance':value):labels[value]||value;},get language(){return prefs.lang;},get uiScale(){return prefs.uiLevel*UI_BASE;},get contentScale(){return prefs.contentLevel*CONTENT_BASE;},t,open:openSettings};
+window.VMSettings={graphLabel(value){const labels={work:'工作',health:'健康',person:'人物',research:'研究',projects:'项目',entertainment:'娱乐',you:'你','经济':'财务'};return prefs.lang==='en'?(value==='经济'?'finance':value):labels[value]||value;},get language(){return prefs.lang;},get uiScale(){return prefs.uiLevel*UI_BASE;},get contentScale(){return prefs.contentLevel*CONTENT_BASE;},t,bindHarness,open:openSettings};
 const btn=document.getElementById('settingsBtn');if(btn)btn.onclick=openSettings;
 apply(false);
 let queued=false;

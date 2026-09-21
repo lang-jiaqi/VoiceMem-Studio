@@ -210,6 +210,9 @@
     }
     function handle(owner, message) {
       if (!active(owner)) return;
+      if (message.type === 'self_harness_state') {
+        document.dispatchEvent(new CustomEvent('self-harness-state', { detail: message }));
+      }
       if (message.output_id && message.type !== 'answer_start' && message.output_id !== owner.output) return;
       switch (message.type) {
         case 'session_ready':
@@ -365,10 +368,33 @@
       sendJSON(owner, { type: 'user_text', text });
       phase(owner, 'short-thinking');
     }
+    function pause() {
+      if (run) stopMic(run);
+    }
+    async function getHarness() {
+      const owner = await connect();
+      if (!active(owner)) throw new Error('会话已结束');
+      sendJSON(owner, { type: 'self_harness_get' });
+    }
+    async function setHarness(update) {
+      const owner = await connect();
+      if (!active(owner)) throw new Error('会话已结束');
+      sendJSON(owner, { type: 'self_harness_update', update });
+    }
+    async function setHarnessPrompt(name, value) {
+      const owner = await connect();
+      if (!active(owner)) throw new Error('会话已结束');
+      sendJSON(owner, { type: 'harness_prompt_update', name, value });
+    }
+    async function setBackchannelCurve(values) {
+      const owner = await connect();
+      if (!active(owner)) throw new Error('会话已结束');
+      sendJSON(owner, { type: 'backchannel_curve_update', values });
+    }
     function toggle() { if (run?.mic) end(); else void start(); }
     window.addEventListener('pagehide', end);
     document.addEventListener('visibilitychange', () => { if (document.hidden && !window.studioModelServices) end(); });
-    document.addEventListener('settings-open', end);
+    document.addEventListener('settings-open', pause);
     let language = window.VMSettings?.language || 'zh-CN';
     document.addEventListener('display-settings-change', () => {
       const next = window.VMSettings?.language || 'zh-CN';
@@ -378,7 +404,7 @@
         .then(response => { if (!response.ok) throw new Error('语言切换失败'); })
         .catch(error => VMUI.notify(error.message));
     });
-    return { send, start, toggle, replay, stopReplay, cancel: end, stop: end };
+    return { send, start, toggle, pause, getHarness, setHarness, setHarnessPrompt, setBackchannelCurve, replay, stopReplay, cancel: end, stop: end };
   }
   function applyUser(messages, event, role) {
     const id = event.input_turn_id;

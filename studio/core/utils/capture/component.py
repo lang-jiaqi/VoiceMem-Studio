@@ -16,6 +16,9 @@ class Capture:
                          said=None, on_candidate=None, on_candidate_reject=None,
                          on_playback_checkpoint=None, on_filler_done=None, on_early=None,
                          on_early_cancel=None,
+                         on_self_harness_get=None, on_self_harness_update=None,
+                         on_harness_prompt_update=None,
+                         on_backchannel_curve_update=None,
                          on_speech_start=None, textless_confirm_s=None,
                          turn_taking=None):
         """Yield confirmed turns while forwarding audio, playback, and cancellation events."""
@@ -98,6 +101,23 @@ class Capture:
                 if data.get("type") == "filler_done":
                     if on_filler_done:
                         on_filler_done(str(data.get("filler_id") or ""))
+                    continue
+                if data.get("type") == "self_harness_get":
+                    if on_self_harness_get:
+                        await on_self_harness_get()
+                    continue
+                if data.get("type") == "self_harness_update":
+                    if on_self_harness_update:
+                        await on_self_harness_update(data.get("update"))
+                    continue
+                if data.get("type") == "harness_prompt_update":
+                    if on_harness_prompt_update:
+                        await on_harness_prompt_update(
+                            data.get("name"), data.get("value"))
+                    continue
+                if data.get("type") == "backchannel_curve_update":
+                    if on_backchannel_curve_update:
+                        await on_backchannel_curve_update(data.get("values"))
                     continue
                 if data.get("type") == "user_text" and data.get("text", "").strip():
                     turn_taking.begin_user_turn()

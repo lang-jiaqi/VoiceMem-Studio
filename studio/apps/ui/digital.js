@@ -300,6 +300,7 @@ const voiceInput=VMStudio.create({
   onInterim(text){$('said').classList.add('on');$('said').textContent=text;$('say').value=text;syncSend();},
   onFinal:send
 });
+window.VMSettings?.bindHarness(voiceInput);
 $('micBtn').onclick=()=>voiceInput.toggle();
 $('startTalk').onclick=()=>{$('say').focus();voiceInput.toggle();};
 addEventListener('click', e => {
@@ -320,7 +321,7 @@ document.querySelector('.switch').addEventListener('keydown',e=>{if(e.key==='Arr
 addEventListener('keydown',e=>{if(e.key==='Escape'){setDrawer(false);setRail(innerWidth>1024 && !document.body.classList.contains('rail-collapsed'));voiceInput.cancel();}});
 document.addEventListener('visibilitychange',()=>{syncBackgroundPlayback();cancelAnimationFrame(raf);raf=0;lastT=0;if(!document.hidden && ink!==inkTarget)raf=requestAnimationFrame(tick);});
 addEventListener('pageshow',e=>{syncBackgroundPlayback();if(e.persisted){selectConversation(current);resizeInk();if(ink!==inkTarget&&!raf)raf=requestAnimationFrame(tick);}});
-document.addEventListener('settings-open',()=>voiceInput.cancel());
+document.addEventListener('settings-open',()=>voiceInput.pause());
 addEventListener('pagehide',()=>{backgroundVideo.pause();cancelAnimationFrame(raf);clearTimeout(typeTimer);clearTimeout(markTimer);clearTimeout(toastTimer);});
 
 })();

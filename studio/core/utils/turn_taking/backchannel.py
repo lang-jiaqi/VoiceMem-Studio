@@ -1,13 +1,12 @@
 """Studio backchannel implementation."""
 from __future__ import annotations
 
+import math
 import os
 import random
 import re
 import time
 from dataclasses import dataclass, field
-
-
 
 ENABLED = True
 
@@ -114,6 +113,7 @@ class Backchannel:
     rng: random.Random = field(default_factory=random.Random)
     enabled: bool = True
     frequency: str = "auto"
+    custom_phase_quotas: tuple[float, float, float, float] | None = None
     _last_at: float | None = None
     _last_token: str = ""
 
@@ -197,11 +197,17 @@ class Backchannel:
             return None
         target = self._phase_targets[phase]
         if target is None:
-            target = self.policy.session_curve.draw_target(speech, self.rng.random())
-            if self.frequency == "less":
-                target = min(target, 1)
-            elif self.frequency == "more":
-                target = min(3, max(1, target + 1))
+            roll = self.rng.random()
+            if self.custom_phase_quotas is not None:
+                expected = min(3.0, max(0.0, self.custom_phase_quotas[phase]))
+                lower = math.floor(expected)
+                target = lower + (roll < expected - lower)
+            else:
+                target = self.policy.session_curve.draw_target(speech, roll)
+                if self.frequency == "less":
+                    target = min(target, 1)
+                elif self.frequency == "more":
+                    target = min(3, max(1, target + 1))
             self._phase_targets[phase] = target
         if DEBUG:
             print(f"[backchannel] turn={self._completed_turns + 1} "

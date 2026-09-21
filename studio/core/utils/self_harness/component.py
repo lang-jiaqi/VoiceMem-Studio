@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 
 from studio.harness.self_harness.policy import (
     MAX_CHANGES_PER_TURN,
@@ -12,6 +13,9 @@ from studio.harness.self_harness.policy import (
 
 CONTROL_OPEN = "<self_harness>"
 CONTROL_CLOSE = "</self_harness>"
+PROMPT_SCHEMA = {
+    "persona": {"default": "", "max_length": 2000},
+}
 
 
 @dataclass(frozen=True)
@@ -30,6 +34,87 @@ def default_profile() -> dict[str, dict[str, str]]:
         domain: {name: spec["default"] for name, spec in fields.items()}
         for domain, fields in PROFILE_SCHEMA.items()
     }
+
+
+def public_schema() -> dict[str, dict[str, dict]]:
+    """Return the user-facing enum metadata without private prompt instructions."""
+    return {
+        domain: {
+            name: {
+                "default": spec["default"],
+                "values": list(spec["values"]),
+                "labels": dict(spec["labels"]),
+            }
+            for name, spec in fields.items()
+        }
+        for domain, fields in PROFILE_SCHEMA.items()
+    }
+
+
+def public_prompt_schema() -> dict[str, dict]:
+    """Return the explicit, session-only prompt fields exposed by settings."""
+    return {name: dict(spec) for name, spec in PROMPT_SCHEMA.items()}
+
+
+def _backchannel_profile_curve(mode: str) -> list[float]:
+    from studio.harness.turn_taking.policy import SessionFrequencyCurve
+    curve = SessionFrequencyCurve()
+    distributions = (
+        curve.opening_counts, curve.middle_counts,
+        curve.steady_counts, curve.late_counts,
+    )
+    values = []
+    for distribution in distributions:
+        expected = 0.0
+        for count, probability in distribution:
+            if mode == "off":
+                selected = 0
+            elif mode == "less":
+                selected = min(count, 1)
+            elif mode == "more":
+                selected = min(3, max(1, count + 1))
+            else:
+                selected = count
+            expected += selected * probability
+        values.append(round(expected, 1))
+    return values
+
+
+def public_backchannel_curve_schema() -> dict:
+    """Return the four real quota phases used by the curve editor."""
+    return {
+        "min": 0.0,
+        "max": 3.0,
+        "step": 0.1,
+        "phases": [
+            {"key": "opening", "label": "0–3s"},
+            {"key": "middle", "label": "3–6s"},
+            {"key": "steady", "label": "6–10s"},
+            {"key": "late", "label": "10s+"},
+        ],
+        "profiles": {
+            mode: _backchannel_profile_curve(mode)
+            for mode in ("auto", "off", "less", "more")
+        },
+        "early_cap": 2,
+    }
+
+
+def validate_backchannel_curve(value) -> list[float] | None:
+    """Validate an explicit four-phase expected-quota curve."""
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        raise ValueError("backchannel curve must contain four phase quotas")
+    result = []
+    for raw in value:
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise ValueError("backchannel curve quotas must be numbers")
+        selected = float(raw)
+        if not math.isfinite(selected) or not 0.0 <= selected <= 3.0:
+            raise ValueError("backchannel curve quotas must be between 0 and 3")
+        result.append(round(selected, 1))
+    return result
 
 
 def normalize_profile(value=None) -> dict[str, dict[str, str]]:
@@ -122,10 +207,22 @@ def normalize_snapshot(value=None) -> dict:
     """Return a detached snapshot suitable for one in-flight reply."""
     profile, recent = _snapshot_parts(value)
     pending = value.get("pending", {}) if isinstance(value, dict) else {}
+    prompts = value.get("prompts", {}) if isinstance(value, dict) else {}
     return {
         "profile": profile,
         "recent": list(recent),
         "pending": dict(pending) if isinstance(pending, dict) else {},
+        "prompts": {
+            name: str(prompts.get(name, spec["default"]))[:spec["max_length"]]
+            if isinstance(prompts, dict) else spec["default"]
+            for name, spec in PROMPT_SCHEMA.items()
+        },
+        "backchannel_curve": (
+            list(value.get("backchannel_curve"))
+            if isinstance(value, dict)
+            and isinstance(value.get("backchannel_curve"), (list, tuple))
+            else None
+        ),
     }
 
 
@@ -133,6 +230,7 @@ def profile_context(value=None) -> str:
     """Render current values and conservative stability hints for the reply model."""
     profile, recent = _snapshot_parts(value)
     pending = value.get("pending", {}) if isinstance(value, dict) else {}
+    prompts = value.get("prompts", {}) if isinstance(value, dict) else {}
     rows = []
     overlays = []
     for domain, fields in profile.items():
@@ -154,6 +252,16 @@ def profile_context(value=None) -> str:
         *rows,
         length_note,
     ]
+    try:
+        backchannel_curve = validate_backchannel_curve(
+            value.get("backchannel_curve") if isinstance(value, dict) else None)
+    except ValueError:
+        backchannel_curve = None
+    if backchannel_curve is not None:
+        parts.append(
+            "用户已在设置中明确指定四阶段垫话配额："
+            + " / ".join(f"{quota:.1f}" for quota in backchannel_curve)
+            + "；不要主动覆盖。")
     if overlays:
         parts.extend(("当前行为覆盖：", *overlays))
     if recent:
@@ -162,6 +270,13 @@ def profile_context(value=None) -> str:
     if pending:
         parts.append("等待用户再次确认的值：" + "、".join(
             f"{path}={selected}" for path, selected in sorted(pending.items())))
+    persona_prompt = str(prompts.get("persona", "")).strip() if isinstance(prompts, dict) else ""
+    if persona_prompt:
+        parts.extend((
+            "【用户设置的当前对话 Persona 补充】",
+            "在不覆盖系统安全边界和真实性要求的前提下遵守：",
+            persona_prompt,
+        ))
     return "\n".join(parts)
 
 
@@ -188,6 +303,10 @@ class SelfHarnessState:
 
     def __init__(self, on_change=None):
         self.profile = default_profile()
+        self.prompts = {
+            name: spec["default"] for name, spec in PROMPT_SCHEMA.items()
+        }
+        self.backchannel_curve: list[float] | None = None
         self.turn = 0
         self.last_changed: dict[str, int] = {}
         self.pending: dict[str, tuple[str, int]] = {}
@@ -203,6 +322,10 @@ class SelfHarnessState:
             "recent": recent,
             "pending": {path: selected
                         for path, (selected, _) in self.pending.items()},
+            "prompts": dict(self.prompts),
+            "backchannel_curve": (
+                list(self.backchannel_curve)
+                if self.backchannel_curve is not None else None),
         }
 
     def preview(self, value) -> dict[str, dict[str, str]]:
@@ -236,10 +359,14 @@ class SelfHarnessState:
                 path = f"{domain}.{name}"
                 if self.profile[domain][name] == selected:
                     self.pending.pop(path, None)
+                    if path == "turn_taking.backchannel":
+                        self.backchannel_curve = None
                 elif name in effective.get(domain, {}):
                     self.profile[domain][name] = selected
                     self.last_changed[path] = next_turn
                     self.pending.pop(path, None)
+                    if path == "turn_taking.backchannel":
+                        self.backchannel_curve = None
                 else:
                     self.pending[path] = (selected, next_turn)
         self.turn = next_turn
@@ -250,6 +377,48 @@ class SelfHarnessState:
         if self.on_change is not None:
             self.on_change(self.snapshot())
         return effective
+
+    def set_explicit(self, value) -> dict[str, dict[str, str]]:
+        """Apply an explicit UI choice immediately while retaining model hysteresis."""
+        update = validate_update(value)
+        for domain, fields in update.items():
+            for name, selected in fields.items():
+                path = f"{domain}.{name}"
+                self.profile[domain][name] = selected
+                self.last_changed[path] = self.turn
+                self.pending.pop(path, None)
+                if path == "turn_taking.backchannel":
+                    self.backchannel_curve = None
+        if self.on_change is not None:
+            self.on_change(self.snapshot())
+        return update
+
+    def set_prompt(self, name: str, value: str) -> str:
+        """Set one explicit user prompt for this conversation only."""
+        spec = PROMPT_SCHEMA.get(name)
+        if spec is None:
+            raise ValueError(f"unknown Harness prompt: {name}")
+        if not isinstance(value, str):
+            raise ValueError("Harness prompt must be text")
+        value = value.strip()
+        if len(value) > spec["max_length"]:
+            raise ValueError(
+                f"Harness prompt exceeds {spec['max_length']} characters")
+        self.prompts[name] = value
+        if self.on_change is not None:
+            self.on_change(self.snapshot())
+        return value
+
+    def set_backchannel_curve(self, value) -> list[float] | None:
+        """Apply or reset the explicit phase quotas for this conversation."""
+        selected = validate_backchannel_curve(value)
+        self.backchannel_curve = selected
+        self.profile["turn_taking"]["backchannel"] = "auto"
+        self.pending.pop("turn_taking.backchannel", None)
+        self.last_changed["turn_taking.backchannel"] = self.turn
+        if self.on_change is not None:
+            self.on_change(self.snapshot())
+        return list(selected) if selected is not None else None
 
 
 class StagedSelfHarnessUpdate:
@@ -284,6 +453,10 @@ def apply_turn_taking_profile(machine, value=None) -> None:
     backchannel = profile["turn_taking"]["backchannel"]
     machine.backchannel.enabled = backchannel != "off"
     machine.backchannel.frequency = backchannel
+    custom_curve = value.get("backchannel_curve") if isinstance(value, dict) else None
+    machine.backchannel.custom_phase_quotas = (
+        tuple(validate_backchannel_curve(custom_curve))
+        if custom_curve is not None else None)
     filler = profile["turn_taking"]["work_filler"]
     baseline = getattr(machine, "_default_work_filler_probability",
                        machine.work_filler_probability)
