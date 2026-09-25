@@ -2,6 +2,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 const { setTimeout: delay } = require('node:timers/promises');
 
 const DEFAULTS = Object.freeze({ serverUrl: 'http://127.0.0.1:8787', autoStartDocker: false, projectDir: '' });
@@ -300,6 +301,8 @@ async function startManagedBackend(directory, memoryProvider, replyProvider, {
   const specification = await managedBackendCommand(directory, memoryProvider, replyProvider,
     { signal, platform, arch, env, run });
   signal?.throwIfAborted();
+  const instanceId = randomUUID();
+  specification.env.VOICEMEM_DESKTOP_INSTANCE = instanceId;
   let child;
   try {
     child = spawnImpl(specification.file, specification.args, {
@@ -318,7 +321,7 @@ async function startManagedBackend(directory, memoryProvider, replyProvider, {
   const abort = () => stop();
   if (signal) signal.addEventListener('abort', abort, { once: true });
   void exited.then(() => signal?.removeEventListener('abort', abort));
-  return { ...specification, child, exited, stop };
+  return { ...specification, instanceId, child, exited, stop };
 }
 
 async function prepareManagedMemory(directory, provider, {
@@ -374,13 +377,18 @@ async function startDocker(directory, { signal, run = command, platform = proces
   return publishedUrl(await run('docker', [...compose, 'port', 'studio', '8787'], { cwd: root, signal }));
 }
 
-async function probe(url, { signal, timeoutMs = 2500, fetchImpl = fetch } = {}) {
+async function probe(url, { signal, timeoutMs = 2500, fetchImpl = fetch, instanceId } = {}) {
   const response = await fetchImpl(`${serverUrl(url)}/`, {
     signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(timeoutMs)]), redirect: 'error',
   });
   let reader;
   try {
     if (!response.ok) throw new Error(`服务返回 HTTP ${response.status}`);
+    if (instanceId && response.headers.get('x-voicemem-desktop-instance') !== instanceId) {
+      const error = new Error('端口 8787 已被其他服务占用。请关闭先前启动的 Web 服务，或运行 npm run start:remote 连接它。');
+      error.code = 'WRONG_INSTANCE';
+      throw error;
+    }
     reader = response.body.getReader();
     let html = '';
     while (html.length < 16384) {
@@ -395,13 +403,14 @@ async function probe(url, { signal, timeoutMs = 2500, fetchImpl = fetch } = {}) 
   }
 }
 
-async function waitForStudio(url, { signal, timeoutMs = 180000, intervalMs = 1500, check = probe, onWait = () => {} } = {}) {
+async function waitForStudio(url, { signal, timeoutMs = 180000, intervalMs = 1500, check = probe,
+  onWait = () => {}, instanceId } = {}) {
   const started = Date.now();
   let lastError;
   while (Date.now() - started < timeoutMs) {
     signal?.throwIfAborted();
-    try { await check(url, { signal }); return; }
-    catch (error) { signal?.throwIfAborted(); lastError = error; }
+    try { await check(url, { signal, instanceId }); return; }
+    catch (error) { signal?.throwIfAborted(); if (error.code === 'WRONG_INSTANCE') throw error; lastError = error; }
     onWait(Math.floor((Date.now() - started) / 1000));
     await delay(intervalMs, undefined, { signal });
   }

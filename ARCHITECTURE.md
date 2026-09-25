@@ -283,7 +283,8 @@ is accepted only on loopback. Settings and browser state live in the desktop
 application-data directory, not in the backend's memory or credential files.
 
 The source desktop entry (`npm start`) first verifies its locked Electron, PixiJS,
-and Pixi Live2D files. Missing files trigger `npm ci --include=dev`; a complete
+and Pixi Live2D files. A missing Electron binary in an installed package triggers
+its installer; other missing files trigger `npm ci --include=dev`. A complete
 installation performs no package-manager or network work. The managed install
 explicitly enables lifecycle scripts so a user-level npm `ignore-scripts`
 setting cannot leave Electron without its platform binary. It then owns an optional local backend lifecycle.
@@ -315,6 +316,10 @@ Electron starts `.venv/bin/python` with the MLX backend on macOS, or invokes
 paths bind loopback port 8787, disable the backend-owned pet, acquire the
 remaining reply and speech models, run strict warmups, wait for the shared Web
 page for up to 30 minutes by default, and only then create and show the style selector.
+The managed backend echoes a per-launch instance ID on the Web root response;
+the App accepts readiness only from that instance and reports an occupied port
+immediately if a previously started Web service responds there. Existing-service
+connections do not require this instance ID.
 The timeout can be increased for unusually slow first downloads through the
 desktop launch environment. Existing-service connections retain their shorter
 readiness timeout. Managed startup never

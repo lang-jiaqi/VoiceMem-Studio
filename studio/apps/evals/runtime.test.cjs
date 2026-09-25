@@ -4,7 +4,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const http = require('node:http');
 const { EventEmitter } = require('node:events');
 const r = require('../runtime.cjs');
 
@@ -205,6 +204,28 @@ test('VoiceMem preparation finishes before Electron startup continues', async t 
   assert.equal(specification.options.stdio, 'inherit');
 });
 
+test('managed backend receives a unique readiness identity', async t => {
+  const directory = await backendProject(t);
+  const python = path.join(directory, '.venv/bin/python');
+  await fs.mkdir(path.dirname(python), { recursive: true });
+  await fs.writeFile(python, 'fixture');
+  let childEnv;
+  const backend = await r.startManagedBackend(directory, 'deepseek', 'deepseek', {
+    platform: 'darwin',
+    spawnImpl(_file, _args, options) {
+      childEnv = options.env;
+      const child = new EventEmitter();
+      child.killed = false;
+      child.kill = () => { child.killed = true; child.emit('exit', 0, null); };
+      return child;
+    },
+  });
+  assert.match(backend.instanceId, /^[0-9a-f-]{36}$/);
+  assert.equal(childEnv.VOICEMEM_DESKTOP_INSTANCE, backend.instanceId);
+  backend.stop();
+  await backend.exited;
+});
+
 test('managed Python backend needs Studio but not the optional Compose deployment', async t => {
   const directory = await backendProject(t);
   assert.equal(await r.validateBackendProject(directory), await fs.realpath(directory));
@@ -259,14 +280,25 @@ test('Windows Docker startup accepts only a local named pipe', async t => {
   }
 });
 
-test('readiness checks only GET the existing Web root', async t => {
-  const server = http.createServer((req, res) => {
-    assert.equal(req.method, 'GET'); assert.equal(req.url, '/');
-    res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html><title>VoiceMem</title></html>');
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => { server.closeAllConnections(); server.close(); });
-  await r.probe(`http://127.0.0.1:${server.address().port}`);
+test('readiness accepts only the managed backend instance', async () => {
+  const url = 'http://127.0.0.1:8787';
+  const fetchImpl = async (requested, options) => {
+    assert.equal(requested, `${url}/`);
+    assert.equal(options.redirect, 'error');
+    return new Response('<html><title>VoiceMem</title></html>', {
+      headers: { 'x-voicemem-desktop-instance': 'owned-backend' },
+    });
+  };
+  await r.probe(url, { fetchImpl });
+  await r.probe(url, { fetchImpl, instanceId: 'owned-backend' });
+  await assert.rejects(r.probe(url, {
+    instanceId: 'owned-backend',
+    fetchImpl: async () => new Response('<html><title>VoiceMem</title></html>'),
+  }), /端口 8787 已被其他服务占用/);
+  await assert.rejects(r.waitForStudio(url, {
+    instanceId: 'another-backend', timeoutMs: 100, intervalMs: 1,
+    check: (target, options) => r.probe(target, { ...options, fetchImpl }),
+  }), /端口 8787 已被其他服务占用/);
 });
 
 test('readiness waiting retries, cancels and times out without starting another service', async () => {

@@ -278,6 +278,7 @@ async function connectManaged(config, { quitOnError = true } = {}) {
     await Promise.race([
       runtime.waitForStudio(backend.url, {
         signal: control.signal,
+        instanceId: backend.instanceId,
         timeoutMs: startupTimeoutMs,
         onWait: seconds => publish('connecting', `等待本机后端就绪 · ${seconds} 秒。首次模型预热可能需要几分钟。`),
       }),

@@ -191,6 +191,7 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
               set_lang=None, title=None, components=None, pet_port=8787):
     """Build the browser API and WebSocket routes using injected session callbacks."""
     app = FastAPI()
+    desktop_instance = os.environ.get('VOICEMEM_DESKTOP_INSTANCE', '')
     title = title or make_title_generator()
     pet, pet_hub = PetSupervisor(), PetHub()
 
@@ -316,7 +317,10 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
     def index(request: Request, pet_on: bool = Query(False, alias="pet")):
         if pet_on:
             pet.ensure_running(loopback_ws_url(request))
-        return FileResponse(HERE.parent / "apps" / "ui" / "index.html", headers=_NOCACHE)
+        headers = {**_NOCACHE}
+        if desktop_instance:
+            headers['X-VoiceMem-Desktop-Instance'] = desktop_instance
+        return FileResponse(HERE.parent / "apps" / "ui" / "index.html", headers=headers)
 
     @app.get("/legacy")
     def legacy():
