@@ -64,16 +64,24 @@ test('missing App runtime dependencies trigger one locked dev install', async t 
   assert.equal('npm_config_production' in calls[0].options.env, false);
 });
 
-test('an Electron package without its downloaded executable is repaired', async t => {
+test('an installed Electron package downloads its missing executable without reinstalling all dependencies', async t => {
   const apps = await temporary(t); const calls = [];
   provideDependencies(apps);
   await promises.rm(path.join(apps, 'node_modules/electron/dist/fixture-electron'));
+  await promises.writeFile(path.join(apps, 'node_modules/electron/install.js'), 'fixture');
   assert.deepEqual(dependencies.missingDependencies(apps).map(([name]) => name), ['Electron']);
   assert.equal(dependencies.ensureDependencies({
-    apps,
-    run: () => { calls.push('npm ci'); provideDependencies(apps); return { status: 0 }; },
+    apps, env: { ELECTRON_SKIP_BINARY_DOWNLOAD: '1' },
+    run: (file, args, options) => {
+      calls.push({ file, args, options });
+      provideDependencies(apps);
+      return { status: 0 };
+    },
   }), true);
-  assert.deepEqual(calls, ['npm ci']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].file, process.execPath);
+  assert.deepEqual(calls[0].args, [path.join(apps, 'node_modules/electron/install.js')]);
+  assert.equal('ELECTRON_SKIP_BINARY_DOWNLOAD' in calls[0].options.env, false);
 });
 
 test('complete App runtime dependencies skip npm install', async t => {
