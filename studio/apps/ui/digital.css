@@ -104,6 +104,9 @@ body.rail-collapsed .log-glass{margin-right:30px}
   transition:width var(--slow) var(--ease);will-change:width}
 body.rail-collapsed .human{width:calc(var(--boundary) - 16px)}
 .scene{position:relative;z-index:3;padding:0 26px 22px;display:flex;flex-direction:column;gap:12px}
+.turn-memory{max-height:min(30svh,220px);overflow:auto;border:1px solid #ffffffae;border-radius:13px;background:#ffffffc9;box-shadow:0 4px 24px #28223c13;font-size:12px;color:#514c5f}
+.turn-memory summary{padding:9px 12px;cursor:pointer;font-weight:600}
+.turn-memory-body{padding:0 12px 10px}.turn-memory h3{font-size:11px;color:#8c819e;margin:6px 0 2px}.turn-memory ul{padding-left:18px;margin:2px 0 6px}.turn-memory li{margin:3px 0;line-height:1.45}
 
 .said{font-size:calc(17px * var(--font-scale,1));line-height:1.8;color:var(--ink);max-width:100%;min-height:1.8em;
   opacity:0;transform:translateY(8px);transition:opacity .5s var(--ease),transform .55s var(--ease);text-shadow:0 1px 14px #fff,0 0 26px #ffffffcc}

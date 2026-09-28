@@ -14,6 +14,41 @@ let current = conversations[0], replyMessage = null;
 let conversationSwitch = 0;
 const state = {get messages(){return current.messages;},busy:false,listening:false,memory:false};
 let toastTimer, typeTimer, markTimer;
+let memoryPoll = 0;
+let knownMemories = new Set();
+let memoryBaselineLoaded = false;
+const memoryKey = (kind, item) => `${kind}:${item.id || item.raw || ''}:${item.text || ''}:${kind==='right'?(item.notes||[]).length:''}`;
+const memorySnapshotReady = fetch('/api/memories', {cache:'no-store'})
+  .then(response => response.ok ? response.json() : Promise.reject(new Error('memory snapshot unavailable')))
+  .then(data => {knownMemories = new Set([
+    ...(data.left || []).map(item => memoryKey('left', item)),
+    ...(data.right || []).map(item => memoryKey('right', item)),
+  ]);memoryBaselineLoaded=true;}).catch(() => {});
+function memoryList(id, values, empty){
+  const host=$(id); host.replaceChildren();
+  for(const value of values.slice(0,6)) host.append(el('li',null,value));
+  if(!values.length) host.append(el('li',null,empty));
+}
+async function watchStoredMemories(){
+  const generation=++memoryPoll;
+  await memorySnapshotReady;
+  memoryList('storedMemories',[],'正在等待入库…');
+  for(let attempt=0;attempt<15 && generation===memoryPoll;attempt++){
+    if(attempt) await new Promise(resolve=>setTimeout(resolve,2000));
+    if(generation!==memoryPoll) break;
+    try{
+      const response=await fetch('/api/memories',{cache:'no-store'});
+      if(!response.ok) break;
+      const data=await response.json();
+      const entries=[...(data.left||[]).map(item=>['left',item]),...(data.right||[]).map(item=>['right',item])];
+      if(!memoryBaselineLoaded){entries.forEach(([kind,item])=>knownMemories.add(memoryKey(kind,item)));memoryBaselineLoaded=true;continue;}
+      const fresh=entries.filter(([kind,item])=>!knownMemories.has(memoryKey(kind,item)))
+        .map(([kind,item])=>`${kind==='left'?'事实':'感受'} · ${item.text || item.raw || ''}`);
+      if(fresh.length){memoryList('storedMemories',fresh,'本轮没有新记忆');entries.forEach(([kind,item])=>knownMemories.add(memoryKey(kind,item)));return;}
+    }catch{break;}
+  }
+  if(generation===memoryPoll)memoryList('storedMemories',[],'本轮暂无新入库记忆');
+}
 const reduced = VMUI.reduced;
 const backgroundVideo = $('bgVideo');
 const backgroundMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -128,6 +163,7 @@ function handleStudio(message) {
     if (!VMStudio.acceptsPartial(current.messages, message)) return;
     $('said').textContent = message.text; $('said').classList.add('on');
   } else if (message.type === 'user_transcript' || message.type === 'user_backchannel') {
+    if(message.type === 'user_transcript') {memoryList('retrievedMemories',[],'检索中…');void watchStoredMemories();}
     VMStudio.applyUser(current.messages, message, 'me');
     $('said').textContent = message.text; $('said').classList.add('on');
     if (current.title === '新对话') current.title = message.text.slice(0, 26);
@@ -168,6 +204,7 @@ function handleStudio(message) {
     if (message.type === 'memory_hits') {
       const memories = [...(message.left_brain || []).map(item => item.text), ...(message.right_brain_hits || []).filter(item => !item.internal).map(item => item.content)];
       document.querySelector('.memory-head p').textContent = `本轮召回 ${memories.length} 条相关记忆`;
+      memoryList('retrievedMemories', memories, '本轮没有召回相关记忆');
     }
   }
 }
@@ -175,6 +212,7 @@ async function send(text) {
   text = String(text).trim().slice(0,2000);
   if (!text || state.busy) return;
   const conversation = current; conversation.busy = state.busy = true; syncSend();
+  memoryList('retrievedMemories',[],'检索中…');void watchStoredMemories();
   const item = {role:'me',text,pending:true}; conversation.messages.push(item);
   if (conversation.title === '新对话') conversation.title = text.slice(0, 26);
   $('said').textContent = text; $('said').classList.add('on'); $('say').value = '';
@@ -343,6 +381,6 @@ addEventListener('keydown',e=>{if(e.key==='Escape'){setDrawer(false);setRail(inn
 document.addEventListener('visibilitychange',()=>{syncBackgroundPlayback();cancelAnimationFrame(raf);raf=0;lastT=0;if(!document.hidden && ink!==inkTarget)raf=requestAnimationFrame(tick);});
 addEventListener('pageshow',e=>{syncBackgroundPlayback();if(e.persisted){selectConversation(current);resizeInk();if(ink!==inkTarget&&!raf)raf=requestAnimationFrame(tick);}});
 document.addEventListener('settings-open',()=>voiceInput.pause());
-addEventListener('pagehide',()=>{backgroundVideo.pause();cancelAnimationFrame(raf);clearTimeout(typeTimer);clearTimeout(markTimer);clearTimeout(toastTimer);});
+addEventListener('pagehide',()=>{memoryPoll++;backgroundVideo.pause();cancelAnimationFrame(raf);clearTimeout(typeTimer);clearTimeout(markTimer);clearTimeout(toastTimer);});
 
 })();

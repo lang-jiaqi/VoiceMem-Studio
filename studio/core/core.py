@@ -39,26 +39,29 @@ async def converse(agent, socket):
         await session.close_session()
 
 
-def build_app(agent):
+def build_app(agent, demo_accounts=None):
     """Bind realtime or text/speech sessions and memory controls to the server."""
     from studio.web import transport
     from studio.core.utils.llm.initialize import credential
 
-    async def session(socket):
-        if agent.MODE == 'realtime':
-            await agent.realtime_session(socket)
+    async def session_for(active_agent, socket):
+        if active_agent.MODE == 'realtime':
+            await active_agent.realtime_session(socket)
         else:
-            await converse(agent, socket)
+            await converse(active_agent, socket)
 
-    def components():
-        memory = agent.CONFIG["llm"]
-        reply = agent.REPLY["llm"]
+    async def session(socket):
+        await session_for(agent, socket)
+
+    def components_for(active_agent):
+        memory = active_agent.CONFIG["llm"]
+        reply = active_agent.REPLY["llm"]
         memory_provider = memory["provider"]
         reply_provider = reply["provider"]
         return {
-            "backend": agent.ARGS.backend,
-            "mode": agent.MODE,
-            "space": agent.ACTIVE_SPACE,
+            "backend": active_agent.ARGS.backend,
+            "mode": active_agent.MODE,
+            "space": active_agent.ACTIVE_SPACE,
             "memory": {
                 "provider": memory_provider,
                 "configured": bool(credential(memory_provider, "memory")),
@@ -72,7 +75,7 @@ def build_app(agent):
                 "model": reply["config"].get("model", ""),
                 "base_url": reply["config"].get("base_url", ""),
             },
-            "speech": {"provider": agent.REPLY["tts"]["provider"]},
+            "speech": {"provider": active_agent.REPLY["tts"]["provider"]},
         }
 
     return transport.build_app(
@@ -81,8 +84,11 @@ def build_app(agent):
         spaces=(agent.list_spaces, agent.create_space, agent.use_space, lambda: agent.ACTIVE_SPACE),
         set_lang=agent.set_lang,
         title=transport.make_title_generator(agent.REPLY, agent.CONFIG["llm"]),
-        components=components,
+        components=lambda: components_for(agent),
         pet_port=agent.ARGS.port,
+        demo_accounts=demo_accounts,
+        demo_session=session_for,
+        demo_components=components_for,
     )
 
 
@@ -93,6 +99,13 @@ def main(argv=None):
         from .utils.environment.component import load_environment, prepare
         load_environment()
         args = parse_args(argv)
+        public_demo = os.environ.get('STUDIO_PUBLIC_DEMO') == '1'
+        if public_demo and args.host not in {'127.0.0.1', 'localhost', '::1'}:
+            raise ValueError('公开体验模式只监听本机；请通过 Tailscale Funnel 转发。')
+        if public_demo and args.llm == 'local':
+            raise ValueError('公开体验模式请使用 API 回复模型，避免每个账号加载一份本地 LLM。')
+        if public_demo and args.mode == 'realtime':
+            raise ValueError('公开体验模式请使用 llm_tts 模式，以保持账号记忆隔离。')
         prepare(args)
         from .utils.startup.initialize import inspect
         stage = args.prepare_stage or 'all'
@@ -112,10 +125,14 @@ def main(argv=None):
         configure(ROOT / 'prompt/logs')
         from .voiceagent import VoiceAgent
         agent = VoiceAgent(args)
+        demo_accounts = None
+        if public_demo:
+            from studio.web.demo_accounts import DemoAccounts
+            demo_accounts = DemoAccounts(args)
         if args.mode == 'llm_tts':
             tts = agent.vm.utils.get('tts')
         agent.warmup()
-        app = build_app(agent)
+        app = build_app(agent, demo_accounts=demo_accounts)
         import uvicorn
         app.router.add_event_handler(
             'startup',

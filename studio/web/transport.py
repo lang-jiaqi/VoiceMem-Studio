@@ -1,10 +1,12 @@
 """Studio transport implementation."""
+import asyncio
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -188,15 +190,95 @@ def hits_payload(result, has_audio=None, cluster_of=None):
     }
 
 def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None,
-              set_lang=None, title=None, components=None, pet_port=8787):
+              set_lang=None, title=None, components=None, pet_port=8787,
+              demo_accounts=None, demo_session=None, demo_components=None):
     """Build the browser API and WebSocket routes using injected session callbacks."""
     app = FastAPI()
     desktop_instance = os.environ.get('VOICEMEM_DESKTOP_INSTANCE', '')
     title = title or make_title_generator()
     pet, pet_hub = PetSupervisor(), PetHub()
 
+    if demo_accounts:
+        from studio.web.demo_accounts import COOKIE, SESSION_SECONDS
+
+        def same_origin(headers):
+            origin = headers.get("origin", "")
+            host = headers.get("host", "")
+            return bool(origin and host and urlsplit(origin).netloc == host and
+                        urlsplit(origin).scheme in {"http", "https"})
+
+        @app.middleware("http")
+        async def require_demo_login(request: Request, call_next):
+            path = request.url.path
+            if request.method not in {"GET", "HEAD", "OPTIONS"} and not same_origin(request.headers):
+                return JSONResponse({"detail": "来源不受信任"}, status_code=403)
+            if path.startswith("/auth/") or path == "/ui/login.html":
+                return await call_next(request)
+            user = await asyncio.to_thread(demo_accounts.user, request.cookies.get(COOKIE, ""))
+            if not user:
+                if path == "/" or path.startswith("/ui/"):
+                    return RedirectResponse("/ui/login.html", status_code=303)
+                return JSONResponse({"detail": "请先登录"}, status_code=401)
+            request.state.demo_user = user
+            if path in {"/ui/technical.html", "/legacy", "/classic"} and re.search(
+                    r"iPhone|Android|Mobile", request.headers.get("user-agent", ""), re.I):
+                return RedirectResponse("/ui/digital.html", status_code=303)
+            return await call_next(request)
+
+        class Credentials(BaseModel):
+            name: str
+            password: str
+
+        async def authenticate(request: Request, body: Credentials, register: bool):
+            source = request.client.host if request.client else "unknown"
+            try:
+                await asyncio.to_thread(demo_accounts.limit_attempt, source)
+                action = demo_accounts.register if register else demo_accounts.login
+                name, token = await asyncio.to_thread(action, body.name, body.password)
+            except ValueError as exc:
+                raise HTTPException(400 if register else 401, str(exc)) from None
+            response = JSONResponse({"name": name})
+            response.set_cookie(COOKIE, token, max_age=SESSION_SECONDS,
+                                httponly=True, secure=True, samesite="lax")
+            return response
+
+        @app.post("/auth/register")
+        async def register(request: Request, body: Credentials):
+            return await authenticate(request, body, True)
+
+        @app.post("/auth/login")
+        async def login(request: Request, body: Credentials):
+            return await authenticate(request, body, False)
+
+        @app.post("/auth/logout")
+        async def logout(request: Request):
+            await asyncio.to_thread(demo_accounts.logout, request.cookies.get(COOKIE, ""))
+            response = JSONResponse({"ok": True})
+            response.delete_cookie(COOKIE)
+            return response
+
+        @app.get("/auth/me")
+        async def me(request: Request):
+            user = await asyncio.to_thread(demo_accounts.user, request.cookies.get(COOKIE, ""))
+            if not user:
+                raise HTTPException(401, "请先登录")
+            return {"name": user[1]}
+
+        async def demo_agent(request: Request):
+            return await asyncio.to_thread(demo_accounts.agent, request.state.demo_user[0])
+
     @app.websocket("/ws")
     async def ws(sock: WebSocket):
+        active_agent = None
+        if demo_accounts:
+            if not same_origin(sock.headers):
+                await sock.close(code=1008)
+                return
+            user = await asyncio.to_thread(demo_accounts.user, sock.cookies.get(COOKIE, ""))
+            if not user:
+                await sock.close(code=1008)
+                return
+            active_agent = await asyncio.to_thread(demo_accounts.agent, user[0])
         await sock.accept()
         tee = TeeSocket(sock, pet_hub)
         await sock.send_json({"type": "session_ready", "mode": mode})
@@ -204,7 +286,10 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
                                  "session_id": tee.session_id})
         try:
 
-            await session(tee)
+            if demo_accounts:
+                await demo_session(active_agent, tee)
+            else:
+                await session(tee)
         except WebSocketDisconnect:
             pass
         finally:
@@ -213,6 +298,9 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
 
     @app.websocket("/ws-pet")
     async def ws_pet(sock: WebSocket):
+        if demo_accounts:
+            await sock.close(code=1008)
+            return
         await sock.accept()
         pet_hub.add(sock)
         try:
@@ -226,7 +314,8 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
 
     @app.on_event("startup")
     def _start_pet():
-        pet.ensure_running(f"ws://127.0.0.1:{pet_port}/ws-pet")
+        if not demo_accounts:
+            pet.ensure_running(f"ws://127.0.0.1:{pet_port}/ws-pet")
 
     @app.on_event("shutdown")
     def _stop_pet():
@@ -236,8 +325,12 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
         query: str
 
     @app.post("/api/classify")
-    def api_classify(body: Q) -> dict:
-        c = classify(body.query)
+    async def api_classify(body: Q, request: Request) -> dict:
+        if demo_accounts:
+            agent = await demo_agent(request)
+            c = await asyncio.to_thread(agent.vm.classify, body.query)
+        else:
+            c = await asyncio.to_thread(classify, body.query)
         return {"slots": list(c.slots), "entities": list(c.entities)}
 
     class T(BaseModel):
@@ -252,48 +345,75 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
             return {"title": ""}
 
     @app.get("/api/memories")
-    def api_memories() -> dict:
-        return snapshot() if snapshot else {"left": [], "right": []}
+    async def api_memories(request: Request) -> dict:
+        if demo_accounts:
+            agent = await demo_agent(request)
+            return await asyncio.to_thread(agent.memory_snapshot)
+        return await asyncio.to_thread(snapshot) if snapshot else {"left": [], "right": []}
 
     @app.get("/api/components")
-    def api_components() -> dict:
+    async def api_components(request: Request) -> dict:
         """Expose non-secret runtime labels for the component settings canvas."""
-        return components() if components else {}
+        if demo_accounts:
+            agent = await demo_agent(request)
+            return await asyncio.to_thread(demo_components, agent)
+        return await asyncio.to_thread(components) if components else {}
 
     @app.post("/api/lang")
     async def api_lang(req: Request) -> dict:
         lang = (await req.json()).get("lang", "zh")
-        reply_lang = set_lang(lang) if set_lang else lang
+        if demo_accounts:
+            agent = await demo_agent(req)
+            reply_lang = await asyncio.to_thread(agent.set_lang, lang)
+            return {"lang": "zh", "reply_lang": reply_lang}
+        reply_lang = await asyncio.to_thread(set_lang, lang) if set_lang else lang
         return {"lang": lang, "reply_lang": reply_lang or lang}
 
     if spaces:
         _list_spaces, _create_space, _use_space, _active_space = spaces
 
         @app.get("/api/spaces")
-        def api_spaces() -> dict:
-            return {"spaces": _list_spaces(), "active": _active_space()}
+        async def api_spaces(request: Request) -> dict:
+            if demo_accounts:
+                agent = await demo_agent(request)
+                listed = await asyncio.to_thread(agent.list_spaces)
+                return {"spaces": [item for item in listed if item["id"] == "default"],
+                        "active": "default", "demo": True}
+            return {"spaces": await asyncio.to_thread(_list_spaces), "active": _active_space()}
 
         @app.post("/api/spaces")
         async def api_space_new(req: Request) -> dict:
             body = await req.json()
             name, lang = body.get("name", ""), body.get("language", "")
             try:
-                return _create_space(name, lang)
+                if demo_accounts:
+                    raise HTTPException(403, "体验账号使用一个独立记忆空间")
+                return await asyncio.to_thread(_create_space, name, lang)
             except FileExistsError as e:
                 raise HTTPException(409, str(e))
             except ValueError as e:
                 raise HTTPException(400, str(e))
 
         @app.post("/api/spaces/{name}/use")
-        def api_space_use(name: str) -> dict:
+        async def api_space_use(name: str, request: Request) -> dict:
             try:
-                return {"active": _use_space(name)}
+                if demo_accounts:
+                    if name != "default":
+                        raise HTTPException(403, "体验账号使用一个独立记忆空间")
+                    return {"active": "default"}
+                return {"active": await asyncio.to_thread(_use_space, name)}
+            except HTTPException:
+                raise
             except Exception as e:
                 raise HTTPException(400, f"切不过去：{e}")
 
     @app.get("/api/audio/{memory_id}")
-    def api_audio(memory_id: str):
-        path = audio_of(memory_id) if audio_of else None
+    async def api_audio(memory_id: str, request: Request):
+        if demo_accounts:
+            agent = await demo_agent(request)
+            path = await asyncio.to_thread(agent.audio_of, memory_id)
+        else:
+            path = await asyncio.to_thread(audio_of, memory_id) if audio_of else None
         if not path or not Path(path).exists():
             raise HTTPException(404, "这条记忆没有存档音频")
         return FileResponse(path, media_type="audio/wav")
@@ -315,7 +435,7 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
 
     @app.get("/")
     def index(request: Request, pet_on: bool = Query(False, alias="pet")):
-        if pet_on:
+        if pet_on and not demo_accounts:
             pet.ensure_running(loopback_ws_url(request))
         headers = {**_NOCACHE}
         if desktop_instance:

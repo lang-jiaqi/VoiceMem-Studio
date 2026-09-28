@@ -52,6 +52,9 @@ class Spaces:
 
     def set_lang(self, lang: str) -> str:
         """Set UI language and resolve the active space language for replies."""
+        if getattr(self, "PUBLIC_DEMO", False):
+            self.UI_LANG = "zh"
+            return "zh"
         self.UI_LANG = "en" if str(lang).lower().startswith("en") else "zh"
         if self.UI_LANG == self.SPACE_LANG:
             return self.SPACE_LANG
@@ -80,17 +83,21 @@ class Spaces:
         safe = _re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_-]", "", (name or "").strip())[:32]
         if not safe:
             raise ValueError("空间名字不能为空")
-        return _ROOT / "voicemem_memoryspace" / safe, safe
+        root = getattr(self, "_SPACE_ROOT", None) or _ROOT / "voicemem_memoryspace"
+        return root / safe, safe
 
     def get_space(self, name: str):
         """Open one memory instance per space, preserving its stored language."""
         directory, safe = self.space_dir(name)
         if safe not in self._SPACES:
             if not directory.exists() or not any(directory.iterdir()):
-                directory.mkdir(parents=True, exist_ok=True)
+                directory.mkdir(mode=0o700 if getattr(self, "_SPACE_ROOT", None) else 0o777,
+                                parents=True, exist_ok=True)
                 self._write_space_language(safe, self.ARGS.lang)
             cfg = dict(self.CONFIG)
             cfg["space"] = safe
+            if getattr(self, "_SPACE_ROOT", None) is not None:
+                cfg["memory_root"] = str(directory)
             cfg["memory_language"] = self.space_language(safe)
 
             lang = self.space_language(safe)
@@ -123,7 +130,7 @@ class Spaces:
     def list_spaces(self) -> list:
         """List available spaces and read their memory counts without model work."""
         import sqlite3
-        root = _ROOT / "voicemem_memoryspace"
+        root = getattr(self, "_SPACE_ROOT", None) or _ROOT / "voicemem_memoryspace"
         out = []
         for d in sorted(p for p in root.glob("*") if p.is_dir()):
             n = 0
@@ -147,7 +154,7 @@ class Spaces:
         if d.exists() and any(d.iterdir()):
             raise FileExistsError(f"「{safe}」已经存在了")
         d.mkdir(parents=True, exist_ok=True)
-        lang = "zh" if str(language or self.ARGS.lang).lower().startswith("zh") else "en"
+        lang = "zh" if getattr(self, "PUBLIC_DEMO", False) or str(language or self.ARGS.lang).lower().startswith("zh") else "en"
 
         self._write_space_language(safe, lang)
         self.get_space(safe)

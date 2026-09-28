@@ -224,6 +224,17 @@ entry point and root package metadata, while Docker startup separately requires
 Compose; local MLX/WSL startup is not coupled to a Studio Compose file.
 
 `studio/web/` owns browser assets, HTTP/WebSocket transport, and the pet bridge.
+An opt-in `STUDIO_PUBLIC_DEMO=1` browser deployment keeps the server on loopback
+behind Tailscale Funnel. `studio/web/demo_accounts.py` owns local name/password
+accounts and cookie sessions. HTTP and conversation WebSocket entry points resolve
+the authenticated account before reading memory or constructing a session; the pet
+observer is disabled. Each account owns one `VoiceAgent` and one private default
+Space under the demo data directory. The VoiceMem `memory_root` is set to that
+private directory; public demo browsers cannot create or switch Spaces. Demo
+Spaces use Chinese so VoiceMem's process-wide language override stays stable.
+The account owns its turn recordings. Browser chat lists remain page-local;
+long-term memory persists with the account. The digital page shows this turn's
+retrieved hits and watches the account's memory snapshot for new stored entries.
 `studio/apps/` owns the Windows/macOS Electron desktop client and pet. Linux is
 a backend deployment target, not a desktop release target. Windows runs capture,
 playback and the pet natively, while local CUDA inference belongs in WSL2 or its

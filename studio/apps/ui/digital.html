@@ -68,6 +68,10 @@
             <button type="submit" class="round send" id="sendBtn" aria-label="发送" disabled><svg><use href="#i-up"/></svg></button>
           </form>
         </div>
+        <details class="turn-memory" id="turnMemory"><summary>VoiceMem · 本轮记忆</summary>
+          <div class="turn-memory-body"><h3>本轮召回</h3><ul id="retrievedMemories"><li>等待对话</li></ul>
+          <h3>新入库</h3><ul id="storedMemories"><li>等待对话</li></ul></div>
+        </details>
       </div>
     </div>
   </section>
@@ -109,9 +113,9 @@
 
 <script src="ui.js"></script>
 <script src="studio-client.js?v=20260921-4"></script>
-<script src="conversation-spaces.js?v=20260928-2"></script>
+<script src="conversation-spaces.js?v=20260928-3"></script>
 <script src="settings.js?v=20260921-4"></script>
-<script src="digital.js?v=20260925-1"></script>
+<script src="digital.js?v=20260928-2"></script>
 <script src="memory-scene.js?v=20260928-3"></script>
 </body>
 </html>

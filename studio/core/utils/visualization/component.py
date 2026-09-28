@@ -271,7 +271,7 @@ class Visualization:
                 except Exception:
                     ents = []
 
-                left.append({"text": e["text"], "date": d if d[:4].isdigit() else "",
+                left.append({"id": str(e["id"]), "text": e["text"], "date": d if d[:4].isdigit() else "",
                              "slot": slot_of.get(e["id"], "daily_life"),
                              "hit": str(e["id"]) in self._LAST_HIT_IDS,
                              "entities": list(ents)[:6]})
