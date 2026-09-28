@@ -126,7 +126,8 @@
         ? width / Math.max(1, bounds.width) * 1.8
         : Math.min(width / Math.max(1, bounds.width), height / Math.max(1, bounds.height)) * .96;
       this.model.scale.set(scale); this.model.x = width / 2 - (bounds.x + bounds.width / 2) * scale;
-      this.model.y = (portrait ? height * 1.84 : height) - (bounds.y + bounds.height) * scale;
+      const bottom = root.VM_PET_MOBILE ? height * 1.6 : portrait ? height * 1.84 : height;
+      this.model.y = bottom - (bounds.y + bounds.height) * scale;
     }
     update(deltaMs) {
       if (!this.active || !this.model || this.contextLost) return;

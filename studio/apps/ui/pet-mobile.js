@@ -40,7 +40,13 @@
       if (event.type === 'partial_transcript') $('spoken').textContent = event.text || '';
       if (event.type === 'user_transcript') { $('spoken').textContent = event.text || ''; $('reply').textContent = ''; list('retrievedMemories', [], '检索中…'); void watchStored(); }
       if (event.type === 'answer_start') { reply = ''; $('reply').textContent = ''; }
-      if (event.type === 'answer_delta') { reply += event.text || ''; $('reply').textContent = reply; }
+      if (event.type === 'answer_delta') {
+        reply += event.text || '';
+        const panel = document.querySelector('.dialogue');
+        const atBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 36;
+        $('reply').textContent = reply;
+        if (atBottom) panel.scrollTop = panel.scrollHeight;
+      }
       if (event.type === 'answer_interrupt') $('reply').textContent = event.heard_text || '';
       if (event.type === 'memory_hits') {
         const hits = [...(event.left_brain || []).map(item => item.text), ...(event.right_brain_hits || []).filter(item => !item.internal).map(item => item.content)];
