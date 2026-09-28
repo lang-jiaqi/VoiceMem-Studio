@@ -17,8 +17,11 @@ const DOMAINS = {
 };
 
 const MEMORIES = {facts: [], traits: []};
-const CONVERSATIONS = [{id:'c1',title:'New conversation',messages:[]}];
+const CONVERSATIONS = [{id:'c1',title:'New conversation',space:'',messages:[]}];
+const firstConversation = CONVERSATIONS[0];
 let activeConv = 'c1', activeDomain = null, replyMessage = null;
+let conversationSwitch = 0;
+let voiceActive = false;
 let perception = {};
 
 /* ---------- rendering ---------- */
@@ -147,10 +150,18 @@ function renderConvList() {
     li.className = 'conv' + (c.id === activeConv ? ' active' : '');
     const select = document.createElement('button');
     select.className = 'conv-select';
-    select.title = c.title;
+    select.title = `${c.title} · ${VMConversationSpaces.name(c.space)}`;
     select.setAttribute('aria-current', c.id === activeConv ? 'true' : 'false');
-    select.innerHTML = `<span class="conv-title">${esc(c.title)}</span><span class="dot"></span>`;
-    select.onclick = () => { voice.cancel(); activeConv = c.id; syncConversation(); };
+    select.innerHTML = `<span class="conv-title">${esc(c.title)} · ${esc(VMConversationSpaces.name(c.space))}</span><span class="dot"></span>`;
+    select.onclick = async () => {
+      if (c.id === activeConv) return;
+      const version = ++conversationSwitch;
+      CONVERSATIONS.find(item => item.id === activeConv).busy = false;
+      voice.cancel();
+      try { await VMConversationSpaces.use(c.space); if (version !== conversationSwitch) return;
+        activeConv = c.id; c.busy = false; syncConversation(); }
+      catch (error) { VMUI.notify(error.message); }
+    };
     const pin = document.createElement('button');
     pin.className = 'pin-conv';
     pin.title = c.pinned ? '取消置顶' : '置顶对话';
@@ -195,6 +206,7 @@ function now() {
 }
 
 function handleStudio(message) {
+  window.VMMemoryScene?.onStudioEvent(message);
   const conv = CONVERSATIONS.find(c => c.id === activeConv);
   if (message.type === 'partial_transcript') {
     if (!VMStudio.acceptsPartial(conv.messages, message)) return;
@@ -211,7 +223,10 @@ function handleStudio(message) {
     conv.messages.push(replyMessage); $('aiEcho').textContent = ''; renderThread();
   } else if (message.type === 'answer_delta' && replyMessage) {
     replyMessage.text += message.text || ''; $('aiEcho').textContent = replyMessage.text;
-    $('aiEcho').classList.remove('empty'); renderThread();
+    $('aiEcho').classList.remove('empty');
+    const body = $('thread').querySelector('.thread-card .msg:last-child .msg-body');
+    if (body) { body.textContent = replyMessage.text; $('thread').scrollTop = $('thread').scrollHeight; }
+    else renderThread();
   } else if (message.type === 'answer_interrupt') {
     if (replyMessage) { replyMessage.text = message.heard_text || ''; $('aiEcho').textContent = replyMessage.text; }
     replyMessage = null; conv.busy = false; renderThread();
@@ -241,7 +256,10 @@ function send(text) {
   if (conv.title.startsWith('New conversation')) conv.title = text.slice(0, 34);
   $('liveEcho').textContent = text; $('liveEcho').classList.remove('empty');
   renderThread(); renderConvList();
-  voice.send(text).catch(error => {
+  VMConversationSpaces.use(conv.space).then(() => {
+    if (conv.id !== activeConv) throw new Error('已切换对话。');
+    return voice.send(text);
+  }).catch(error => {
     const index = conv.messages.indexOf(item); if (index >= 0) conv.messages.splice(index, 1);
     conv.busy = false;
     if (conv.id === activeConv) { $('composer').value = text; renderThread(); }
@@ -262,10 +280,18 @@ $('composer').addEventListener('input', e => {
   $('liveEcho').classList.toggle('empty', !v);
   renderPerception(v);
 });
-$('newConv').onclick = () => {
-  const id = 'c' + (CONVERSATIONS.length + 1);
-  CONVERSATIONS.unshift({ id, title: 'New conversation', messages: [] });
+$('newConv').onclick = async () => {
+  let space;
+  try { space = await VMConversationSpaces.choose(CONVERSATIONS.find(c => c.id === activeConv)?.space); }
+  catch (error) { VMUI.notify(error.message); return; }
+  if (!space) return;
+  ++conversationSwitch;
+  CONVERSATIONS.find(c => c.id === activeConv).busy = false;
   voice.cancel();
+  try { await VMConversationSpaces.use(space); }
+  catch (error) { VMUI.notify(error.message); return; }
+  const id = 'c' + (CONVERSATIONS.length + 1);
+  CONVERSATIONS.unshift({ id, title: 'New conversation', space, messages: [] });
   activeConv = id;
   syncConversation();
   $('composer').focus();
@@ -306,6 +332,7 @@ const voice = VMStudio.create({
   onEvent: handleStudio,
   onPhase: orbState,
   onState(on) {
+    voiceActive = on;
     if(on){clearInterval(typing);clearTimeout(thoughtTimer);orbState('listening');}
     else if(window.liquidOrb?.getState()==='listening')orbState('idle');
     document.querySelector('.input-wrap').classList.toggle('listening',on);
@@ -320,11 +347,13 @@ const voice = VMStudio.create({
   onFinal(text) {if(send(text))$('composer').value='';}
 });
 window.VMSettings?.bindHarness(voice);
-$('mic').onclick=()=>voice.toggle();
-$('startTalk').onclick=()=>{ $('composer').focus();voice.toggle(); };
+$('mic').onclick=()=>{ if(voiceActive){voice.toggle();return;}const selected=activeConv;void VMConversationSpaces.use(CONVERSATIONS.find(c=>c.id===selected).space)
+  .then(()=>{if(selected===activeConv)voice.toggle();}).catch(error=>VMUI.notify(error.message)); };
+$('startTalk').onclick=()=>{ $('composer').focus();$('mic').click(); };
 $('settingsBtn').onclick=()=>window.VMSettings?.open();
 
 syncConversation();
+VMConversationSpaces.ready.then(space=>{firstConversation.space=space;renderConvList();}).catch(error=>VMUI.notify(error.message));
 switchTab('space');
 if(matchMedia('(max-width:700px)').matches) setSidebar(true);
 

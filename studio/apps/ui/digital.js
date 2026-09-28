@@ -8,8 +8,10 @@ const $ = id => document.getElementById(id);
 const tr=text=>window.VMSettings?.t(text)||text;
 const el = (t,c,x) => { const n=document.createElement(t); if(c)n.className=c; if(x!=null)n.textContent=x; return n; };
 
-const conversations = [{id:'c1',title:'新对话',pinned:false,messages:[]}];
+const conversations = [{id:'c1',title:'新对话',space:'',pinned:false,messages:[]}];
+const firstConversation = conversations[0];
 let current = conversations[0], replyMessage = null;
+let conversationSwitch = 0;
 const state = {get messages(){return current.messages;},busy:false,listening:false,memory:false};
 let toastTimer, typeTimer, markTimer;
 const reduced = VMUI.reduced;
@@ -38,9 +40,12 @@ function renderRail(){
   conversations.forEach(c=>{
     const row=el('div','session-row');
     const b=el('button','item'+(c.pinned?' pin':''));
-    b.append(el('i','dot'),el('span',null,c.title));b.title=c.title;
+    b.append(el('i','dot'),el('span',null,`${c.title} · ${VMConversationSpaces.name(c.space)}`));b.title=c.title;
     b.setAttribute('aria-current',String(c===current));
-    b.onclick=()=>selectConversation(c);
+    b.onclick=()=>{ if(c===current) return; const version=++conversationSwitch;current.busy=false;voiceInput.cancel();
+      void VMConversationSpaces.use(c.space)
+        .then(()=>{if(version===conversationSwitch)selectConversation(c);})
+        .catch(error=>VMUI.notify(error.message)); };
     const pin=el('button','pin-chat',c.pinned?'◆':'◇');
     pin.setAttribute('aria-label',c.pinned?'取消置顶':'置顶对话');pin.setAttribute('aria-pressed',String(c.pinned));
     pin.onclick=()=>{c.pinned=!c.pinned;renderRail();};
@@ -118,6 +123,7 @@ function speak(text){
 }
 
 function handleStudio(message) {
+  window.VMMemoryScene?.onStudioEvent(message);
   if (message.type === 'partial_transcript') {
     if (!VMStudio.acceptsPartial(current.messages, message)) return;
     $('said').textContent = message.text; $('said').classList.add('on');
@@ -132,7 +138,10 @@ function handleStudio(message) {
     replyMessage = {role:'her',text:'',outputId:message.output_id}; current.messages.push(replyMessage);
     $('voice').textContent = ''; renderLog(); syncSend();
   } else if (message.type === 'answer_delta' && replyMessage) {
-    replyMessage.text += message.text || ''; $('voice').textContent = replyMessage.text; renderLog();
+    replyMessage.text += message.text || ''; $('voice').textContent = replyMessage.text;
+    const body = $('logScroll').querySelector('.turn:last-child p');
+    if (body) { body.textContent = replyMessage.text; $('logScroll').scrollTop = $('logScroll').scrollHeight; }
+    else renderLog();
   } else if (message.type === 'answer_interrupt') {
     if (replyMessage) {replyMessage.text = message.heard_text || ''; $('voice').textContent = replyMessage.text;}
     replyMessage = null; current.busy = state.busy = false; renderLog(); syncSend();
@@ -170,7 +179,9 @@ async function send(text) {
   if (conversation.title === '新对话') conversation.title = text.slice(0, 26);
   $('said').textContent = text; $('said').classList.add('on'); $('say').value = '';
   renderRail(); renderLog();
-  try { await voiceInput.send(text); }
+  try { await VMConversationSpaces.use(conversation.space);
+    if (current !== conversation) throw new Error('已切换对话。');
+    await voiceInput.send(text); }
   catch (error) {
     const index = conversation.messages.indexOf(item); if (index >= 0) conversation.messages.splice(index,1);
     conversation.busy = false;
@@ -269,8 +280,16 @@ function setRail(open){
 /* ── 事件 ── */
 $('ask').addEventListener('submit', e => { e.preventDefault(); send($('say').value); });
 $('say').addEventListener('input', syncSend);
-const newChat = () => {
-  const c={id:crypto.randomUUID(),title:'新对话',pinned:false,messages:[]};conversations.unshift(c);selectConversation(c);
+const newChat = async () => {
+  let space;
+  try { space = await VMConversationSpaces.choose(current.space); }
+  catch (error) { VMUI.notify(error.message); return; }
+  if (!space) return;
+  ++conversationSwitch;current.busy=false;
+  voiceInput.cancel();
+  try { await VMConversationSpaces.use(space); }
+  catch (error) { VMUI.notify(error.message); return; }
+  const c={id:crypto.randomUUID(),title:'新对话',space,pinned:false,messages:[]};conversations.unshift(c);selectConversation(c);
 
   renderLog();
   $('said').classList.remove('on'); $('said').textContent = tr('说点什么，她在听。');
@@ -301,14 +320,16 @@ const voiceInput=VMStudio.create({
   onFinal:send
 });
 window.VMSettings?.bindHarness(voiceInput);
-$('micBtn').onclick=()=>voiceInput.toggle();
-$('startTalk').onclick=()=>{$('say').focus();voiceInput.toggle();};
+$('micBtn').onclick=()=>{ if(state.listening){voiceInput.toggle();return;}const selected=current;void VMConversationSpaces.use(selected.space)
+  .then(()=>{if(selected===current)voiceInput.toggle();}).catch(error=>VMUI.notify(error.message)); };
+$('startTalk').onclick=()=>{$('say').focus();$('micBtn').click();};
 addEventListener('click', e => {
   if(document.body.classList.contains('rail-open') && !e.target.closest('.rail') && !e.target.closest('#peekLogo'))
     setRail(false);
 }, true);
 
 renderRail(); renderLog(); syncSend(); seedBlots(); resizeInk(); syncBackgroundPlayback();
+VMConversationSpaces.ready.then(space=>{firstConversation.space=space;renderRail();}).catch(error=>VMUI.notify(error.message));
 if(innerWidth <= 1024){document.body.classList.add('rail-collapsed');setRail(false);}
 
 window.addEventListener('memory-domain-select',e=>{

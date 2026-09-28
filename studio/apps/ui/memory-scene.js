@@ -1,5 +1,5 @@
-/* Brain backdrop and graph stay independent. Graph materials and motion are
-   adapted from the complete VoiceMem reference supplied by the user. */
+/* The illustrated backdrop is static; graph nodes come from the selected
+   Memory Space's live snapshot. */
 (() => {
   'use strict';
   const canvas = document.getElementById('scene-canvas');
@@ -9,31 +9,234 @@
   const digital = document.body.dataset.style === 'digital';
   const stage = document.querySelector(digital ? '.brain' : '#viewSpace .space');
   const memoryIn = document.getElementById('memoryIn');
+  const card = document.createElement('div'); card.className = 'memory-node-card';
+  card.setAttribute('aria-hidden', 'true');
+  const cardHead = document.createElement('div'); cardHead.className = 'memory-node-card__head';
+  const cardDot = document.createElement('span'); cardDot.className = 'memory-node-card__dot';
+  const cardKind = document.createElement('span'); cardKind.className = 'memory-node-card__kind';
+  cardHead.append(cardDot, cardKind);
+  const cardTitle = document.createElement('div'); cardTitle.className = 'memory-node-card__title';
+  const cardBody = document.createElement('div'); cardBody.className = 'memory-node-card__body';
+  const cardFoot = document.createElement('div'); cardFoot.className = 'memory-node-card__foot';
+  card.append(cardHead, cardTitle, cardBody, cardFoot); document.body.append(card);
   const isActive = () => digital ? document.body.classList.contains('memory-on') && memoryIn.classList.contains('show') : !document.body.classList.contains('chat-background-only');
-  const nodeScale = 1.65;
+  const nodeScale = 1;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const graph = window.VM_REFERENCE_GRAPH;
+  let graph = {nodes: [], links: []};
   const image = new Image();
   const P = .953;
   const midX = (.0219 + .9688) / 2;
   const midY = (.0361 + .9475) / 2;
   const crop = {x: 390, y: 85, w: 892, h: 740};
   const colors = {entity:'#4aa8f0',person:'#a583ff',know:'#58e08d',emotion:'#ff5fa2',exper:'#ff9a3c',prefer:'#4ade80',user:'#d02fa8',label:'#fff'};
-  const names = {entity:'实体',person:'人物',know:'知识',emotion:'情绪',exper:'偏好',prefer:'人格',user:'你 · 所有者',label:'记忆域'};
   const styles = {in:['150,192,235',.19,.75],box:['171,133,255',.46,2.3],field:['255,170,200',.17,.8],cross:['214,228,255',.20,1.45]};
-  const neighbors = graph.nodes.map(() => new Set());
-  graph.links.forEach(l => {neighbors[l.a].add(l.b);neighbors[l.b].add(l.a);});
-  let width = 0, height = 0, dpr = 1, frameId = 0, selected = -1;
+  let neighbors = [];
+  let width = 0, height = 0, dpr = 1, frameId = 0, selected = -1, pinned = -1, cardNode = null;
+  let cardSize = {width: 236, height: 110};
+  let layoutMinGap = Infinity;
   let points = [], pointer = null;
-  const motion = graph.nodes.map(() => ({
+  const newMotion = () => ({
     ph:Math.random()*Math.PI*2, ph2:Math.random()*Math.PI*2,
     sp:.28+Math.random()*.42, ax:.55+Math.random()*.9, ay:.55+Math.random()*.9,
     h:0, p:0, bw:0, bh:0
-  }));
+  });
+  let motion = [];
   const pulse = {t:-.6,dur:2.3,gap:1.9,trail:.30,seg:16};
-  const crossLinks = graph.links.filter(l => l.t === 'cross');
+  let crossLinks = [];
   const glowSprites = {};
   let glowScale = -1, previousTime = null;
+  let signature = '', snapshot = null, spaceGeneration = 0, watchTimer = 0, watchGeneration = 0;
+  const signatureOf = data => JSON.stringify({
+    left: (data.left || []).map(item => [item.text, item.slot]),
+    right: (data.right || []).map(item => [item.text, item.cluster, (item.notes || []).map(note => note.text)]),
+  });
+  const slotNames = ['work','health','relationships','finance','knowledge','goals','daily_life','emotion','preference','personality'];
+  const domainNames = {
+    work:['工作','Work'], health:['健康','Health'], relationships:['关系','Relationships'],
+    finance:['财务','Finance'], knowledge:['知识','Knowledge'], goals:['目标','Goals'],
+    daily_life:['日常','Daily life'], emotion:['情绪','Emotion'],
+    preference:['偏好','Preferences'], personality:['人格','Personality'],
+  };
+  const domainLabel = domain => domainNames[domain]?.[window.VMSettings?.language === 'en' ? 1 : 0] || domain;
+  const anchorPositions = [
+    [.3379,.2], [.2616,.3829], [.2507,.6057], [.1199,.4914], [.1226,.7029],
+    [.2016,.8171], [.3324,.7657], [.76,.28], [.62,.54], [.79,.73],
+  ];
+  const hemispheres = {L:{x:.27,y:.49,rx:.17,ry:.37}, R:{x:.73,y:.49,rx:.17,ry:.37}};
+  const slotOf = value => slotNames.includes(value) ? value : 'daily_life';
+  const hashOf = value => { let hash = 2166136261; for (const char of value) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619); return hash >>> 0; };
+
+  function layoutNodes() {
+    layoutMinGap = Infinity;
+    const rect = stage.getBoundingClientRect();
+    if (!rect.width || !rect.height || graph.nodes.length <= 11) return;
+    const plate = fitPlate(rect), imageScale = Math.min(plate.w, plate.h/P);
+    const k = imageScale * .98, ky = P*k, unit = imageScale * .82 / 1000;
+    const fontSize = Math.max(9.4, 14*unit) * (window.VMSettings?.contentScale || 1);
+    ctx.font = `${fontSize.toFixed(1)}px system-ui,sans-serif`;
+    const labels = graph.nodes.slice(0, 10).map(node => ({
+      x:node.x, y:node.y,
+      hw:(ctx.measureText(domainLabel(node.domain)).width + fontSize*1.75)/2,
+      hh:fontSize*1.025,
+    }));
+    const placed = [];
+    const clearance = (x,y,radius) => {
+      let gap = Infinity;
+      for (const label of labels) {
+        const dx = Math.max(Math.abs(x-label.x)*k-label.hw, 0);
+        const dy = Math.max(Math.abs(y-label.y)*ky-label.hh, 0);
+        gap = Math.min(gap, Math.hypot(dx,dy)-radius);
+      }
+      for (const other of placed) {
+        gap = Math.min(gap, Math.hypot((x-other.x)*k,(y-other.y)*ky)-radius-other.r);
+      }
+      return gap;
+    };
+    for (const node of graph.nodes.slice(11)) {
+      const anchor = graph.nodes[slotNames.indexOf(node.domain)];
+      const hemi = hemispheres[node.side];
+      const radius = node.r * 2 * unit * nodeScale;
+      const phase = (hashOf(node.w) % 360) * Math.PI / 180;
+      const start = Math.max(23, radius + 26);
+      const step = Math.max(13, radius*2 + 8);
+      let found = false;
+      for (let ring = 0; ring < 18 && !found; ring++) {
+        const distance = start + ring*step;
+        const samples = Math.max(16, Math.ceil(2*Math.PI*distance/step));
+        for (let sample = 0; sample < samples; sample++) {
+          const angle = phase + sample*2*Math.PI/samples;
+          const x = anchor.x + Math.cos(angle)*distance/k;
+          const y = anchor.y + Math.sin(angle)*distance/ky;
+          const edge = Math.hypot((x-hemi.x)/hemi.rx, (y-hemi.y)/hemi.ry);
+          if (edge > .93) continue;
+          if (clearance(x,y,radius) < 8) continue;
+          node.x = x; node.y = y; found = true; break;
+        }
+      }
+      if (!found) {
+        // Keep the least crowded valid point when an unusually dense Space fills a hemisphere.
+        let best = null;
+        for (let i = 0; i < 360; i++) {
+          const angle = phase + i*2.399963;
+          const radial = Math.sqrt((i+.5)/360)*.88;
+          const x = hemi.x + Math.cos(angle)*hemi.rx*radial;
+          const y = hemi.y + Math.sin(angle)*hemi.ry*radial;
+          const gap = clearance(x,y,radius);
+          if (!best || gap > best.gap) best = {x,y,gap};
+        }
+        node.x = best.x; node.y = best.y;
+      }
+      layoutMinGap = Math.min(layoutMinGap, clearance(node.x,node.y,radius));
+      placed.push({x:node.x,y:node.y,r:radius});
+    }
+  }
+
+  function buildGraph(data) {
+    const anchors = slotNames.map((domain, index) => ({
+      x: anchorPositions[index][0], y: anchorPositions[index][1],
+      k: 'label', r: 0, w: domain, domain,
+    }));
+    const nodes = [...anchors, {x: .5, y: .5, k: 'user', r: 8.4, w: 'you', domain: null}];
+    const links = anchors.map((_, index) => ({a: anchors.length, b: index, t: 'cross', w: .5}));
+    const add = (item, side) => {
+      const domain = side === 'L' ? slotOf(item.slot) :
+        item.cluster === 'emotion' ? 'emotion' : item.cluster === 'preference' ? 'preference' : 'personality';
+      const anchor = slotNames.indexOf(domain), center = anchors[anchor];
+      const node = {
+        x: center.x, y: center.y,
+        k: side === 'L' ? 'entity' : domain === 'emotion' ? 'emotion' : domain === 'preference' ? 'exper' : 'prefer',
+        r: side === 'L' ? 2.6 : 5, w: item.text, detail: item.desc || item.text,
+        domain, side, memory: item,
+      };
+      links.push({a: anchor, b: nodes.length, t: 'in', w: .55});
+      nodes.push(node);
+    };
+    (data.left || []).forEach(item => add(item, 'L'));
+    (data.right || []).forEach(item => add(item, 'R'));
+    graph = {nodes, links};
+    layoutNodes();
+    motion = nodes.map(newMotion);
+    neighbors = nodes.map(() => new Set());
+    links.forEach(link => {neighbors[link.a].add(link.b);neighbors[link.b].add(link.a);});
+    crossLinks = links.filter(link => link.t === 'cross');
+    selected = -1; pinned = -1; hideCard();
+    requestDraw();
+  }
+
+  async function refresh(generation = spaceGeneration) {
+    const response = await fetch('/api/memories', {cache: 'no-store'});
+    if (!response.ok) throw new Error(`记忆快照读取失败 (${response.status})`);
+    const data = await response.json();
+    if (generation !== spaceGeneration) return false;
+    const next = signatureOf(data);
+    if (next === signature) return false;
+    const before = snapshot;
+    signature = next; buildGraph(data);
+    snapshot = data;
+    if (before) {
+      const knownLeft = new Set((before.left || []).map(item => item.text));
+      const knownRight = new Map((before.right || []).map(item => [item.text, (item.notes || []).length]));
+      const until = Date.now() + 3000;
+      graph.nodes.forEach((node, index) => {
+        if (!node.memory) return;
+        if (node.side === 'L' ? !knownLeft.has(node.w) :
+          !knownRight.has(node.w) || (node.memory.notes || []).length > knownRight.get(node.w)) {
+          motion[index].hitUntil = until;
+        }
+      });
+    }
+    return true;
+  }
+  function watchMemories() {
+    clearTimeout(watchTimer);
+    const generation = spaceGeneration;
+    const watch = ++watchGeneration;
+    let remaining = 20;
+    const check = async () => {
+      if (generation !== spaceGeneration || watch !== watchGeneration) return;
+      try { if (await refresh(generation)) return; }
+      catch (error) { console.warn('[memory] refresh failed:', error); }
+      if (watch !== watchGeneration) return;
+      if (--remaining > 0) watchTimer = setTimeout(check, 2000);
+    };
+    watchTimer = setTimeout(check, 2000);
+  }
+  function hideCard() {
+    card.classList.remove('on'); card.setAttribute('aria-hidden', 'true'); cardNode = null;
+  }
+  function updateCard(index) {
+    if (index < 0 || !isActive()) { hideCard(); return; }
+    const node = graph.nodes[index];
+    if (cardNode !== node) {
+      cardNode = node;
+      cardDot.style.background = colors[node.k];
+      cardKind.textContent = node.k === 'label' ? '记忆域' : node.k === 'user' ? '记忆中心' :
+        node.side === 'L' ? '左脑 · 事实' : '右脑 · 画像';
+      cardTitle.textContent = node.memory ? node.w : node.k === 'label' ? domainLabel(node.domain) : '你 · 所有者';
+      if (node.memory) {
+        const item = node.memory;
+        const lines = [];
+        if (item.desc && item.desc !== item.text) lines.push(item.desc);
+        const notes = (item.notes || []).filter(note => note.text || note.cause);
+        notes.slice(0, 2).forEach(note => lines.push(`${note.emotion ? `【${note.emotion}】` : ''}${note.text || note.cause}`));
+        if (notes.length > 2) lines.push(`还有 ${notes.length - 2} 条记录`);
+        cardBody.textContent = lines.join('\n');
+        cardBody.hidden = !lines.length;
+        cardFoot.textContent = domainLabel(node.domain);
+      } else {
+        const count = graph.nodes.filter(item => item.memory && item.domain === node.domain).length;
+        cardBody.textContent = node.k === 'label' ? `这个记忆域中有 ${count} 条记忆。` : '所有记忆从这里连接。';
+        cardBody.hidden = false;
+        cardFoot.textContent = node.k === 'label' ? `${node.domain === 'emotion' || node.domain === 'preference' || node.domain === 'personality' ? '右脑' : '左脑'} · ${count} 条` : 'Memory Space';
+      }
+      cardSize = {width: card.offsetWidth || 236, height: card.offsetHeight || 110};
+    }
+    const point = points[index], cardWidth = cardSize.width, cardHeight = cardSize.height;
+    const x = point.x < innerWidth / 2 ? point.x + 24 : point.x - cardWidth - 24;
+    card.style.left = `${Math.max(8, Math.min(innerWidth - cardWidth - 8, x))}px`;
+    card.style.top = `${Math.max(8, Math.min(innerHeight - cardHeight - 8, point.y - cardHeight / 2))}px`;
+    card.classList.add('on'); card.setAttribute('aria-hidden', 'false');
+  }
 
   function fitPlate(rect) {
     const w = Math.min(rect.width * .98, Math.max(1, rect.height - 38) * crop.w / crop.h);
@@ -57,12 +260,30 @@
   }
 
   function resize() {
-    width = innerWidth; height = innerHeight; dpr = Math.min(1.5, devicePixelRatio || 1);
+    cardNode = null;
+    width = innerWidth; height = innerHeight; dpr = Math.min(2, devicePixelRatio || 1);
     const bounds = digital ? stage.getBoundingClientRect() : {width,height};
     for (const [layer, context] of [[canvas,ctx],[backgroundCanvas,backgroundCtx]]) {
       layer.width = Math.round(bounds.width*dpr); layer.height = Math.round(bounds.height*dpr);
       context.setTransform(dpr,0,0,dpr,0,0);
     }
+    layoutNodes();
+    drawBackground();
+  }
+
+  function drawBackground() {
+    const origin = digital ? canvas.getBoundingClientRect() : {left:0,top:0};
+    backgroundCtx.setTransform(dpr,0,0,dpr,-origin.left*dpr,-origin.top*dpr);
+    backgroundCtx.fillStyle='#000';backgroundCtx.fillRect(0,0,width,height);
+    if (!isActive() || !image.complete || !image.naturalWidth) return;
+    const rect=stage.getBoundingClientRect();
+    if(rect.width<=0 || rect.height<=0) return;
+    const plate=fitPlate(rect), scale=plate.w/crop.w;
+    backgroundCtx.imageSmoothingQuality = 'high';
+    backgroundCtx.filter = 'brightness(.82) contrast(1.25)';
+    backgroundCtx.drawImage(image,plate.x-crop.x*scale,plate.y-crop.y*scale,
+      image.naturalWidth*scale,image.naturalHeight*scale);
+    backgroundCtx.filter = 'none';
   }
 
   // Reference path(): circles on the left, rounded squares and triangles on the right.
@@ -159,9 +380,11 @@
     if(!points.length) return;
     const scale=points[0].scale, lineScale=Math.max(.72,scale), sw=Math.max(.8,scale);
     buildGlow(scale);
-    selected=pickNode();
+    selected=pinned >= 0 ? pinned : pickNode();
+    const now = Date.now();
     motion.forEach((m,i)=>{
-      const target = i === selected ? 1 : (selected >= 0 && neighbors[selected].has(i) ? .42 : 0);
+      const hit = m.hitUntil > now;
+      const target = i === selected || hit ? 1 : (selected >= 0 && neighbors[selected].has(i) ? .42 : 0);
       m.h=reduced?target:m.h+(target-m.h)*(target?.22:.10);
       let proximity=0;
       if(pointer) {
@@ -200,7 +423,7 @@
     graph.nodes.forEach((n,i)=>{
       const sprite=glowSprites[n.k];if(!sprite) return;
       const p=points[i],m=motion[i],radius=p.r*2.6*(1+m.h*1.15+m.p*.24);
-      ctx.globalAlpha=Math.min(1,.36+m.h*.75+m.p*.30);
+      ctx.globalAlpha=Math.min(1,.16+m.h*.66+m.p*.22);
       ctx.drawImage(sprite,p.x-radius,p.y-radius,radius*2,radius*2);
     });
     ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
@@ -234,22 +457,20 @@
     });
 
     const fontSize=Math.max(9.4,14*scale)*(window.VMSettings?.contentScale||1);
-    ctx.font=`${fontSize.toFixed(1)}px ui-monospace,monospace`;
+    ctx.font=`${fontSize.toFixed(1)}px system-ui,sans-serif`;
     ctx.textAlign='center';ctx.textBaseline='middle';
-    if('letterSpacing' in ctx)ctx.letterSpacing=(fontSize*.11).toFixed(2)+'px';
+    if('letterSpacing' in ctx)ctx.letterSpacing='0px';
     graph.nodes.forEach((n,i)=>{
       if(n.k!=='label' && n.k!=='user')return;
-      const text=window.VMSettings?.graphLabel(n.w)||n.w;
+      const text=n.k==='label' ? domainLabel(n.w) : (window.VMSettings?.graphLabel(n.w)||n.w);
       const p=points[i],m=motion[i],bw=ctx.measureText(text).width+fontSize*1.75,bh=fontSize*2.05;
       const y=n.k==='user'?p.y+p.r+bh*.95:p.y;
       m.bw=bw;m.bh=bh;
       const a=.62+m.h*.38;
-      ctx.beginPath();ctx.roundRect(p.x-bw/2,y-bh/2,bw,bh,1.5);
-      ctx.fillStyle='rgba(2,3,6,.78)';ctx.fill();
-      ctx.strokeStyle=`rgba(255,255,255,${a*.13})`;
-      ctx.lineWidth=Math.max(2.2,3.4*Math.max(.85,scale));ctx.stroke();
-      ctx.strokeStyle=`rgba(255,255,255,${a*(n.k==='user'?.8:1)})`;
-      ctx.lineWidth=Math.max(.7,1.05*Math.max(.85,scale));ctx.stroke();
+      ctx.beginPath();ctx.roundRect(p.x-bw/2,y-bh/2,bw,bh,5);
+      ctx.fillStyle='rgba(8,8,10,.88)';ctx.fill();
+      ctx.strokeStyle=`rgba(255,255,255,${a*.55})`;
+      ctx.lineWidth=Math.max(.7,.9*Math.max(.85,scale));ctx.stroke();
       ctx.fillStyle=`rgba(255,255,255,${.82+m.h*.18})`;
       ctx.fillText(text,p.x+fontSize*.055,y+fontSize*.06);
     });
@@ -272,41 +493,24 @@
       }
       ctx.restore();
     });
-    if(selected>=0) {
-      const n=graph.nodes[selected],p=points[selected];
-      const label=`${window.VMSettings?.t(names[n.k])||names[n.k]} · ${n.w ? (window.VMSettings?.graphLabel(n.w)||n.w) : '#'+String(selected+1).padStart(3,'0')}`;
-      ctx.font=`${12*(window.VMSettings?.contentScale||1)}px ui-monospace,monospace`;
-      const w=ctx.measureText(label).width+22;
-      const x=Math.min(width-w-10,Math.max(10,p.x+25));
-      const y=Math.min(height-38,Math.max(10,p.y-16));
-      ctx.fillStyle='#000';ctx.fillRect(x,y,w,30);
-      ctx.strokeStyle=colors[n.k];ctx.lineWidth=1;ctx.strokeRect(x,y,w,30);
-      ctx.fillStyle='#fff';ctx.textAlign='left';ctx.fillText(label,x+11,y+15);
-    }
+    updateCard(selected);
   }
 
   function drawForeground(time) {
     const origin = digital ? canvas.getBoundingClientRect() : {left:0,top:0};
     ctx.setTransform(dpr,0,0,dpr,-origin.left*dpr,-origin.top*dpr);
-    backgroundCtx.setTransform(dpr,0,0,dpr,-origin.left*dpr,-origin.top*dpr);
     ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
     ctx.clearRect(0,0,width,height);
-    backgroundCtx.fillStyle='#000';backgroundCtx.fillRect(0,0,width,height);
-    if(!isActive()) {previousTime=null;return;}
+    if(!isActive()) {previousTime=null;hideCard();return;}
     const rect=stage.getBoundingClientRect();
     if(rect.width<=0 || rect.height<=0) return;
     const plate=fitPlate(rect);
-    if(image.complete && image.naturalWidth) {
-      const s=plate.w/crop.w;
-      // Preserve the original backdrop, including its black outer margins.
-      backgroundCtx.drawImage(image,plate.x-crop.x*s,plate.y-crop.y*s,image.naturalWidth*s,image.naturalHeight*s);
-    }
     drawGraph(plate,time);
   }
 
   function frame(now) {
     frameId=0;
-    if(document.hidden) return;
+    if(document.hidden) {hideCard();return;}
     drawForeground(reduced ? 0 : now/1000);
     if(!reduced && isActive()) frameId=requestAnimationFrame(frame);
   }
@@ -323,28 +527,53 @@
   },{passive:true});
   document.addEventListener('pointerleave',()=>{pointer=null;requestDraw();});
   window.addEventListener('click',e=>{
-    if(e.target.closest('button,input,a,.col-side,.col-retrieval,.rail,.stage .scene') || !isActive()) return;
+    if(e.target.closest('button,input,a,.col-side,.col-retrieval,.rail,.stage .scene') || !isActive()) {pinned=-1;hideCard();return;}
     pointer={x:e.clientX,y:e.clientY};
     selected=pickNode();
-    if(selected<0)return;
+    if(selected<0){pinned=-1;hideCard();return;}
     const n=graph.nodes[selected];
-    const domains={work:'work',health:'health',person:'relationships','经济':'finance',research:'knowledge',projects:'goals',entertainment:'daily_life'};
-    const cluster=selected<=44?'work':selected<=92?'health':selected<=147?'person':selected<=167?'经济':selected<=179?'research':selected<=192?'projects':'entertainment';
-    const domain=n.k==='user' ? null : ({emotion:'emotion',exper:'preference',prefer:'personality'}[n.k] || domains[cluster]);
-    window.dispatchEvent(new CustomEvent('memory-domain-select',{detail:{domain}}));
+    pinned=pinned===selected?-1:selected;
+    if(n.k==='label') window.dispatchEvent(new CustomEvent('memory-domain-select',{detail:{domain:n.domain}}));
+    requestDraw();
   });
+  window.addEventListener('keydown',e=>{if(e.key==='Escape' && pinned>=0){pinned=-1;pointer=null;hideCard();requestDraw();}});
   window.addEventListener('resize',()=>{resize();requestDraw();});
   new ResizeObserver(()=>{resize();requestDraw();}).observe(stage);
   document.querySelector(digital ? '.app' : '.shell').addEventListener('scroll',requestDraw,{passive:true});
-  if(digital) new MutationObserver(requestDraw).observe(memoryIn,{attributes:true,attributeFilter:['class']});
-  new MutationObserver(requestDraw).observe(document.body,{attributes:true,attributeFilter:['class']});
+  const redrawForView = () => {drawBackground();requestDraw();};
+  if(digital) new MutationObserver(redrawForView).observe(memoryIn,{attributes:true,attributeFilter:['class']});
+  new MutationObserver(redrawForView).observe(document.body,{attributes:true,attributeFilter:['class']});
   document.addEventListener('visibilitychange',()=>{
     cancelAnimationFrame(frameId);frameId=0;previousTime=null;requestDraw();
+    if (!document.hidden) void refresh().catch(error => console.warn('[memory] refresh failed:', error));
   });
   window.addEventListener('pagehide',()=>{cancelAnimationFrame(frameId);frameId=0;});
-  window.addEventListener('pageshow',()=>{previousTime=null;resize();requestDraw();});
-  document.addEventListener('display-settings-change',requestDraw);
-  image.onload=requestDraw;
+  window.addEventListener('pageshow',()=>{previousTime=null;resize();requestDraw();
+    void refresh().catch(error => console.warn('[memory] refresh failed:', error));});
+  document.addEventListener('display-settings-change',()=>{cardNode=null;layoutNodes();requestDraw();});
+  image.onload=redrawForView;
   image.src='background.webp';
+  window.addEventListener('memory-space-change', () => {
+    spaceGeneration += 1; watchGeneration += 1; clearTimeout(watchTimer); signature = ''; snapshot = null;
+    void refresh().catch(error => console.warn('[memory] refresh failed:', error));
+  });
+  window.VMMemoryScene = Object.freeze({
+    onStudioEvent(message) {
+      if (message.type === 'answer_done' || message.type === 'playback_done') watchMemories();
+      if (message.type !== 'memory_hits') return;
+      const hits = [...(message.left_brain || []).map(hit => hit.text),
+        ...(message.right_brain_hits || []).map(hit => hit.content)];
+      const matching = graph.nodes.map((node, index) => hits.some(text => node.memory &&
+        (node.w === text || node.memory.notes?.some(note => note.text === text))) ? index : -1).filter(index => index >= 0);
+      const until = Date.now() + 3000;
+      matching.forEach(index => { motion[index].hitUntil = until; });
+      if (matching.length) requestDraw();
+    },
+    refresh: () => refresh(),
+    stats: () => ({left: graph.nodes.filter(node => node.memory && node.side === 'L').length,
+      right: graph.nodes.filter(node => node.memory && node.side === 'R').length,
+      minGap: Number.isFinite(layoutMinGap) ? layoutMinGap : null}),
+  });
   resize();requestDraw();
+  void refresh().catch(error => console.warn('[memory] refresh failed:', error));
 })();

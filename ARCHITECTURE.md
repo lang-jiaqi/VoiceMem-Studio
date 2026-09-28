@@ -269,11 +269,20 @@ backend actually generated. Interrupted replies retain only the source samples
 reported as rendered by the playback worklet. Replays do not emit playback
 checkpoints and the cache is discarded on page refresh. UI replies and
 perception come from backend events. Confirmed input IDs deduplicate transcripts
-and merge continuations; interruption uses the backend's heard prefix. Changing
-style, conversation, language, or leaving the page closes its connection. Chat
+and merge continuations; interruption uses the backend's heard prefix. Streaming
+reply deltas update the active text node without rebuilding prior chat turns.
+Changing style, conversation, language, or leaving the page closes its connection. Chat
 lists are page-local and reset on refresh; opening a previous list item starts a
-new backend context for subsequent input. The supplied brain illustration is a
-memory-domain navigation diagram, not a count or topology of stored memories.
+new backend context for subsequent input. Both styles let each new chat choose a
+Memory Space. Chats retain that choice and share the Space's persistent memory;
+switching chats selects the corresponding backend Space before further turns.
+The brain backdrop remains an illustration, while graph nodes are rebuilt from
+the current Space's `/api/memories` snapshot. Node placement uses the visible
+hemisphere bounds and keeps space between memory nodes and domain labels on
+each resize. Hovering or selecting a node shows
+a compact card beside it, following the Web brain's interaction pattern. The page checks for asynchronous
+ingest changes after a turn and redraws only when memory content changes. Its
+background canvas is redrawn on resize or view changes rather than every frame.
 The panels show real per-turn recall results without demo records or rule replies. A local
 configuration page owns connection IPC. The Studio renderer has only the model-service
 bridge described above and no Node integration. Both renderers use context isolation and
