@@ -220,9 +220,9 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
                     return RedirectResponse("/ui/login.html", status_code=303)
                 return JSONResponse({"detail": "请先登录"}, status_code=401)
             request.state.demo_user = user
-            if path in {"/ui/technical.html", "/legacy", "/classic"} and re.search(
+            if path in {"/ui/technical.html", "/ui/digital.html", "/legacy", "/classic"} and re.search(
                     r"iPhone|Android|Mobile", request.headers.get("user-agent", ""), re.I):
-                return RedirectResponse("/ui/digital.html", status_code=303)
+                return RedirectResponse("/ui/pet-mobile.html", status_code=303)
             return await call_next(request)
 
         class Credentials(BaseModel):
@@ -435,12 +435,37 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
 
     @app.get("/")
     def index(request: Request, pet_on: bool = Query(False, alias="pet")):
+        if demo_accounts and re.search(r"iPhone|Android|Mobile", request.headers.get("user-agent", ""), re.I):
+            return RedirectResponse("/ui/pet-mobile.html", status_code=303)
         if pet_on and not demo_accounts:
             pet.ensure_running(loopback_ws_url(request))
         headers = {**_NOCACHE}
         if desktop_instance:
             headers['X-VoiceMem-Desktop-Instance'] = desktop_instance
         return FileResponse(HERE.parent / "apps" / "ui" / "index.html", headers=headers)
+
+    if demo_accounts:
+        pet_root = HERE.parent / "pet"
+        app.mount("/pet/assets", StaticFiles(directory=pet_root / "assets"), name="demo-pet-assets")
+        pet_scripts = {"avatar-parameter-controller.js", "avatar-behavior-controller.js",
+                       "audio-lip-sync.js", "live2d-renderer.js", "avatar-controller.js"}
+
+        @app.get("/pet/{name}")
+        def demo_pet_script(name: str):
+            if name not in pet_scripts:
+                raise HTTPException(404)
+            return FileResponse(pet_root / name, media_type="application/javascript", headers=_NOCACHE)
+
+        @app.get("/pet/vendor/{name}")
+        def demo_pet_vendor(name: str):
+            packages = {"pixi.min.js": "pixi.js/dist/browser/pixi.min.js",
+                        "cubism4.min.js": "pixi-live2d-display/dist/cubism4.min.js"}
+            if name not in packages:
+                raise HTTPException(404)
+            path = HERE.parent / "apps" / "node_modules" / packages[name]
+            if not path.is_file():
+                raise HTTPException(503, "请先安装 studio/apps 的 npm 依赖")
+            return FileResponse(path, media_type="application/javascript", headers=_NOCACHE)
 
     @app.get("/legacy")
     def legacy():

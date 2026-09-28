@@ -1,10 +1,16 @@
 # 简单体验站
 
-访客使用名称和密码注册；每个账号有独立的 Memory Space 和录音目录。手机打开后直接进入数字人页面。数字人下方的“VoiceMem · 本轮记忆”可查看本轮召回与新入库内容。聊天列表只保存在当前页面，刷新后不保留；长期记忆会保留。
+访客使用名称和密码注册；每个账号有一个独立的 Memory Space 和录音目录。手机打开后进入白藤宠物页面。底部的 VoiceMem 按钮可查看本轮召回与新入库内容；右上角设置可调整对话偏好，选择会保存在该账号的空间中。设置中没有 API Key 和组件配置。页面文字记录刷新后不保留；长期记忆会保留。
 
 ## 在提供服务的 Mac 上启动
 
-先按仓库现有说明准备 Python 环境、模型和回复及记忆 API Key。体验模式需要 API 回复模型，并使用 `llm_tts` 模式。然后在仓库根目录运行：
+先运行 `npm --prefix studio/apps run ensure:deps`，让手机宠物页面能加载仓库中的 PixiJS 依赖。
+
+白藤还需要 Live2D Cubism Core。若官网 CDN 无法访问，从 Live2D 官方 SDK 取得 `live2dcubismcore.min.js` 并放到 `studio/pet/assets/live2d/vendor/`。白藤模型的公开使用与再分发范围也应先向权利人确认；见 `studio/pet/assets/live2d/rattan/README-SOURCE.md`。
+
+先按仓库现有说明准备 Python 环境和模型。桌面 App 保存的 API Key 不会自动传给直接运行的 Python 服务。在仓库根目录执行 `nano .env`，加入一行 `DEEPSEEK_API_KEY=你的密钥`，保存后运行 `chmod 600 .env`。`.env` 已被 Git 忽略，不要把密钥贴到命令行或提交到 Git。一个 DeepSeek Key 即可用于下方命令的记忆和回复服务。
+
+可先运行 `STUDIO_PUBLIC_DEMO=1 .venv/bin/python -m studio --llm deepseek --memory-llm deepseek --check`，确认两项 API Key 均显示“已找到”。体验模式需要 API 回复模型，并使用 `llm_tts` 模式。然后在仓库根目录运行：
 
 ```bash
 STUDIO_PUBLIC_DEMO=1 .venv/bin/python -m studio --host 127.0.0.1 --port 8790 --mode llm_tts --llm deepseek --memory-llm deepseek --lang zh

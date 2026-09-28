@@ -4,12 +4,12 @@
   else Object.assign(root, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, root => {
   const CORES = ['assets/live2d/vendor/live2dcubismcore.min.js', 'https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js'];
-  const PIXI = 'node_modules/pixi.js/dist/browser/pixi.min.js';
-  const DISPLAY = 'node_modules/pixi-live2d-display/dist/cubism4.min.js';
+  const PIXI = root.VM_PET_ASSET_ROOT ? 'vendor/pixi.min.js' : 'node_modules/pixi.js/dist/browser/pixi.min.js';
+  const DISPLAY = root.VM_PET_ASSET_ROOT ? 'vendor/cubism4.min.js' : 'node_modules/pixi-live2d-display/dist/cubism4.min.js';
 
   function script(path, ready) {
     if (ready()) return Promise.resolve();
-    const source = new URL(path, location.href).href;
+    const source = new URL(path, root.VM_PET_ASSET_ROOT || location.href).href;
     const existing = document.querySelector(`script[src="${source}"]`);
     if (existing) return new Promise((resolve, reject) => {
       existing.addEventListener('load', resolve, { once: true });
@@ -121,7 +121,7 @@
       this.width = width; this.height = height; this.resolution = resolution;
       this.app.renderer.resolution = resolution; this.app.renderer.resize(width, height);
       const bounds = this.model.getLocalBounds();
-      const portrait = new URLSearchParams(location.search).get('layout') === 'portrait';
+      const portrait = Boolean(root.VM_PET_PORTRAIT) || new URLSearchParams(location.search).get('layout') === 'portrait';
       const scale = portrait
         ? width / Math.max(1, bounds.width) * 1.8
         : Math.min(width / Math.max(1, bounds.width), height / Math.max(1, bounds.height)) * .96;

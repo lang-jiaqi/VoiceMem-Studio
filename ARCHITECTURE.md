@@ -233,8 +233,14 @@ Space under the demo data directory. The VoiceMem `memory_root` is set to that
 private directory; public demo browsers cannot create or switch Spaces. Demo
 Spaces use Chinese so VoiceMem's process-wide language override stays stable.
 The account owns its turn recordings. Browser chat lists remain page-local;
-long-term memory persists with the account. The digital page shows this turn's
-retrieved hits and watches the account's memory snapshot for new stored entries.
+long-term memory persists with the account. Mobile demo requests enter a dedicated
+browser pet page, which reuses the desktop Live2D behavior and browser voice client.
+The page shows this turn's retrieved hits and watches the account's memory snapshot
+for new stored entries. Its top-right settings panel exposes only Self Harness
+controls. Explicit Harness choices persist in the account's default Space via the
+demo account database; model-driven changes remain conversation scoped. The demo
+serves only allowlisted pet scripts and local PixiJS runtime files to authenticated
+accounts. The ordinary desktop homepage does not redirect based on viewport size.
 `studio/apps/` owns the Windows/macOS Electron desktop client and pet. Linux is
 a backend deployment target, not a desktop release target. Windows runs capture,
 playback and the pet natively, while local CUDA inference belongs in WSL2 or its

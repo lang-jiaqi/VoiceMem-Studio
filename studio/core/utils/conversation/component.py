@@ -2,6 +2,7 @@ from studio.core.utils.turn_taking.pause import needs_continuation
 import asyncio
 import base64
 import json
+import sqlite3
 import threading
 import time
 import uuid
@@ -43,22 +44,47 @@ class Conversation:
         """Apply one explicit settings-page update to this conversation."""
         try:
             self.self_harness.set_explicit(value)
-        except (TypeError, ValueError) as exc:
+            await self._save_demo_harness(profile_update=value)
+        except (TypeError, ValueError, sqlite3.Error, OSError) as exc:
             await self.publish_self_harness(error=str(exc))
 
     async def update_harness_prompt(self, name, value) -> None:
         """Apply one explicit free-text prompt to the current conversation."""
         try:
             self.self_harness.set_prompt(name, value)
-        except (TypeError, ValueError) as exc:
+            await self._save_demo_harness(persona=self.self_harness.prompts.get("persona", ""))
+        except (TypeError, ValueError, sqlite3.Error, OSError) as exc:
             await self.publish_self_harness(error=str(exc))
 
     async def update_backchannel_curve(self, value) -> None:
         """Apply explicit expected quotas for the four acknowledgement phases."""
         try:
             self.self_harness.set_backchannel_curve(value)
-        except (TypeError, ValueError) as exc:
+            await self._save_demo_harness(backchannel_curve=self.self_harness.backchannel_curve,
+                                          profile_update={"turn_taking": {"backchannel": "auto"}})
+        except (TypeError, ValueError, sqlite3.Error, OSError) as exc:
             await self.publish_self_harness(error=str(exc))
+
+    async def _save_demo_harness(self, *, profile_update=None, persona=None,
+                                 backchannel_curve=None) -> None:
+        """Keep explicit demo preferences by Space without persisting model-driven turns."""
+        save = getattr(self.agent, "_DEMO_HARNESS_SAVE", None)
+        if save is None:
+            return
+        prefs = getattr(self.agent, "_DEMO_HARNESS_PREFS", {})
+        updated = {**prefs, "profile": {**prefs.get("profile", {})}}
+        if profile_update is not None:
+            from studio.core.utils.self_harness.component import validate_update
+            for domain, fields in validate_update(profile_update).items():
+                updated["profile"][domain] = {**updated["profile"].get(domain, {}), **fields}
+        if persona is not None:
+            updated["persona"] = persona
+        if profile_update and "backchannel" in profile_update.get("turn_taking", {}):
+            updated["backchannel_curve"] = self.self_harness.backchannel_curve
+        if backchannel_curve is not None or (profile_update is None and persona is None):
+            updated["backchannel_curve"] = backchannel_curve
+        await asyncio.to_thread(save, updated)
+        self.agent._DEMO_HARNESS_PREFS = updated
 
     async def publish_user_input(self, pending) -> None:
         """Publish accepted input independently of reply/audio cancellation."""

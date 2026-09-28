@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -46,6 +47,12 @@ class DemoAccounts:
                     expires_at INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+                CREATE TABLE IF NOT EXISTS harness_prefs (
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    space TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (user_id, space)
+                );
             """)
 
     def _connect(self):
@@ -127,6 +134,27 @@ class DemoAccounts:
                 conn.execute("DELETE FROM sessions WHERE token_hash=?",
                              (hashlib.sha256(token.encode()).hexdigest(),))
 
+    def load_harness(self, user_id: str, space: str = "default") -> dict:
+        """Load explicit Harness choices for one account and Space."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT payload FROM harness_prefs WHERE user_id=? AND space=?",
+                               (user_id, space)).fetchone()
+        if not row:
+            return {}
+        try:
+            value = json.loads(row[0])
+            return value if isinstance(value, dict) else {}
+        except (TypeError, ValueError):
+            return {}
+
+    def save_harness(self, user_id: str, space: str, value: dict) -> None:
+        """Persist only explicit, schema-validated choices for an account Space."""
+        payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        with self._connect() as conn:
+            conn.execute("INSERT INTO harness_prefs VALUES (?, ?, ?) "
+                         "ON CONFLICT(user_id, space) DO UPDATE SET payload=excluded.payload",
+                         (user_id, space, payload))
+
     def agent(self, user_id: str):
         """Reuse one agent per account; all agents share the process model caches."""
         with self._agent_lock:
@@ -145,5 +173,7 @@ class DemoAccounts:
                     from studio.core.voiceagent import VoiceAgent
                     agent = VoiceAgent(args, space_root=space_root, public_demo=True)
                     agent.TURN_AUDIO_DIR = self.root / "users" / user_id / "turn_audio"
+                agent._DEMO_HARNESS_PREFS = self.load_harness(user_id)
+                agent._DEMO_HARNESS_SAVE = lambda value, uid=user_id: self.save_harness(uid, "default", value)
                 self._agents[user_id] = agent
             return self._agents[user_id]

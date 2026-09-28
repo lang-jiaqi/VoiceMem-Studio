@@ -64,6 +64,6 @@
     destroy() { hide(); renderer.destroy(); }
   };
   window.avatar = avatar;
-  const requested = new URLSearchParams(location.search).get('model') || 'assets/live2d/rattan/rattan.model3.json';
+  const requested = new URLSearchParams(location.search).get('model') || new URL('assets/live2d/rattan/rattan.model3.json', window.VM_PET_ASSET_ROOT || location.href).href;
   setTimeout(() => loadModel(requested), 100);
 })();

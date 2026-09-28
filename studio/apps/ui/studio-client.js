@@ -15,7 +15,7 @@
     }
     return output;
   }
-  function create({ onEvent = () => {}, onState = () => {}, onPhase = () => {} } = {}) {
+  function create({ onEvent = () => {}, onState = () => {}, onPhase = () => {}, onAudioLevel = () => {} } = {}) {
     let run = null;
     let replayRun = null;
     let replaySamples = 0;
@@ -265,11 +265,14 @@
             else if (data.type === 'interrupted') finishRecording(data.outputId, data.renderedSamples, true);
           }
           const states = { buffer: 'playing', started: 'playing', resumed: 'playing', underflow: 'stalled' };
-          if (data.type === 'level' && data.outputId) sendJSON(owner, {
+          if (data.type === 'level' && data.outputId) {
+            if (data.outputId === owner.output) onAudioLevel(Number(data.rms || 0));
+            sendJSON(owner, {
             type: 'avatar_audio_level', output_id: data.outputId,
             rms: Number(data.rms || 0), peak: Number(data.peak || 0),
             rendered_samples: Number(data.renderedSamples || 0), sample_rate: Number(data.sampleRate || RATE),
-          });
+            });
+          }
           else if (data.outputId) sendJSON(owner, {
             type: 'playback_checkpoint', output_id: data.outputId,
             rendered_samples: Number(data.renderedSamples || 0), sample_rate: Number(data.sampleRate || RATE),

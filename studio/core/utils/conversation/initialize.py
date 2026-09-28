@@ -26,7 +26,19 @@ def initialize(self, agent, sock):
         task = asyncio.create_task(self.publish_self_harness(snapshot))
         task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
 
-    self.self_harness = SelfHarnessState(on_change=self_harness_changed)
+    self.self_harness = SelfHarnessState()
+    saved = getattr(agent, "_DEMO_HARNESS_PREFS", None)
+    if isinstance(saved, dict):
+        def restore(action, *values):
+            try:
+                action(*values)
+            except (TypeError, ValueError):
+                pass
+        restore(self.self_harness.set_explicit, saved.get("profile", {}))
+        restore(self.self_harness.set_prompt, "persona", saved.get("persona", ""))
+        if saved.get("backchannel_curve") is not None:
+            restore(self.self_harness.set_backchannel_curve, saved["backchannel_curve"])
+    self.self_harness.on_change = self_harness_changed
     apply_turn_taking_profile(self.turn_taking, self.self_harness.snapshot())
     self.early = {'text': '', 'task': None, 'sink': None, 'timeline': None, 'pending': None, 'said': None, 'space': '', 'memory_vm': None, 'started': 0.0, 'self_harness_update': None}
     self.prewarm = {'task': None, 'cancelled': None, 'closed': False}
