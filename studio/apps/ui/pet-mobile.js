@@ -2,8 +2,9 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const label = { 'persona.interaction_style':'陪伴方式', 'speaking_style.speech_rate':'说话速度', 'speaking_style.tone':'语气', 'speaking_style.reply_length':'回答长短', 'reply_modes.reasoning_depth':'思考时间', 'turn_taking.backchannel':'附和频率', 'turn_taking.work_filler':'等待反馈' };
-  const phaseLabel = {idle:'点击开始对话',listening:'正在聆听…','short-thinking':'正在思考…','long-thinking':'还在思考…',speaking:'正在回答…'};
-  let listening = false, resumeAfterSettings = false, reply = '', memoryPoll = 0, known = new Set(), baselineReady = false;
+  const phaseLabel = {idle:'',listening:'正在聆听…','short-thinking':'正在思考…','long-thinking':'还在思考…',speaking:'正在回答…'};
+  let listening = false, resumeAfterSettings = false, replyMessage = null, memoryPoll = 0, known = new Set(), baselineReady = false;
+  const messages = [];
   const memoryKey = (kind, item) => `${kind}:${item.id || item.raw || ''}:${item.text || ''}:${kind === 'right' ? (item.notes || []).length : ''}`;
   const memorySnapshotReady = fetch('/api/memories', {cache:'no-store'}).then(r => r.ok ? r.json() : Promise.reject()).then(data => {
     known = new Set([...(data.left || []).map(item => memoryKey('left', item)), ...(data.right || []).map(item => memoryKey('right', item))]);
@@ -32,22 +33,54 @@
     }
     if (generation === memoryPoll) list('storedMemories', [], '本轮暂无新入库记忆');
   }
+  function renderChat() {
+    const host = $('chatMessages');
+    const atBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 48;
+    host.replaceChildren();
+    if (!messages.length) {
+      const empty = document.createElement('p'); empty.className = 'chat-empty';
+      empty.textContent = '开始说话，或输入一条消息。'; host.append(empty);
+    }
+    for (const message of messages.slice(-100)) {
+      const row = document.createElement('div'); row.className = `chat-turn ${message.role}`;
+      const body = document.createElement('div'); body.className = 'chat-bubble'; body.textContent = message.text;
+      message.element = body; row.append(body); host.append(row);
+    }
+    if (atBottom || $('chatDialog').open) host.scrollTop = host.scrollHeight;
+  }
+  function addMessage(message) { messages.push(message); if (messages.length > 100) messages.shift(); renderChat(); }
   const client = VMStudio.create({
     onState(active) { listening = active; $('talkButton').textContent = active ? '结束对话' : '开始对话'; $('talkButton').setAttribute('aria-pressed', String(active)); },
-    onPhase(value) { $('phase').textContent = phaseLabel[value] || value; window.avatar?.setSpeaking(value === 'speaking'); if (value !== 'speaking') window.avatar?.setState(value === 'listening' ? 'listening' : 'idle'); },
+    onPhase(value) { const status = phaseLabel[value] ?? value; $('phase').textContent = status; $('phase').hidden = !status; window.avatar?.setSpeaking(value === 'speaking'); if (value !== 'speaking') window.avatar?.setState(value === 'listening' ? 'listening' : 'idle'); },
     onAudioLevel(rms) { window.avatar?.feedAudioLevel(rms, performance.now()); },
     onEvent(event) {
-      if (event.type === 'partial_transcript') $('spoken').textContent = event.text || '';
-      if (event.type === 'user_transcript') { $('spoken').textContent = event.text || ''; $('reply').textContent = ''; list('retrievedMemories', [], '检索中…'); void watchStored(); }
-      if (event.type === 'answer_start') { reply = ''; $('reply').textContent = ''; }
-      if (event.type === 'answer_delta') {
-        reply += event.text || '';
-        const panel = document.querySelector('.dialogue');
-        const atBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 36;
-        $('reply').textContent = reply;
-        if (atBottom) panel.scrollTop = panel.scrollHeight;
+      if (event.type === 'partial_transcript') { $('partialTranscript').textContent = event.text || ''; $('partialTranscript').hidden = !event.text; }
+      if (event.type === 'user_transcript') {
+        $('partialTranscript').hidden = true;
+        VMStudio.applyUser(messages, event, 'user');
+        if (messages.length > 100) messages.shift();
+        renderChat();
+        if (!$('chatDialog').open) $('chatCount').hidden = false;
+        list('retrievedMemories', [], '检索中…'); void watchStored();
       }
-      if (event.type === 'answer_interrupt') $('reply').textContent = event.heard_text || '';
+      if (event.type === 'answer_start') {
+        replyMessage = {role:'assistant', text:'', outputId:event.output_id}; addMessage(replyMessage);
+        if (!$('chatDialog').open) $('chatCount').hidden = false;
+      }
+      if (event.type === 'answer_delta') {
+        if (replyMessage) {
+          const host = $('chatMessages');
+          const atBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 48;
+          replyMessage.text += event.text || '';
+          if (replyMessage.element) replyMessage.element.textContent = replyMessage.text;
+          if (atBottom) host.scrollTop = host.scrollHeight;
+        }
+      }
+      if (event.type === 'answer_interrupt') {
+        if (replyMessage) { replyMessage.text = event.heard_text || ''; const index = messages.indexOf(replyMessage); if (!replyMessage.text && index >= 0) messages.splice(index, 1); renderChat(); }
+        replyMessage = null;
+      }
+      if (event.type === 'playback_done' || event.type === 'disconnected' || event.type === 'error') replyMessage = null;
       if (event.type === 'memory_hits') {
         const hits = [...(event.left_brain || []).map(item => item.text), ...(event.right_brain_hits || []).filter(item => !item.internal).map(item => item.content)];
         list('retrievedMemories', hits, '本轮没有召回相关记忆'); $('memoryCount').textContent = hits.length ? `· ${hits.length}` : '';
@@ -61,11 +94,16 @@
       VMUI.notify('宠物加载失败，请检查 Live2D Core 和网络连接。');
   }, 8000);
   $('talkButton').onclick = () => { if (listening) client.stop(); else void client.start(); };
-  function send() { const text = $('message').value.trim(); if (!text) return; $('message').value = ''; $('spoken').textContent = text; void client.send(text).catch(error => VMUI.notify(error.message)); }
-  $('sendButton').onclick = send;
-  $('message').onkeydown = event => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); send(); } };
+  function send() {
+    const text = $('message').value.trim(); if (!text) return;
+    $('message').value = '';
+    const pending = {role:'user', text, pending:true}; addMessage(pending);
+    void client.send(text).catch(error => { const index = messages.indexOf(pending); if (index >= 0) messages.splice(index, 1); renderChat(); VMUI.notify(error.message); });
+  }
+  $('chatForm').onsubmit = event => { event.preventDefault(); send(); };
   function open(id) { const dialog = $(id); if (dialog.open) return; dialog.showModal(); if (id === 'settingsDialog') { resumeAfterSettings = listening; client.pause(); void client.getHarness().catch(error => VMUI.notify(error.message)); } }
   $('memoryButton').onclick = () => open('memoryDialog');
+  $('chatButton').onclick = () => { $('chatCount').hidden = true; open('chatDialog'); renderChat(); };
   $('settingsButton').onclick = () => open('settingsDialog');
   for (const button of document.querySelectorAll('[data-close]')) button.onclick = () => $(button.dataset.close).close();
   for (const dialog of document.querySelectorAll('dialog')) dialog.onclick = event => { if (event.target === dialog) dialog.close(); };

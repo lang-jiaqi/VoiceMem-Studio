@@ -235,7 +235,8 @@ Spaces use Chinese so VoiceMem's process-wide language override stays stable.
 The account owns its turn recordings. Browser chat lists remain page-local;
 long-term memory persists with the account. Mobile demo requests enter a dedicated
 browser pet page, which reuses the desktop Live2D behavior and browser voice client.
-The page shows this turn's retrieved hits and watches the account's memory snapshot
+Conversation text and input live in a separate sheet so the avatar remains visible
+by default. The VoiceMem sheet shows this turn's retrieved hits and watches the account's memory snapshot
 for new stored entries. Its top-right settings panel exposes only Self Harness
 controls. Explicit Harness choices persist in the account's default Space via the
 demo account database; model-driven changes remain conversation scoped. The demo
