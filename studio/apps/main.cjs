@@ -17,7 +17,8 @@ let launcher, studio, current = { ...runtime.DEFAULTS }, attempt, generation = 0
 let status = { kind: 'idle', message: '连接已运行的服务，或启动本机 Docker。' };
 let writes = Promise.resolve();
 let quitting = false, managedMode = false;
-let pet, petEnabled = true, ownedBackend, managedConfiguration, reconfiguring = false;
+let pet, petEnabled = true, ownedBackend, stoppingBackend, managedConfiguration;
+let reconfiguring = false, managedTransition = false;
 const microphoneGrants = new Set();
 
 async function showPet() {
@@ -244,6 +245,7 @@ async function connect(value, persist = true) {
 
 async function connectManaged(config, { quitOnError = true } = {}) {
   cancelConnection();
+  managedTransition = true;
   const ownGeneration = generation;
   const control = new AbortController();
   attempt = control;
@@ -256,8 +258,10 @@ async function connectManaged(config, { quitOnError = true } = {}) {
     ownedBackend = undefined;
     if (previousBackend) {
       stoppingPrevious = true;
+      stoppingBackend = previousBackend;
       publish('connecting', '正在关闭旧的本机后端…');
       await runtime.stopManagedBackend(previousBackend, { signal: control.signal });
+      stoppingBackend = undefined;
       stoppingPrevious = false;
     }
     control.signal.throwIfAborted();
@@ -269,6 +273,7 @@ async function connectManaged(config, { quitOnError = true } = {}) {
       },
     );
     ownedBackend = backend;
+    current = { ...runtime.DEFAULTS, serverUrl: backend.url };
     let ready = false;
     const exitWatch = backend.exited.then(result => {
       if (!ready) throw backendExitError(result);
@@ -314,6 +319,8 @@ async function connectManaged(config, { quitOnError = true } = {}) {
     if (quitOnError) app.quit();
     return false;
   } finally {
+    if (stoppingBackend === previousBackend) stoppingBackend = undefined;
+    managedTransition = false;
     if (ownGeneration === generation) attempt = undefined;
   }
 }
@@ -323,7 +330,10 @@ function installMenu() {
     ...(process.platform === 'darwin' ? [{ label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] }] : []),
     { label: 'Studio', submenu: [
       { label: '连接设置', accelerator: 'CmdOrCtrl+,', click: () => { void showLauncher(); } },
-      { label: '重新连接', click: () => { void showLauncher().then(() => connect(current)); } },
+      { label: '重新连接', click: () => {
+        if (reconfiguring || managedTransition) return;
+        void showLauncher().then(() => connect(current));
+      } },
       { id: 'show-pet', label: '后台显示桌宠', type: 'checkbox', checked: petEnabled, click: item => {
         petEnabled = item.checked;
         if (petEnabled) void showPet(); else pet?.close();
@@ -344,7 +354,13 @@ function installMenu() {
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { const window = studio || launcher; if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
-  app.on('before-quit', () => { quitting = true; cancelConnection(); ownedBackend?.stop(); pet?.close(); });
+  app.on('before-quit', () => {
+    quitting = true;
+    cancelConnection();
+    ownedBackend?.stop();
+    stoppingBackend?.stop();
+    pet?.close();
+  });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.on('activate', () => {
     if (studio && !studio.isDestroyed()) { studio.show(); studio.focus(); pet?.close(); }
@@ -395,6 +411,7 @@ else {
     });
     ipcMain.handle('studio-desktop:connect', async (event, value) => {
       assertLauncher(event);
+      if (reconfiguring || managedTransition) throw new Error('本机后端正在启动或重启，请稍候。');
       const next = runtime.settings(value);
       if (process.env.VOICEMEM_DESKTOP_REQUIRE_ADDRESS === '1' && next.autoStartDocker) {
         throw new Error('只启动 UI 时不能启动本机 Docker，请填写已有 Studio 服务的地址。');
@@ -412,6 +429,7 @@ else {
     });
     ipcMain.handle('studio-desktop:cancel', event => {
       assertLauncher(event);
+      if (reconfiguring || managedTransition) return;
       cancelConnection();
       if (managed) {
         ownedBackend?.stop();

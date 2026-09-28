@@ -329,13 +329,17 @@ backend reaches readiness, Electron persists them only through OS-backed
 `safeStorage`; the connection settings file remains secret-free.
 Electron starts `.venv/bin/python` with the MLX backend on macOS, or invokes
 `.venv-cuda/bin/python` through `wsl.exe` with the CUDA backend on Windows. Both
-paths bind loopback port 8787, disable the backend-owned pet, acquire the
+paths prefer loopback port 8787 and select an available loopback port if it is
+occupied. They disable the backend-owned pet, acquire the
 remaining reply and speech models, run strict warmups, wait for the shared Web
 page for up to 30 minutes by default, and only then create and show the style selector.
 The managed backend echoes a per-launch instance ID on the Web root response;
 the App accepts readiness only from that instance and reports an occupied port
-immediately if a previously started Web service responds there. Existing-service
+if another service wins the selected port before startup completes. Existing-service
 connections do not require this instance ID.
+During managed model-service changes, the App retains ownership of the old
+backend until it exits and prevents connection actions from cancelling startup
+or restart. App exit signals either the running or stopping owned backend.
 The timeout can be increased for unusually slow first downloads through the
 desktop launch environment. Existing-service connections retain their shorter
 readiness timeout. Managed startup never
