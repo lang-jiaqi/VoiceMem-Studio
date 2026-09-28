@@ -5,7 +5,6 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const net = require('node:net');
 const r = require('../runtime.cjs');
 
 async function temporary(t) {
@@ -144,23 +143,34 @@ test('managed restart waits for the previous backend to exit after stopping it',
 });
 
 test('managed restart reports a stuck old backend instead of starting another', async () => {
-  const backend = { stop() {}, exited: new Promise(() => {}) };
-  await assert.rejects(r.stopManagedBackend(backend, { timeoutMs: 5 }), /旧的本机后端未能停止/);
+  const signals = [];
+  const backend = { stop() { signals.push('term'); }, forceStop() { signals.push('kill'); }, exited: new Promise(() => {}) };
+  await assert.rejects(r.stopManagedBackend(backend, { timeoutMs: 5, forceTimeoutMs: 5 }), /旧的本机后端未能退出/);
+  assert.deepEqual(signals, ['term', 'kill']);
 });
 
-test('managed backend chooses a free port for unrelated occupancy but refuses another Studio', async t => {
-  const listener = net.createServer();
-  await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise(resolve => listener.close(resolve)));
-  const occupied = listener.address().port;
-  const selected = await r.selectManagedPort(occupied, {
-    checkStudio: async url => { assert.equal(url, `http://127.0.0.1:${occupied}`); throw new Error('other service'); },
+test('managed restart force-stops an owned child that ignores graceful shutdown', async t => {
+  const directory = await backendProject(t);
+  const python = path.join(directory, '.venv/bin/python');
+  await fs.mkdir(path.dirname(python), { recursive: true });
+  await fs.writeFile(python, 'fixture');
+  const signals = [];
+  const backend = await r.startManagedBackend(directory, 'deepseek', 'deepseek', {
+    platform: 'darwin',
+    spawnImpl() {
+      const child = new EventEmitter();
+      child.killed = false;
+      child.kill = signal => {
+        signals.push(signal);
+        child.killed = true;
+        if (signal === 'SIGKILL') setImmediate(() => child.emit('exit', null, signal));
+        return true;
+      };
+      return child;
+    },
   });
-  assert.notEqual(selected, occupied);
-  assert.ok(selected > 0);
-  await assert.rejects(r.selectManagedPort(occupied, {
-    checkStudio: async () => {},
-  }), /已有 VoiceMem Studio 后端/);
+  await r.stopManagedBackend(backend, { timeoutMs: 5, forceTimeoutMs: 100 });
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
 });
 
 test('managed macOS backend uses MLX and keeps credentials out of arguments', async t => {
@@ -249,11 +259,10 @@ test('managed backend receives a unique readiness identity', async t => {
   const python = path.join(directory, '.venv/bin/python');
   await fs.mkdir(path.dirname(python), { recursive: true });
   await fs.writeFile(python, 'fixture');
-  let childEnv, childArgs;
+  let childEnv;
   const backend = await r.startManagedBackend(directory, 'deepseek', 'deepseek', {
-    platform: 'darwin', selectPort: async () => 18787,
-    spawnImpl(_file, args, options) {
-      childArgs = args;
+    platform: 'darwin',
+    spawnImpl(_file, _args, options) {
       childEnv = options.env;
       const child = new EventEmitter();
       child.killed = false;
@@ -262,8 +271,6 @@ test('managed backend receives a unique readiness identity', async t => {
     },
   });
   assert.match(backend.instanceId, /^[0-9a-f-]{36}$/);
-  assert.equal(backend.url, 'http://127.0.0.1:18787');
-  assert.deepEqual(childArgs.slice(-3), ['--port', '18787', '--verbose']);
   assert.equal(childEnv.VOICEMEM_DESKTOP_INSTANCE, backend.instanceId);
   backend.stop();
   await backend.exited;
