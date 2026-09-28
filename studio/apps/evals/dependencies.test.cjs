@@ -64,6 +64,48 @@ test('missing App runtime dependencies trigger one locked dev install', async t 
   assert.equal('npm_config_production' in calls[0].options.env, false);
 });
 
+test('npm install explicitly downloads Electron when its package has no install script', async t => {
+  const apps = await temporary(t), calls = [];
+  assert.equal(dependencies.ensureDependencies({
+    apps, env: { npm_execpath: '/fixture/npm-cli.js' },
+    run: (file, args, options) => {
+      calls.push({ file, args, options });
+      if (calls.length === 1) {
+        provideDependencies(apps);
+        fs.writeFileSync(path.join(apps, 'node_modules/electron/install.js'), 'fixture');
+        fs.rmSync(path.join(apps, 'node_modules/electron/dist/fixture-electron'));
+      } else {
+        assert.equal(dependencies.missingDependencies(apps).length, 1);
+        fs.writeFileSync(path.join(apps, 'node_modules/electron/dist/fixture-electron'), 'fixture');
+      }
+      return { status: 0 };
+    },
+  }), true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].file, process.execPath);
+  assert.deepEqual(calls[0].args.slice(0, 2), ['/fixture/npm-cli.js', 'ci']);
+  assert.equal(calls[1].file, process.execPath);
+  assert.deepEqual(calls[1].args, [path.join(apps, 'node_modules/electron/install.js')]);
+});
+
+test('Electron download failure is reported after npm installs the package', async t => {
+  const apps = await temporary(t);
+  let calls = 0;
+  assert.throws(() => dependencies.ensureDependencies({
+    apps,
+    run: () => {
+      calls += 1;
+      if (calls === 1) {
+        provideDependencies(apps);
+        fs.writeFileSync(path.join(apps, 'node_modules/electron/install.js'), 'fixture');
+        fs.rmSync(path.join(apps, 'node_modules/electron/dist/fixture-electron'));
+      }
+      return { status: calls === 1 ? 0 : 1 };
+    },
+  }), /Electron 下载失败，状态码 1/);
+  assert.equal(calls, 2);
+});
+
 test('an installed Electron package downloads its missing executable without reinstalling all dependencies', async t => {
   const apps = await temporary(t); const calls = [];
   provideDependencies(apps);

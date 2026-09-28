@@ -299,8 +299,9 @@ is accepted only on loopback. Settings and browser state live in the desktop
 application-data directory, not in the backend's memory or credential files.
 
 The source desktop entry (`npm start`) first verifies its locked Electron, PixiJS,
-and Pixi Live2D files. A missing Electron binary in an installed package triggers
-its installer; other missing files trigger `npm ci --include=dev`. A complete
+and Pixi Live2D files. Missing packages trigger `npm ci --include=dev`; after
+that, a missing Electron binary runs Electron's installer explicitly, since the
+package does not declare an npm install script. A complete
 installation performs no package-manager or network work. The managed install
 explicitly enables lifecycle scripts so a user-level npm `ignore-scripts`
 setting cannot leave Electron without its platform binary. It then owns an optional local backend lifecycle.

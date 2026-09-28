@@ -85,15 +85,21 @@ function ensureDependencies({ apps = path.resolve(__dirname, '..'), env = proces
     ? '[desktop] Electron binary is missing; downloading it…'
     : `[desktop] Missing ${missing.map(([name]) => name).join(', ')}; installing locked App dependencies…`);
   const npm = installCommand(env);
-  const result = repairElectron
-    ? run(process.execPath, [electronInstaller], {
-      cwd: apps, env: installEnvironment(env), stdio: 'inherit', shell: false,
-    })
-    : run(npm.file, [...npm.args, 'ci', '--include=dev', '--ignore-scripts=false', '--no-audit', '--no-fund'], {
-      cwd: apps, env: installEnvironment(env), stdio: 'inherit', shell: false,
-    });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`${repairElectron ? 'Electron 下载' : 'npm ci 安装依赖'}失败，状态码 ${result.status ?? 'unknown'}。`);
+  const childEnvironment = installEnvironment(env);
+  const execute = (file, args, action) => {
+    const result = run(file, args, { cwd: apps, env: childEnvironment, stdio: 'inherit', shell: false });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`${action}失败，状态码 ${result.status ?? 'unknown'}。`);
+  };
+  if (!repairElectron) {
+    execute(npm.file, [...npm.args, 'ci', '--include=dev', '--ignore-scripts=false', '--no-audit', '--no-fund'],
+      'npm ci 安装依赖');
+  }
+  if (!electronBinaryExists(apps)) {
+    if (!fs.existsSync(electronInstaller)) throw new Error('Electron 安装包缺少 install.js，无法下载可执行文件。');
+    if (!repairElectron) console.log('[desktop] Electron binary is missing; downloading it…');
+    execute(process.execPath, [electronInstaller], 'Electron 下载');
+  }
   const remaining = missingDependencies(apps);
   if (remaining.length) throw new Error(`依赖安装完成后仍缺少：${remaining.map(([name]) => name).join(', ')}。`);
   return true;
