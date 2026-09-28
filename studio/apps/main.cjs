@@ -248,11 +248,19 @@ async function connectManaged(config, { quitOnError = true } = {}) {
   const control = new AbortController();
   attempt = control;
   current = { ...runtime.DEFAULTS };
+  let previousBackend;
+  let stoppingPrevious = false;
   try {
     const startupTimeoutMs = runtime.managedStartupTimeout(process.env);
-    const previousBackend = ownedBackend;
+    previousBackend = ownedBackend;
     ownedBackend = undefined;
-    previousBackend?.stop();
+    if (previousBackend) {
+      stoppingPrevious = true;
+      publish('connecting', '正在关闭旧的本机后端…');
+      await runtime.stopManagedBackend(previousBackend, { signal: control.signal });
+      stoppingPrevious = false;
+    }
+    control.signal.throwIfAborted();
     publish('connecting', `正在启动本机 ${process.platform === 'darwin' ? 'MLX' : 'WSL2/CUDA'} 后端…`);
     const backend = await runtime.startManagedBackend(
       config.projectDir, config.memoryProvider, config.replyProvider, {
@@ -290,8 +298,17 @@ async function connectManaged(config, { quitOnError = true } = {}) {
     return true;
   } catch (error) {
     if (ownGeneration !== generation || control.signal.aborted) return false;
-    ownedBackend?.stop();
-    ownedBackend = undefined;
+    if (stoppingPrevious) ownedBackend = previousBackend;
+    else {
+      const failedBackend = ownedBackend;
+      ownedBackend = undefined;
+      try {
+        await runtime.stopManagedBackend(failedBackend, { signal: control.signal });
+      } catch (stopError) {
+        ownedBackend = failedBackend;
+        error = new Error(`${error.message || '本机后端启动失败。'} ${stopError.message}`);
+      }
+    }
     publish('error', error.message || '本机后端启动失败。');
     dialog.showErrorBox('VoiceMem Studio 启动失败', `${error.message || '本机后端启动失败。'}\n\n请查看启动终端中的详细日志。`);
     if (quitOnError) app.quit();
@@ -436,7 +453,7 @@ else {
           }
         } else {
           managedConfiguration = previous;
-          await connectManaged(previous);
+          if (!ownedBackend) await connectManaged(previous);
         }
         reconfiguring = false;
       })(); });

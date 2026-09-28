@@ -7,6 +7,7 @@ const { setTimeout: delay } = require('node:timers/promises');
 
 const DEFAULTS = Object.freeze({ serverUrl: 'http://127.0.0.1:8787', autoStartDocker: false, projectDir: '' });
 const MANAGED_STARTUP_TIMEOUT_MS = 30 * 60 * 1000;
+const MANAGED_STOP_TIMEOUT_MS = 30 * 1000;
 const MANAGED_PROVIDERS = new Set(['deepseek', 'qwen', 'openai', 'local']);
 const MEMORY_PROVIDERS = new Set(['deepseek', 'qwen', 'openai']);
 const PROVIDER_CREDENTIALS = Object.freeze({
@@ -324,6 +325,23 @@ async function startManagedBackend(directory, memoryProvider, replyProvider, {
   return { ...specification, instanceId, child, exited, stop };
 }
 
+async function stopManagedBackend(backend, { signal, timeoutMs = MANAGED_STOP_TIMEOUT_MS } = {}) {
+  if (!backend) return;
+  backend.stop();
+  const cancelTimeout = new AbortController();
+  try {
+    await Promise.race([
+      backend.exited,
+      delay(timeoutMs, undefined, {
+        signal: AbortSignal.any([cancelTimeout.signal, ...(signal ? [signal] : [])]),
+      }).then(() => { throw new Error('旧的本机后端未能停止，端口 8787 仍可能被占用。请退出 App 后检查旧进程。'); }),
+    ]);
+    signal?.throwIfAborted();
+  } finally {
+    cancelTimeout.abort();
+  }
+}
+
 async function prepareManagedMemory(directory, provider, {
   signal, platform = process.platform, arch = process.arch, env = process.env, run = command, spawnImpl = spawn,
 } = {}) {
@@ -417,10 +435,11 @@ async function waitForStudio(url, { signal, timeoutMs = 180000, intervalMs = 150
   throw new Error(`服务尚未就绪，请检查 Studio 后端日志或稍后重试。${lastError?.message || ''}`);
 }
 
-module.exports = { DEFAULTS, MANAGED_STARTUP_TIMEOUT_MS, MANAGED_PROVIDERS, MEMORY_PROVIDERS, managedStartupTimeout,
+module.exports = { DEFAULTS, MANAGED_STARTUP_TIMEOUT_MS, MANAGED_STOP_TIMEOUT_MS,
+  MANAGED_PROVIDERS, MEMORY_PROVIDERS, managedStartupTimeout,
   serverUrl, settings, sameOrigin, audioPermission, loadSettings, saveSettings,
   validateProject, validateBackendProject, command, managedLaunch, MODEL_SERVICE_DEFAULTS, modelEndpoint,
   modelService, modelServices, modelServicesFromLaunch, updateModelService,
   publicModelServices, modelServiceEnvironment, loadModelServices, saveModelServices,
   appendWslEnvironment, managedBackendCommand,
-  startManagedBackend, prepareManagedMemory, publishedUrl, startDocker, probe, waitForStudio };
+  startManagedBackend, stopManagedBackend, prepareManagedMemory, publishedUrl, startDocker, probe, waitForStudio };

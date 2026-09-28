@@ -254,6 +254,10 @@ keeps keys out of command arguments and backend responses, and encrypts persiste
 keys with Electron `safeStorage`. A new configuration is persisted only after its
 backend becomes ready; failure restarts the previous configuration. Existing or
 remote services remain read-only because their lifecycle belongs to the server.
+Before replacing an App-owned backend, Electron waits for the old child to exit
+so the replacement does not race it for port 8787. Failed replacements also
+exit before the previous configuration restarts. A stop timeout leaves the old
+configuration selected and does not start another process.
 `/legacy` retains the previous Studio renderer;
 `/classic` retains the older demo. The desktop opens this same root and keeps its
 connection configuration window hidden on a successful startup; connection errors

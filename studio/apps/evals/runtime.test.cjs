@@ -123,6 +123,30 @@ test('managed startup uses a long first-run timeout with a validated override', 
   assert.throws(() => r.managedStartupTimeout({ VOICEMEM_DESKTOP_STARTUP_TIMEOUT_SECONDS: '20' }), /不小于 60/);
 });
 
+test('managed restart waits for the previous backend to exit after stopping it', async () => {
+  let finish;
+  const events = [];
+  const backend = {
+    stop() { events.push('stop'); },
+    exited: new Promise(resolve => { finish = resolve; }),
+  };
+  const stopping = r.stopManagedBackend(backend, { timeoutMs: 100 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(events, ['stop']);
+  let completed = false;
+  void stopping.then(() => { completed = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(completed, false);
+  finish({ code: 0 });
+  await stopping;
+  assert.equal(completed, true);
+});
+
+test('managed restart reports a stuck old backend instead of starting another', async () => {
+  const backend = { stop() {}, exited: new Promise(() => {}) };
+  await assert.rejects(r.stopManagedBackend(backend, { timeoutMs: 5 }), /旧的本机后端未能停止/);
+});
+
 test('managed macOS backend uses MLX and keeps credentials out of arguments', async t => {
   const directory = await backendProject(t);
   const python = path.join(directory, '.venv/bin/python');
