@@ -16,7 +16,7 @@ const icon = path.join(__dirname, 'assets/icon.png');
 let launcher, studio, current = { ...runtime.DEFAULTS }, attempt, generation = 0, activeOrigin = '';
 let status = { kind: 'idle', message: '连接已运行的服务，或启动本机 Docker。' };
 let writes = Promise.resolve();
-let quitting = false, managedMode = false;
+let quitting = false, quitWaiting = false, quitReady = false, managedMode = false;
 let pet, petEnabled = true, ownedBackend, managedConfiguration, reconfiguring = false;
 const microphoneGrants = new Set();
 
@@ -269,6 +269,7 @@ async function connectManaged(config, { quitOnError = true } = {}) {
       },
     );
     ownedBackend = backend;
+    current = { ...runtime.DEFAULTS, serverUrl: backend.url };
     let ready = false;
     const exitWatch = backend.exited.then(result => {
       if (!ready) throw backendExitError(result);
@@ -344,7 +345,22 @@ function installMenu() {
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { const window = studio || launcher; if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
-  app.on('before-quit', () => { quitting = true; cancelConnection(); ownedBackend?.stop(); pet?.close(); });
+  app.on('before-quit', event => {
+    if (quitReady) return;
+    event.preventDefault();
+    if (quitWaiting) return;
+    quitting = quitWaiting = true;
+    cancelConnection();
+    void runtime.stopManagedBackend(ownedBackend).then(() => {
+      ownedBackend = undefined;
+      pet?.close();
+      quitReady = true;
+      app.quit();
+    }).catch(error => {
+      quitting = quitWaiting = false;
+      dialog.showErrorBox('本机后端尚未退出', `${error.message}\n\nApp 会保持运行，避免留下继续占用 8787 的后端。`);
+    });
+  });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.on('activate', () => {
     if (studio && !studio.isDestroyed()) { studio.show(); studio.focus(); pet?.close(); }

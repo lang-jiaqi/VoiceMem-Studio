@@ -1,6 +1,7 @@
 'use strict';
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { setTimeout: delay } = require('node:timers/promises');
@@ -8,6 +9,7 @@ const { setTimeout: delay } = require('node:timers/promises');
 const DEFAULTS = Object.freeze({ serverUrl: 'http://127.0.0.1:8787', autoStartDocker: false, projectDir: '' });
 const MANAGED_STARTUP_TIMEOUT_MS = 30 * 60 * 1000;
 const MANAGED_STOP_TIMEOUT_MS = 30 * 1000;
+const MANAGED_PORT = 8787;
 const MANAGED_PROVIDERS = new Set(['deepseek', 'qwen', 'openai', 'local']);
 const MEMORY_PROVIDERS = new Set(['deepseek', 'qwen', 'openai']);
 const PROVIDER_CREDENTIALS = Object.freeze({
@@ -247,7 +249,8 @@ function appendWslEnvironment(env, names) {
 }
 
 async function managedBackendCommand(directory, memoryProvider, replyProvider, {
-  platform = process.platform, arch = process.arch, env = process.env, signal, run = command, prepareStage = '',
+  platform = process.platform, arch = process.arch, env = process.env, signal, run = command,
+  prepareStage = '', port = MANAGED_PORT,
 } = {}) {
   if (!MEMORY_PROVIDERS.has(memoryProvider)) throw new Error(`不支持的 VoiceMem API：${memoryProvider}`);
   if (!MANAGED_PROVIDERS.has(replyProvider)) throw new Error(`不支持的 Studio 回复 API：${replyProvider}`);
@@ -256,17 +259,18 @@ async function managedBackendCommand(directory, memoryProvider, replyProvider, {
   if (platform === 'darwin' && arch !== 'arm64') {
     throw new Error('本机 MLX 后端需要 Apple Silicon；Intel Mac 请运行 npm run start:remote 连接已有服务。');
   }
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('本机后端端口无效。');
   const root = await validateBackendProject(directory);
   const backend = platform === 'darwin' ? 'mlx' : 'cuda';
   const args = ['-m', 'studio', '--backend', backend, '--memory-llm', memoryProvider, '--llm', replyProvider,
-    '--host', '127.0.0.1', '--port', '8787', '--verbose'];
+    '--host', '127.0.0.1', '--port', String(port), '--verbose'];
   if (prepareStage) args.push('--prepare-stage', prepareStage);
   const childEnv = { ...env, STUDIO_DESKTOP_PET: '0', PYTHONUNBUFFERED: '1' };
   if (platform === 'darwin') {
     const python = path.resolve(root, env.STUDIO_PYTHON || '.venv/bin/python');
     try { await fs.access(python); }
     catch { throw new Error(`找不到 macOS Studio Python 环境：${python}。请先完成 MLX 环境安装。`); }
-    return { file: python, args, cwd: root, env: childEnv, url: DEFAULTS.serverUrl };
+    return { file: python, args, cwd: root, env: childEnv, url: `http://127.0.0.1:${port}` };
   }
   let linuxRoot;
   try {
@@ -292,15 +296,40 @@ async function managedBackendCommand(directory, memoryProvider, replyProvider, {
       'STUDIO_DESKTOP_PET', 'PYTHONUNBUFFERED']);
   return {
     file: 'wsl.exe', args: ['--cd', linuxRoot, '--exec', python, ...args],
-    cwd: root, env: childEnv, url: DEFAULTS.serverUrl,
+    cwd: root, env: childEnv, url: `http://127.0.0.1:${port}`,
   };
+}
+
+function availablePort(port) {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => {
+      const selected = server.address().port;
+      server.close(error => error ? reject(error) : resolve(selected));
+    });
+  });
+}
+
+async function selectManagedPort(preferred = MANAGED_PORT, { checkStudio = probe } = {}) {
+  try { return await availablePort(preferred); }
+  catch (error) { if (error.code !== 'EADDRINUSE') throw error; }
+  let existingStudio = false;
+  try { await checkStudio(`http://127.0.0.1:${preferred}`, { timeoutMs: 2500 }); existingStudio = true; }
+  catch { /* The occupied port does not serve the Studio readiness page. */ }
+  if (existingStudio) {
+    throw new Error(`端口 ${preferred} 上已有 VoiceMem Studio 后端。请退出之前的 App，或使用 npm run start:remote 连接它；为保护同一记忆空间，不会再启动第二个后端。`);
+  }
+  return availablePort(0);
 }
 
 async function startManagedBackend(directory, memoryProvider, replyProvider, {
   signal, platform = process.platform, arch = process.arch, env = process.env, run = command, spawnImpl = spawn,
+  selectPort = selectManagedPort,
 } = {}) {
+  const port = await selectPort();
   const specification = await managedBackendCommand(directory, memoryProvider, replyProvider,
-    { signal, platform, arch, env, run });
+    { signal, platform, arch, env, run, port });
   signal?.throwIfAborted();
   const instanceId = randomUUID();
   specification.env.VOICEMEM_DESKTOP_INSTANCE = instanceId;
@@ -403,7 +432,7 @@ async function probe(url, { signal, timeoutMs = 2500, fetchImpl = fetch, instanc
   try {
     if (!response.ok) throw new Error(`服务返回 HTTP ${response.status}`);
     if (instanceId && response.headers.get('x-voicemem-desktop-instance') !== instanceId) {
-      const error = new Error('端口 8787 已被其他服务占用。请关闭先前启动的 Web 服务，或运行 npm run start:remote 连接它。');
+      const error = new Error(`端口 ${new URL(url).port} 已被其他服务占用。请关闭先前启动的服务，或运行 npm run start:remote 连接它。`);
       error.code = 'WRONG_INSTANCE';
       throw error;
     }
@@ -436,10 +465,10 @@ async function waitForStudio(url, { signal, timeoutMs = 180000, intervalMs = 150
 }
 
 module.exports = { DEFAULTS, MANAGED_STARTUP_TIMEOUT_MS, MANAGED_STOP_TIMEOUT_MS,
-  MANAGED_PROVIDERS, MEMORY_PROVIDERS, managedStartupTimeout,
+  MANAGED_PORT, MANAGED_PROVIDERS, MEMORY_PROVIDERS, managedStartupTimeout,
   serverUrl, settings, sameOrigin, audioPermission, loadSettings, saveSettings,
   validateProject, validateBackendProject, command, managedLaunch, MODEL_SERVICE_DEFAULTS, modelEndpoint,
   modelService, modelServices, modelServicesFromLaunch, updateModelService,
   publicModelServices, modelServiceEnvironment, loadModelServices, saveModelServices,
-  appendWslEnvironment, managedBackendCommand,
+  appendWslEnvironment, managedBackendCommand, selectManagedPort,
   startManagedBackend, stopManagedBackend, prepareManagedMemory, publishedUrl, startDocker, probe, waitForStudio };

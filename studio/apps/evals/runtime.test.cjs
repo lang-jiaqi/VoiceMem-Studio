@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
+const net = require('node:net');
 const r = require('../runtime.cjs');
 
 async function temporary(t) {
@@ -147,6 +148,21 @@ test('managed restart reports a stuck old backend instead of starting another', 
   await assert.rejects(r.stopManagedBackend(backend, { timeoutMs: 5 }), /旧的本机后端未能停止/);
 });
 
+test('managed backend chooses a free port for unrelated occupancy but refuses another Studio', async t => {
+  const listener = net.createServer();
+  await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => listener.close(resolve)));
+  const occupied = listener.address().port;
+  const selected = await r.selectManagedPort(occupied, {
+    checkStudio: async url => { assert.equal(url, `http://127.0.0.1:${occupied}`); throw new Error('other service'); },
+  });
+  assert.notEqual(selected, occupied);
+  assert.ok(selected > 0);
+  await assert.rejects(r.selectManagedPort(occupied, {
+    checkStudio: async () => {},
+  }), /已有 VoiceMem Studio 后端/);
+});
+
 test('managed macOS backend uses MLX and keeps credentials out of arguments', async t => {
   const directory = await backendProject(t);
   const python = path.join(directory, '.venv/bin/python');
@@ -233,10 +249,11 @@ test('managed backend receives a unique readiness identity', async t => {
   const python = path.join(directory, '.venv/bin/python');
   await fs.mkdir(path.dirname(python), { recursive: true });
   await fs.writeFile(python, 'fixture');
-  let childEnv;
+  let childEnv, childArgs;
   const backend = await r.startManagedBackend(directory, 'deepseek', 'deepseek', {
-    platform: 'darwin',
-    spawnImpl(_file, _args, options) {
+    platform: 'darwin', selectPort: async () => 18787,
+    spawnImpl(_file, args, options) {
+      childArgs = args;
       childEnv = options.env;
       const child = new EventEmitter();
       child.killed = false;
@@ -245,6 +262,8 @@ test('managed backend receives a unique readiness identity', async t => {
     },
   });
   assert.match(backend.instanceId, /^[0-9a-f-]{36}$/);
+  assert.equal(backend.url, 'http://127.0.0.1:18787');
+  assert.deepEqual(childArgs.slice(-3), ['--port', '18787', '--verbose']);
   assert.equal(childEnv.VOICEMEM_DESKTOP_INSTANCE, backend.instanceId);
   backend.stop();
   await backend.exited;

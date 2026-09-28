@@ -258,6 +258,8 @@ Before replacing an App-owned backend, Electron waits for the old child to exit
 so the replacement does not race it for port 8787. Failed replacements also
 exit before the previous configuration restarts. A stop timeout leaves the old
 configuration selected and does not start another process.
+Electron also waits for its owned backend to exit before quitting, so an
+immediate relaunch cannot race a still-running backend from the previous App.
 `/legacy` retains the previous Studio renderer;
 `/classic` retains the older demo. The desktop opens this same root and keeps its
 connection configuration window hidden on a successful startup; connection errors
@@ -326,8 +328,11 @@ backend reaches readiness, Electron persists them only through OS-backed
 `safeStorage`; the connection settings file remains secret-free.
 Electron starts `.venv/bin/python` with the MLX backend on macOS, or invokes
 `.venv-cuda/bin/python` through `wsl.exe` with the CUDA backend on Windows. Both
-paths bind loopback port 8787, disable the backend-owned pet, acquire the
-remaining reply and speech models, run strict warmups, wait for the shared Web
+paths prefer loopback port 8787 and choose an available loopback port when an
+unrelated service occupies it. A second Studio backend is rejected to prevent
+simultaneous access to the same local Memory Space. Both paths disable the
+backend-owned pet, acquire the remaining reply and speech models, run strict
+warmups, wait for the shared Web
 page for up to 30 minutes by default, and only then create and show the style selector.
 The managed backend echoes a per-launch instance ID on the Web root response;
 the App accepts readiness only from that instance and reports an occupied port
