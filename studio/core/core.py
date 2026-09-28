@@ -1,5 +1,6 @@
 """Studio service lifecycle and chronological conversation controls."""
 import asyncio
+import os
 from contextlib import aclosing
 from .utils.cli.component import parse_args
 
@@ -120,7 +121,9 @@ def main(argv=None):
             'startup',
             lambda: print(f'[startup] VoiceMem Studio 启动成功：http://localhost:{args.port}', flush=True),
         )
-        uvicorn.run(app, host=args.host, port=args.port)
+        shutdown_timeout = 5 if os.environ.get('VOICEMEM_DESKTOP_INSTANCE') else None
+        uvicorn.run(app, host=args.host, port=args.port,
+                    timeout_graceful_shutdown=shutdown_timeout)
     except (ImportError, RuntimeError, ValueError, OSError) as exc:
         print(f'[startup] 无法启动：{exc}', flush=True)
         raise SystemExit(1) from None
