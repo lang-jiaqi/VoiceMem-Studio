@@ -16,6 +16,24 @@ from studio.core.utils.session_context.component import SessionBuffer
 from voicemem.stream import empty_result
 
 
+class SessionBufferCleanupTests(unittest.TestCase):
+    def test_clear_session_removes_recent_history_in_all_spaces(self):
+        context = SessionBuffer()
+        committed = context.add('closed', 'personal', '我妹妹叫安安', '记住了')
+        context.add('closed', 'work', '明天开会', '好的')
+        context.add('active', 'personal', '周末出行', '好的')
+        context.mark_complete(committed, True)
+        self.assertEqual(len(context.recent('closed', 'personal', 6)), 1)
+
+        context.clear_session('closed')
+        context.clear_session('closed')
+
+        self.assertEqual(context.messages('closed', 'personal', window=6), [])
+        self.assertEqual(context.messages('closed', 'work', window=6), [])
+        self.assertFalse(any(key[0] == 'closed' for key in context._recent))
+        self.assertEqual(len(context.recent('active', 'personal', 6)), 1)
+
+
 class PlaybackAuthorityTests(unittest.TestCase):
     def timeline(self, strict=True):
         timeline = AudioTimeline(track_delivery=strict)

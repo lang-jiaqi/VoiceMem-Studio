@@ -18,6 +18,7 @@ class Pending:
     emotion: str = ""
     route: str = gate.DEEP       # Provisional gate route; the final reply router may replace it.
     reply_mode: str = DIRECT     # direct / memory / memory_cot; the final router owns this.
+    memory_query: str = ""       # Contextual retrieval query; text remains the user's utterance.
 
     early_ok: bool = False
     continuation_prompt: bool = False

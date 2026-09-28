@@ -250,6 +250,101 @@ class MemoryRoutingIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending.replay, '')
         self.agent.vm.search.assert_not_called()
 
+    async def test_personal_followup_searches_with_context_and_keeps_original_text(self):
+        pending = self.pending(route='shallow')
+        pending.text = '那她呢？'
+        history = [
+            {'role': 'user', 'content': '我妹妹安安的生日是哪天？'},
+            {'role': 'assistant', 'content': '我先查到了哥哥的生日。'},
+        ]
+        await self.agent.route_pending_thinking(pending, history=history)
+        self.assertEqual(pending.reply_mode, 'memory')
+        self.assertEqual(pending.text, '那她呢？')
+        self.assertEqual(pending.memory_query, '我妹妹安安的生日是哪天？ 那她呢？')
+        self.agent.vm.classify.assert_called_once_with(pending.memory_query)
+        self.agent.vm.search.assert_called_once_with(
+            pending.memory_query, slots=[], entities=[], emotion='')
+        self.router.classify_async.assert_awaited_once_with('那她呢？', history=history)
+
+    async def test_short_schedule_followup_uses_previous_personal_request(self):
+        pending = self.pending(route='shallow')
+        pending.text = '那周日呢？'
+        await self.agent.route_pending_thinking(pending, history=[
+            {'role': 'user', 'content': '我上次说过的周末计划是什么？'},
+            {'role': 'assistant', 'content': '周六有聚会。'},
+        ])
+        self.assertEqual(pending.reply_mode, 'memory')
+        self.assertIn('周末计划', pending.memory_query)
+        self.agent.vm.search.assert_called_once()
+
+    async def test_general_followup_and_backchannel_do_not_search(self):
+        history = [{'role': 'user', 'content': '周末天气怎么样？'}]
+        for text in ('那周日呢？', '那她呢？'):
+            with self.subTest(text=text):
+                pending = self.pending(route='shallow')
+                pending.text = text
+                await self.agent.route_pending_thinking(pending, history=history)
+                self.assertEqual(pending.reply_mode, 'direct')
+                self.assertEqual(pending.memory_query, '')
+        pending = self.pending(route='backchannel')
+        pending.text = '嗯嗯'
+        await self.agent.route_pending_thinking(pending, history=[
+            {'role': 'user', 'content': '我妹妹安安的生日是哪天？'}])
+        self.assertEqual(pending.reply_mode, 'direct')
+        self.agent.vm.search.assert_not_called()
+
+    async def test_contextual_followup_replaces_ambiguous_prefetch(self):
+        pending = self.pending(route='deep', prepared=True)
+        pending.text = '那她呢？'
+        old_result = pending.result
+        await self.agent.route_pending_thinking(pending, history=[
+            {'role': 'user', 'content': '我妹妹安安的生日是哪天？'}])
+        self.assertIsNot(pending.result, old_result)
+        self.agent.vm.search.assert_called_once_with(
+            '我妹妹安安的生日是哪天？ 那她呢？', slots=[], entities=[], emotion='')
+
+    async def test_stranger_followup_never_searches_owner_memory(self):
+        pending = self.pending(route='shallow', stranger=True)
+        pending.text = '那她呢？'
+        await self.agent.route_pending_thinking(pending, history=[
+            {'role': 'user', 'content': '我妹妹安安的生日是哪天？'}])
+        self.assertEqual(pending.memory_query, '')
+        self.assertEqual(pending.memory_context, '')
+        self.agent.vm.search.assert_not_called()
+
+    async def test_followup_uses_only_latest_user_turn(self):
+        pending = self.pending(route='shallow')
+        pending.text = '那她呢？'
+        await self.agent.route_pending_thinking(pending, history=[
+            {'role': 'user', 'content': '我妹妹安安的生日是哪天？'},
+            {'role': 'assistant', 'content': '五月十日。'},
+            {'role': 'user', 'content': '周末天气怎么样？'},
+            {'role': 'assistant', 'content': '晴天。'},
+        ])
+        self.assertEqual(pending.reply_mode, 'direct')
+        self.agent.vm.search.assert_not_called()
+
+    async def test_disabled_depth_router_still_handles_personal_followup(self):
+        self.agent._THINKING_ROUTER_ON = False
+        pending = self.pending(route='shallow')
+        pending.text = '那她呢？'
+        await self.agent.route_pending_thinking(pending, history=[
+            {'role': 'user', 'content': '我妹妹安安的生日是哪天？'}])
+        self.assertEqual(pending.reply_mode, 'memory')
+        self.agent.vm.search.assert_called_once()
+        self.router.classify_async.assert_not_awaited()
+
+    async def test_failed_contextual_search_clears_ambiguous_prefetch(self):
+        self.agent.vm.search.side_effect = RuntimeError('synthetic retrieval failure')
+        pending = self.pending(route='deep', prepared=True)
+        pending.text = '那她呢？'
+        await self.agent.route_pending_thinking(pending, history=[
+            {'role': 'user', 'content': '我妹妹安安的生日是哪天？'}])
+        self.assertEqual(pending.reply_mode, 'memory')
+        self.assertEqual(pending.memory_context, '')
+        self.assertEqual(pending.replay, '')
+        self.assertEqual(pending.result.hits, [])
+
     async def test_deep_reasoning_upgrades_shallow_to_memory_cot(self):
         self.router.classify_async.return_value = ThinkingDecision(SLOW, '深思')
         pending = self.pending(route='shallow')

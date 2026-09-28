@@ -111,3 +111,6 @@ class SessionBuffer:
             for context in contexts:
                 for turn in self._contexts.pop(context, []):
                     self._turn_context.pop(turn.turn_id, None)
+            recent = [context for context in self._recent if context[0] == session_id]
+            for context in recent:
+                self._recent.pop(context, None)

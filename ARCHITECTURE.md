@@ -601,6 +601,11 @@ rules, and an embedding fallback. Its complete-utterance result owns baseline
 memory eligibility, including in Studio `llm_tts`. The depth classifier cannot
 veto a Gate-approved memory turn. Deep reasoning can additionally request memory
 to preserve the existing `memory_cot` mode. Speaker privacy still takes priority.
+For short anaphoric follow-ups, Studio can also carry forward the latest user
+turn in the same session and Memory Space when its lexical Gate route requested
+memory. It classifies and searches with the bounded combined query while keeping
+the current utterance as the reply input. This uses no additional model judge;
+ordinary turns and backchannels keep their existing route.
 
 For deep turns, speculative classify/search starts while speech is still in
 progress. Query embedding work is shared within a search scope, and device
@@ -708,7 +713,9 @@ without it is `direct` (instant), and deep reasoning is `memory_cot` (mem+cot).
 Only direct turns or privacy overrides discard speculative memory. A normal or
 unavailable depth classification cannot erase Gate-approved results. Memory
 modes reuse eligible speculative results or complete retrieval before generation.
-A route change between an early snapshot and final ASR invalidates buffered early output.
+A reply mode or contextual memory query change between an early snapshot and
+final ASR invalidates buffered early output. Contextual follow-ups also check
+that both paths retrieved the same memory before releasing early output.
 
 One session-scoped `TurnTakingStateMachine` then chooses the handoff. Ready
 audio is released directly. An ordinary predicted wait may use a cached
@@ -1068,6 +1075,8 @@ scheduled. A later UI space change cannot redirect an existing write.
 
 Turn-specific state is explicit. Process globals are reserved for configuration,
 shared model caches, and schedulers whose process-wide behavior is intentional.
+`SessionBuffer.clear_session` removes both uncommitted context and bounded recent
+turns for every Memory Space owned by the closing WebSocket session.
 
 ## 14. Observability and evaluation
 
