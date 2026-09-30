@@ -1,5 +1,6 @@
 """Inspect all startup requirements before importing models or opening memory."""
 from importlib import metadata
+import os
 import platform
 import sys
 from studio.paths import ROOT, MODELS, STUDIO, VOICE
@@ -28,11 +29,26 @@ def inspect(args, stage="all"):
     if sys.version_info[:2] != (3, 12):
         errors.append('Studio 需要 Python 3.12，请切换原有 Studio 环境')
     required_keys = required_credentials(args, stage)
-    print(f'[startup] backend={args.backend} · Studio={args.device} · Breeze={args.tts_device}', flush=True)
+    from studio.core.utils.tts.qwen_audio_api import selected as qwen_tts_selected
+    remote_tts = args.mode == 'llm_tts' and stage != 'memory' and qwen_tts_selected()
+    print(f'[startup] backend={args.backend} · Studio={args.device} · TTS={"Qwen API" if remote_tts else args.tts_device}', flush=True)
     for name, provider, purpose, present in required_keys:
         print(f'[startup] {name}: {"已找到" if present else "缺失"}（{purpose}：{provider}）', flush=True)
         if not present:
             errors.append(f'缺少 {purpose} API Key（{provider}）；请在启动终端输入或写入 .env')
+    if remote_tts:
+        from studio.core.utils.tts.qwen_audio_api import settings
+        try:
+            _, _, voice = settings(require_voice=False)
+            if voice:
+                print('[startup] Qwen TTS: API Key / 新加坡 Workspace / 音色 ID 已配置', flush=True)
+            else:
+                from studio.core.utils.tts.qwen_audio_enrollment import REFERENCE_AUDIO
+                if not os.environ.get('STUDIO_QWEN_TTS_REFERENCE_URL') and not REFERENCE_AUDIO.is_file():
+                    errors.append(f'Qwen TTS 缺少注册录音：{REFERENCE_AUDIO}')
+                print('[startup] Qwen TTS: 首次正式启动将从公开录音 URL 自动注册音色', flush=True)
+        except ValueError as exc:
+            errors.append(str(exc))
     packages = {name: None for name in (
         'numpy', 'torch', 'torchaudio', 'torchvision', 'fastapi', 'uvicorn',
         'websockets', 'openai', 'httpx', 'mem0ai', 'sentence-transformers',
@@ -43,7 +59,7 @@ def inspect(args, stage="all"):
     if args.backend == 'cuda':
         if platform.system() != 'Linux':
             errors.append('CUDA backend 需要 Linux + NVIDIA GPU')
-        if args.mode == 'llm_tts' and stage != 'memory':
+        if args.mode == 'llm_tts' and stage != 'memory' and not remote_tts:
             packages['qwen-tts'] = '0.1.1'
             from studio.core.utils.tts.cuda import source_directory
             source = source_directory()
@@ -67,8 +83,10 @@ def inspect(args, stage="all"):
         except (ImportError, RuntimeError, OSError) as exc:
             errors.append(f'CUDA 检查失败：{type(exc).__name__}')
     elif args.mode == 'llm_tts' and stage != 'memory':
-        packages.update({'mlx': '0.32.2', 'mlx-audio': '0.5.1', 'mlx-lm': None})
-        if platform.system() != 'Darwin' or platform.machine() != 'arm64':
+        packages.update({'mlx-lm': None})
+        if not remote_tts:
+            packages.update({'mlx': '0.32.2', 'mlx-audio': '0.5.1'})
+        if not remote_tts and (platform.system() != 'Darwin' or platform.machine() != 'arm64'):
             errors.append('Breeze MLX 需要原生 Apple Silicon macOS 环境')
     for name, expected in packages.items():
         try:
@@ -85,7 +103,7 @@ def inspect(args, stage="all"):
         'voicemem.html', 'index.html', 'mic-capture-worklet.js',
         'pcm-player-worklet.js', 'images/background.webp')]
     assets.append(('studio/prompt/tts.json', prompt_directory() / 'tts.json'))
-    if args.mode == 'llm_tts' and stage != 'memory':
+    if args.mode == 'llm_tts' and stage != 'memory' and not remote_tts:
         assets += [(f'voice/{name}', VOICE / name) for name in (
             'noctelle_ref_short.wav', 'noctelle_ref_short.txt')]
     for relative, path in assets:

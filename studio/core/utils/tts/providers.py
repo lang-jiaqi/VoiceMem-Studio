@@ -408,6 +408,7 @@ class BreezeTTS(BaseTTS):
 
 from studio.core.utils.tts.component import BreezeMLXTTS
 from studio.core.utils.tts.cuda import BreezeCUDATTS
+from studio.core.utils.tts.qwen_audio_api import QwenAudioAPI
 
 TTS_PROVIDERS = {
     "openai": OpenAITTS,
@@ -417,6 +418,7 @@ TTS_PROVIDERS = {
     "breeze": BreezeTTS,
     "breeze_mlx": BreezeMLXTTS,
     "breeze_cuda": BreezeCUDATTS,
+    "qwen_audio_api": QwenAudioAPI,
     "qwen":   QwenTTS,
     "kokoro": KokoroTTS,
 }

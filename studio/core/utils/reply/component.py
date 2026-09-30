@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 import time
+from contextlib import aclosing
 from studio.web import transport as utils
 from studio.core.utils.tts.audio_timing import TimedAudioChunk
 from voicemem import gate
@@ -186,12 +187,13 @@ class Reply:
                             await _serial.acquire()
                         started = time.monotonic()
                         try:
-                            async for chunk in _synth_one(seg, text_start):
-                                if not state["first"]:
-                                    state["first"] = True
-                                    if self.BARGE_DEBUG:
-                                        print(f"[tts-segment] chars={len(seg)} queue_ms={(started-state['queued'])*1000:.0f} first_pcm_ms={(time.monotonic()-started)*1000:.0f}", flush=True)
-                                await chunks.put(chunk)
+                            async with aclosing(_synth_one(seg, text_start)) as speech:
+                                async for chunk in speech:
+                                    if not state["first"]:
+                                        state["first"] = True
+                                        if self.BARGE_DEBUG:
+                                            print(f"[tts-segment] chars={len(seg)} queue_ms={(started-state['queued'])*1000:.0f} first_pcm_ms={(time.monotonic()-started)*1000:.0f}", flush=True)
+                                    await chunks.put(chunk)
                         finally:
                             if _serial is not None:
                                 _serial.release()

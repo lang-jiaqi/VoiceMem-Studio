@@ -10,6 +10,8 @@
 
 先按仓库现有说明准备 Python 环境和模型。桌面 App 保存的 API Key 不会自动传给直接运行的 Python 服务。在仓库根目录执行 `nano .env`，加入一行 `DEEPSEEK_API_KEY=你的密钥`，保存后运行 `chmod 600 .env`。`.env` 已被 Git 忽略，不要把密钥贴到命令行或提交到 Git。一个 DeepSeek Key 即可用于下方命令的记忆和回复服务。
 
+若体验站改用 Qwen 复刻音色 TTS，按 [Qwen TTS API 配置](qwen-tts-api.md) 填新加坡地域的 Key 与 Workspace ID。首次启动会从已推送的仓库录音自动创建音色；未配置时仍使用 Breeze。
+
 可先运行 `STUDIO_PUBLIC_DEMO=1 .venv/bin/python -m studio --llm deepseek --memory-llm deepseek --check`，确认两项 API Key 均显示“已找到”。体验模式需要 API 回复模型，并使用 `llm_tts` 模式。然后在仓库根目录运行：
 
 ```bash

@@ -43,9 +43,11 @@ class Startup:
 
         async def warm_speech():
             tts = self.vm.utils.get('tts')
-            async with aclosing(tts.stream('你好')) as chunks:
-                async for _ in chunks:
-                    break
+            from studio.core.utils.tts.qwen_audio_api import QwenAudioAPI
+            if not isinstance(tts, QwenAudioAPI):
+                async with aclosing(tts.stream('你好')) as chunks:
+                    async for _ in chunks:
+                        break
             if self.ARGS.backchannel:
                 from studio.core.utils.turn_taking.initialize import BackchannelVoice
                 voice = BackchannelVoice(tts, lang=self.space_language(self.ACTIVE_SPACE))
@@ -63,7 +65,7 @@ class Startup:
                 import mlx.core as mx
                 from voicemem.utils.gpu_loop import gpu_loop
                 gpu_loop().call(lambda: mx.set_cache_limit(536870912))
-            step('Breeze TTS / 附和缓存', lambda: asyncio.run(warm_speech()))
+            step('TTS / 附和缓存', lambda: asyncio.run(warm_speech()))
             step('三级回复路由', lambda: thinking_router().warmup())
         for name, action in memory_warmups(self.vm):
             step(name, action)

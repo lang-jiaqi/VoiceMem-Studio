@@ -66,6 +66,7 @@ cache/
 
 # Studio model weights, including reused local snapshots.
 /studio/models/
+/studio/resources/voice/qwen_audio_voice_id.txt
 
 # Studio persistence implementation is source, not runtime memory.
 !studio/core/utils/memory/

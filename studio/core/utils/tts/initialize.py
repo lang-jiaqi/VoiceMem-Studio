@@ -1,4 +1,4 @@
-"""Initialize the reviewed Breeze voice and preserve the shared GPU scheduler."""
+"""Initialize Studio's selected speech provider."""
 from functools import lru_cache
 import os
 from studio.paths import MODELS, VOICE
@@ -13,7 +13,11 @@ def create():
 
 @lru_cache(maxsize=1)
 def _create():
-    """Share one local Breeze provider, using the selected inference backend."""
+    """Share one speech provider across Studio memory spaces."""
+    from .qwen_audio_api import selected
+    if selected():
+        from .qwen_audio_api import QwenAudioAPI
+        return QwenAudioAPI()
     if os.environ.get('STUDIO_BACKEND') == 'cuda':
         from .cuda import BreezeCUDATTS
         return BreezeCUDATTS(ref_audio=str(REFERENCE),

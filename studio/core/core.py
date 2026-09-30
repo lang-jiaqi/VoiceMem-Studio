@@ -117,6 +117,11 @@ def main(argv=None):
         if args.prepare_stage:
             print('[startup] VoiceMem 基础模型准备完成。', flush=True)
             return
+        if args.mode == 'llm_tts':
+            from .utils.tts.qwen_audio_api import selected as qwen_tts_selected
+            if qwen_tts_selected():
+                from .utils.tts.qwen_audio_enrollment import ensure_voice
+                ensure_voice()
         from studio.paths import ROOT
         if not args.no_file_log:
             from .utils.logging_utils.component import setup_file_logging
@@ -133,6 +138,10 @@ def main(argv=None):
             tts = agent.vm.utils.get('tts')
         agent.warmup()
         app = build_app(agent, demo_accounts=demo_accounts)
+        if tts is not None and hasattr(tts, 'preconnect'):
+            app.router.add_event_handler('startup', tts.preconnect)
+        if tts is not None and hasattr(tts, 'aclose'):
+            app.router.add_event_handler('shutdown', tts.aclose)
         import uvicorn
         app.router.add_event_handler(
             'startup',
