@@ -18,6 +18,7 @@ def initialize(self, agent, sock):
     self.owner = {'id': '', 'last': '', 'miss': 0}
     self.speech_rate = SpeechRateEstimator()
     self.context_session = uuid.uuid4().hex
+    self.opening_started = False
     self.candidate_paused = False
     self.candidate_paused_at = 0.0
     self.filler_waiters: dict[str, asyncio.Event] = {}

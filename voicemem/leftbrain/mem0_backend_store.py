@@ -345,10 +345,10 @@ class Mem0BackendStore:
         entries = result.get("results", []) if isinstance(result, dict) else result
         return [str(e["id"]) for e in entries]
 
-    def list_entries(self, *, user_id: str) -> list[dict[str, str]]:
-        """全部记忆的 (id, text, date)——date 取 metadata.time_start（ingest 的 observed_at），
+    def list_entries(self, *, user_id: str, limit: int = 10_000) -> list[dict[str, str]]:
+        """最多 limit 条记忆的 (id, text, date)——date 取 metadata.time_start，
         没有则退回 created_at。供 schema 描述刷新等批处理用，不做向量检索。"""
-        result = self._mem0.get_all(filters={"user_id": user_id}, top_k=10_000)
+        result = self._mem0.get_all(filters={"user_id": user_id}, top_k=limit)
         entries = result.get("results", []) if isinstance(result, dict) else result
         out = []
         for e in entries:

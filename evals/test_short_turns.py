@@ -125,6 +125,27 @@ def state(text="", *, final=False):
 
 
 class CaptureBackchannelTests(unittest.IsolatedAsyncioTestCase):
+    async def test_conversation_start_control_has_no_user_turn(self):
+        ns = anticipate_namespace()
+        ns['vm'] = types.SimpleNamespace(stream=lambda **_: types.SimpleNamespace())
+        called = []
+
+        class Sock:
+            def __init__(self):
+                self.messages = iter([
+                    {'text': json.dumps({'type': 'conversation_start'})},
+                    {'type': 'websocket.disconnect'},
+                ])
+
+            async def receive(self):
+                return next(self.messages)
+
+        with patch('studio.core.utils.turn_taking.backchannel.emitting', return_value=False):
+            turns = [turn async for turn in ns['anticipate'](
+                Sock(), on_conversation_start=lambda: called.append(True))]
+        self.assertEqual(called, [True])
+        self.assertEqual(turns, [])
+
     async def run_pause(self, *, busy=False, early=False, echo=False, growing=True):
         """Feed real capture/policy code voiced frames followed by a 120ms gap."""
         ns, sent, interrupted, speculated = anticipate_namespace(), [], [], []

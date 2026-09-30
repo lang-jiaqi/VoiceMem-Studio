@@ -19,6 +19,7 @@ class Capture:
                          on_self_harness_get=None, on_self_harness_update=None,
                          on_harness_prompt_update=None,
                          on_backchannel_curve_update=None,
+                         on_conversation_start=None,
                          on_speech_start=None, textless_confirm_s=None,
                          turn_taking=None):
         """Yield confirmed turns while forwarding audio, playback, and cancellation events."""
@@ -94,6 +95,10 @@ class Capture:
                 return
             if msg.get("text"):
                 data = json.loads(msg["text"])
+                if data.get("type") == "conversation_start":
+                    if on_conversation_start:
+                        on_conversation_start()
+                    continue
                 if data.get("type") == "playback_checkpoint":
                     if on_playback_checkpoint:
                         await on_playback_checkpoint(data)

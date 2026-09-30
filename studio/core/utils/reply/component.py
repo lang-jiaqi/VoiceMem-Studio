@@ -34,6 +34,8 @@ class Reply:
         return SequenceMatcher(None, early, final, autojunk=False).ratio() >= 0.82
 
     async def _send_reply_display(self, pending, send, ready, output_id, space, memory_vm):
+        if getattr(pending, "opening", False):
+            return
         await ready.wait()
         if self.ACTIVE_SPACE != space or self.vm is not memory_vm:
             return

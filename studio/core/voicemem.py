@@ -21,6 +21,33 @@ def open_stream(memory, **options):
     return memory.stream(**options)
 
 
+def greeting_memories(memory, *, limit: int = 3) -> list[str]:
+    """Read a few low-sensitivity facts from this VoiceMem user's space."""
+    repo = memory._o._get_repo()
+    user_id = memory._o._user_id
+    cognitive = repo._cognitive_store
+    if cognitive is None:
+        return []
+    allowed_slots = {"daily_life", "knowledge", "goals", "work"}
+    entries = repo._vector_store.list_entries(user_id=user_id, limit=80)
+    entries.sort(key=lambda item: item.get("date", ""), reverse=True)
+    selected = []
+    for entry in entries:
+        if entry.get("role") == "assistant":
+            continue
+        record = cognitive.get_memory_record(entry["id"])
+        if (record is None or record.user_id != user_id
+                or record.slot not in allowed_slots
+                or record.sensitivity > 0.2):
+            continue
+        fact = " ".join(entry.get("text", "").split())[:160]
+        if fact and fact not in selected:
+            selected.append(fact)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def shared_embed_model():
     """Return VoiceMem's process-shared embedding model for Studio perception."""
     from voicemem.leftbrain.local_embedder import resolve, resolve_path, shared_model

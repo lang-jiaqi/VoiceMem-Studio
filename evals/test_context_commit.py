@@ -6,13 +6,14 @@ from pathlib import Path
 import time
 import types
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from evals import test_reply_text
 from studio.core.utils.audio_timeline.component import AudioTimeline
 from studio.core.utils.conversation.component import Conversation
 from studio.core.utils.contracts.component import Pending
 from studio.core.utils.session_context.component import SessionBuffer
+from studio.core.voicemem import greeting_memories
 from voicemem.stream import empty_result
 
 
@@ -32,6 +33,30 @@ class SessionBufferCleanupTests(unittest.TestCase):
         self.assertEqual(context.messages('closed', 'work', window=6), [])
         self.assertFalse(any(key[0] == 'closed' for key in context._recent))
         self.assertEqual(len(context.recent('active', 'personal', 6)), 1)
+
+
+class GreetingMemoryTests(unittest.TestCase):
+    def test_only_current_user_low_sensitivity_facts_are_selected(self):
+        entries = [
+            {'id': 'daily', 'text': '用户喜欢看电影', 'date': '2026-09-30', 'role': 'user'},
+            {'id': 'other', 'text': '别人喜欢散步', 'date': '2026-09-29', 'role': 'user'},
+            {'id': 'health', 'text': '用户有健康问题', 'date': '2026-09-28', 'role': 'user'},
+            {'id': 'private', 'text': '用户有私人计划', 'date': '2026-09-27', 'role': 'user'},
+            {'id': 'assistant', 'text': '我是助手', 'date': '2026-09-26', 'role': 'assistant'},
+        ]
+        records = {
+            'daily': types.SimpleNamespace(user_id='owner', slot='daily_life', sensitivity=0),
+            'other': types.SimpleNamespace(user_id='someone_else', slot='daily_life', sensitivity=0),
+            'health': types.SimpleNamespace(user_id='owner', slot='health', sensitivity=0),
+            'private': types.SimpleNamespace(user_id='owner', slot='goals', sensitivity=.8),
+        }
+        repo = types.SimpleNamespace(
+            _vector_store=types.SimpleNamespace(list_entries=Mock(return_value=entries)),
+            _cognitive_store=types.SimpleNamespace(get_memory_record=lambda mid: records.get(mid)))
+        memory = types.SimpleNamespace(_o=types.SimpleNamespace(
+            _user_id='owner', _get_repo=lambda: repo))
+        self.assertEqual(greeting_memories(memory), ['用户喜欢看电影'])
+        repo._vector_store.list_entries.assert_called_once_with(user_id='owner', limit=80)
 
 
 class PlaybackAuthorityTests(unittest.TestCase):
@@ -112,6 +137,7 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         self.agent = f.agent
         self.agent.BC_ECHO_WINDOW_S = 4
         self.agent.MIC_RATE = 24000
+        self.agent.space_language = lambda _: 'zh'
         self.agent.BARGE_GRACE_MS = 500
         self.agent._LOCAL_LLM = None
         self.agent.route_pending_thinking = AsyncMock()
@@ -126,10 +152,12 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         self.auto_playback = True
         self.block_model = False
         self.model_calls = 0
+        self.model_args = []
         self.model_closed = asyncio.Event()
 
         async def model(*_):
             self.model_calls += 1
+            self.model_args.append(_)
             try:
                 yield '认真|这是生成的回复，后面还有更多说明。'
                 self.model_waiting.set()
@@ -176,6 +204,43 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         sink, timeline = self.session.early['sink'], self.session.early['timeline']
         await asyncio.wait_for(sink.wait_for_audio(), 1)
         return sink, timeline, self.session.early['task']
+
+    async def test_opening_speaks_once_without_user_input_or_memory_ingest(self):
+        self.agent.build_reply_context = lambda context, **_: context
+        with patch('studio.core.utils.conversation.component.greeting_memories',
+                   return_value=['用户喜欢看电影']) as memories:
+            self.session.start_opening()
+            task = self.session.turn['task']
+            self.session.start_opening()
+            self.assertIs(self.session.turn['task'], task)
+            await asyncio.wait_for(task, 1)
+        memories.assert_called_once_with(self.memory)
+        self.assertIn('用户喜欢看电影', self.model_args[0][1])
+        self.assertEqual(sum(m['type'] == 'answer_start' for m in self.messages), 1)
+        self.assertFalse(any(m['type'] in {'user_transcript', 'memory_hits'}
+                             for m in self.messages))
+        self.assertEqual(len(self.saved()), 1)
+        self.assertEqual(self.saved()[0].user_text, '')
+        self.assertTrue(self.saved()[0].assistant_text)
+        self.agent.queue_remember_turn.assert_not_called()
+
+    async def test_opening_interrupted_before_speech_leaves_no_context(self):
+        self.block_model = True
+        with patch('studio.core.utils.conversation.component.greeting_memories',
+                   return_value=[]):
+            self.session.start_opening()
+            await asyncio.wait_for(self.model_waiting.wait(), 1)
+            await self.session.stop_reply(force=True)
+        self.assertFalse(self.saved())
+        self.agent.queue_remember_turn.assert_not_called()
+
+    async def test_opening_does_not_restart_after_text_chat_in_same_session(self):
+        self.context.add(self.session.context_session, 'fixture', '你好', '你好呀')
+        self.session.start_opening()
+        self.session.start_opening()
+        self.assertTrue(self.session.opening_started)
+        self.assertIsNone(self.session.turn['task'])
+        self.assertFalse(self.messages)
 
     def saved(self):
         return self.context.turns(self.session.context_session, 'fixture')

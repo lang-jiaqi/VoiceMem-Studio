@@ -357,6 +357,7 @@
           window.liquidOrb?.setAudioLevel(peak);
           owner.socket.send(pcm.buffer);
         };
+        sendJSON(owner, { type: 'conversation_start' });
         phase(owner, 'listening');
       } catch (error) { if (active(owner)) {
         stopMic(owner);

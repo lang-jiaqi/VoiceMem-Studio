@@ -290,7 +290,15 @@ actual playback RMS levels, pause/resume, and filler completion on the existing
 protocol. The RMS event feeds the App-owned Live2D pet and is not treated as a
 playback checkpoint. The client retains a bounded, memory-only PCM cache for
 completed replies so the reply speaker control replays the audio that the
-backend actually generated. Interrupted replies retain only the source samples
+backend actually generated. When the user starts the microphone, the client
+sends `conversation_start` after capture is ready. The server generates at most
+one short opening per WebSocket session through the normal reply and TTS stream;
+text sends and settings connections do not trigger it. The opening may draw on
+low-sensitivity facts from the current Space, and falls back to an ordinary
+greeting. Only its heard assistant text enters the session context; it creates
+no user transcript or long-term memory ingest.
+
+Interrupted replies retain only the source samples
 reported as rendered by the playback worklet. Replays do not emit playback
 checkpoints and the cache is discarded on page refresh. UI replies and
 perception come from backend events. Confirmed input IDs deduplicate transcripts

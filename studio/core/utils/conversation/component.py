@@ -16,6 +16,9 @@ from studio.core.utils.tts.audio_timing import TimedAudioChunk
 from voicemem import gate
 from voicemem.memory_api import build_memory_context
 from studio.core.utils.contracts.component import Pending, ReplySink
+from studio.core.voicemem import greeting_memories
+from studio.harness.persona.policy import opening_prompt, opening_memory_context
+from voicemem.stream import empty_result
 from .initialize import initialize
 
 class Conversation:
@@ -232,6 +235,12 @@ class Conversation:
         reply = timeline.heard_text()
         if timeline.interrupted and self.agent.BARGE_DEBUG:
             print(f'[context] 打断于 {timeline.rendered_ms()}ms，保留回复 {reply!r}', flush=True)
+        if pending.opening:
+            if reply:
+                self.agent._push_history(
+                    self.context_session, context_space, '', reply,
+                    interrupted=timeline.interrupted)
+            return
         history_turn_id = self.agent._push_history(
             self.context_session, context_space, pending.text, reply,
             interrupted=timeline.interrupted)
@@ -723,5 +732,59 @@ class Conversation:
         self.turn['task'] = task
         task.add_done_callback(self.reply_done)
 
+    def start_opening(self) -> None:
+        """Speak once when the microphone starts, without inventing a user turn."""
+        if self.opening_started:
+            return
+        self.opening_started = True
+        context_space = self.agent.ACTIVE_SPACE
+        if (self.hearing() or self.prewarm['closed']
+                or self.agent._SESSION_CONTEXT.messages(
+                    self.context_session, context_space, window=1)):
+            return
+        memory_vm = self.agent.vm
+        language = self.agent.space_language(context_space)
+        pending = Pending(opening_prompt(language), '', empty_result(),
+                          spoken=False, route=gate.SHALLOW, reply_mode=DIRECT,
+                          transcript_managed=True, opening=True)
+        reply_state = {'text': ''}
+        timeline = AudioTimeline(prebuffer_seconds=0.16, rate_estimator=self.speech_rate,
+                                 track_delivery=True)
+        self.reset_output_state(pending, timeline, reply_state,
+                                memory_vm=memory_vm, context_space=context_space)
+        self_harness_profile = self.self_harness.snapshot()
+        pending.self_harness_profile = self_harness_profile
+
+        async def run_opening():
+            try:
+                try:
+                    memories = await asyncio.wait_for(
+                        asyncio.to_thread(greeting_memories, memory_vm), timeout=1.0)
+                    pending.memory_context = opening_memory_context(memories, language)
+                except Exception as exc:
+                    print(f'[opening] 读取记忆失败：{type(exc).__name__}', flush=True)
+                if self.agent.vm is not memory_vm or self.agent.ACTIVE_SPACE != context_space:
+                    return
+                self.turn_taking.start_reply()
+                self.turn['measure_started'] = time.monotonic()
+                await self.agent.voicemem_llm_tts(
+                    pending, self.sock.send_json,
+                    lambda pcm: self.send_audio(pcm, timeline), self.owner, timeline,
+                    said=reply_state, context_session=self.context_session,
+                    context_space=context_space, memory_vm=memory_vm,
+                    self_harness_profile=self_harness_profile,
+                    on_self_harness_update=self.self_harness.apply)
+                await self.wait_reply_playback(pending, timeline)
+            except asyncio.CancelledError:
+                timeline.mark_interrupted()
+                raise
+            finally:
+                self.save_reply_context(pending, timeline, memory_vm, context_space)
+                self.turn_taking.finish_reply()
+
+        task = asyncio.create_task(run_opening())
+        self.turn['task'] = task
+        task.add_done_callback(self.reply_done)
+
     def listen(self):
-        return self.agent._session_anticipate(self.context_session, self.sock, on_speech=self.stop_reply, owner=self.owner, is_busy=self.hearing, said=lambda : self.turn['reply']['text'] if self.hearing() or time.monotonic() < self.turn['echo_until'] else '', on_candidate=self.pause_candidate, on_candidate_reject=self.resume_candidate, on_playback_checkpoint=self.playback_checkpoint, on_filler_done=self.filler_done, on_self_harness_get=self.publish_self_harness, on_self_harness_update=self.update_self_harness, on_harness_prompt_update=self.update_harness_prompt, on_backchannel_curve_update=self.update_backchannel_curve, on_close=self.close_session, on_early=self.start_early, on_early_cancel=self.drop_early, on_speech_start=self.prewarm_local, textless_confirm_s=0.2, turn_taking=self.turn_taking)
+        return self.agent._session_anticipate(self.context_session, self.sock, on_speech=self.stop_reply, owner=self.owner, is_busy=self.hearing, said=lambda : self.turn['reply']['text'] if self.hearing() or time.monotonic() < self.turn['echo_until'] else '', on_candidate=self.pause_candidate, on_candidate_reject=self.resume_candidate, on_playback_checkpoint=self.playback_checkpoint, on_filler_done=self.filler_done, on_self_harness_get=self.publish_self_harness, on_self_harness_update=self.update_self_harness, on_harness_prompt_update=self.update_harness_prompt, on_backchannel_curve_update=self.update_backchannel_curve, on_conversation_start=self.start_opening, on_close=self.close_session, on_early=self.start_early, on_early_cancel=self.drop_early, on_speech_start=self.prewarm_local, textless_confirm_s=0.2, turn_taking=self.turn_taking)
