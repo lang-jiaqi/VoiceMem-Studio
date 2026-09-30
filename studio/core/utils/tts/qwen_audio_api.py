@@ -7,10 +7,14 @@ import os
 import re
 import uuid
 
-from studio.paths import VOICE
-
 MODEL = "qwen-audio-3.0-tts-flash"
-VOICE_ID_FILE = VOICE / "qwen_audio_voice_id.txt"
+DEFAULT_VOICE = "longanlingxi"
+SYSTEM_VOICES = frozenset({
+    "longanfengyue", "longanyuanfei", "longanlingxi", "longanxiaoxin",
+    "longanhuan_v3.6", "longjielidou_v3.6", "longpaopao_v3.6",
+    "longhuohuo_v3.6", "longchuanshu_v3.6", "loongmary",
+    "loongeva_v3.6", "loongjohn",
+})
 _WORKSPACE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -26,24 +30,19 @@ def selected() -> bool:
                  os.environ.get("STUDIO_QWEN_TTS_WORKSPACE_ID")))
 
 
-def settings(*, require_voice: bool = True) -> tuple[str, str, str]:
-    """Return key, Singapore workspace, and matching Qwen-Audio voice ID."""
+def settings() -> tuple[str, str, str]:
+    """Return key, Singapore workspace, and the selected system voice."""
     key = os.environ.get("STUDIO_QWEN_TTS_API_KEY") or os.environ.get("DASHSCOPE_API_KEY")
     workspace = (os.environ.get("STUDIO_QWEN_TTS_WORKSPACE_ID") or "").strip()
-    voice = (os.environ.get("STUDIO_QWEN_TTS_VOICE_ID") or "").strip()
-    if not voice and VOICE_ID_FILE.is_file():
-        voice = VOICE_ID_FILE.read_text(encoding="utf-8").strip()
+    voice = (os.environ.get("STUDIO_QWEN_TTS_VOICE") or DEFAULT_VOICE).strip()
     if not key:
         raise ValueError("Qwen TTS 缺少 STUDIO_QWEN_TTS_API_KEY 或 DASHSCOPE_API_KEY")
     if not _WORKSPACE.fullmatch(workspace):
         raise ValueError("Qwen TTS 缺少有效的 STUDIO_QWEN_TTS_WORKSPACE_ID")
-    if require_voice and not voice:
-        raise ValueError("Qwen TTS 缺少音色 ID；请创建绑定 qwen-audio-3.0-tts-flash 的音色")
-    if any(char.isspace() for char in voice):
-        raise ValueError("Qwen TTS 音色 ID 格式无效")
-    if voice.startswith("qwen3-tts-") or (
-            voice.startswith("qwen-audio-") and not voice.startswith(MODEL + "-")):
-        raise ValueError(f"Qwen TTS 音色 ID 与 {MODEL} 不匹配；请重新创建对应音色")
+    if not voice or any(char.isspace() for char in voice):
+        raise ValueError("Qwen TTS 系统音色格式无效；请检查 STUDIO_QWEN_TTS_VOICE")
+    if voice not in SYSTEM_VOICES:
+        raise ValueError(f"Qwen TTS 不支持该 {MODEL} 系统音色：{voice}")
     return key, workspace, voice
 
 

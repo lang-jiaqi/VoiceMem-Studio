@@ -867,13 +867,11 @@ provider; local GPU providers can require serialized segments.
 
 Qwen-Audio-TTS Flash is an optional Studio TTS adapter. It streams the same PCM
 contract over a Singapore workspace WebSocket and passes the existing per-segment
-tone instruction into each synthesis task. A cancelled segment closes the
-connection so stale audio cannot enter the next reply. When no voice ID is
-configured, normal startup enrolls the checked-in reference audio through its
-verified GitHub Raw URL and persists the returned ID before opening a Studio
-agent. `--check` validates local settings without enrolling a voice.
-The serving loop opens the Qwen WebSocket before accepting sessions; local
-model warmup does not issue a billable synthesis request.
+tone instruction into each synthesis task. It uses the `longanlingxi` system
+voice by default and can select another system voice through configuration.
+A cancelled segment closes the connection so stale audio cannot enter the next
+reply. The serving loop opens the Qwen WebSocket before accepting sessions;
+local model warmup does not issue a billable synthesis request.
 
 `studio/core/utils/tts/segmentation.py` owns sentence-first text boundaries and
 the pending text buffer. A reply-local segmenter consumes plain text after tone

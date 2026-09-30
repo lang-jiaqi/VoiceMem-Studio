@@ -117,11 +117,6 @@ def main(argv=None):
         if args.prepare_stage:
             print('[startup] VoiceMem 基础模型准备完成。', flush=True)
             return
-        if args.mode == 'llm_tts':
-            from .utils.tts.qwen_audio_api import selected as qwen_tts_selected
-            if qwen_tts_selected():
-                from .utils.tts.qwen_audio_enrollment import ensure_voice
-                ensure_voice()
         from studio.paths import ROOT
         if not args.no_file_log:
             from .utils.logging_utils.component import setup_file_logging
