@@ -381,11 +381,13 @@ class Reply:
                     tag, rest = tts_control.split(tone["buf"])
                     if tag:
                         selected = fixed_tone(active_self_harness)
-                        tag = selected or tts_control.smooth(
-                            self._LAST_TONE["tag"], tag)
+                        opening = getattr(pending, "opening", False)
+                        tag = selected or (tag if opening else tts_control.smooth(
+                            self._LAST_TONE["tag"], tag))
                         tone["tag"], tone["head"], tone["buf"] = (
                             tag, False, "")
-                        self._LAST_TONE["tag"] = tag
+                        if not opening:
+                            self._LAST_TONE["tag"] = tag
                         speak_as = tts_control.instruction(tag, speak_base)
                         delta = rest
                         if self.BARGE_DEBUG:

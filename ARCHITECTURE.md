@@ -295,8 +295,11 @@ sends `conversation_start` after capture is ready. The server generates at most
 one short opening per WebSocket session through the normal reply and TTS stream;
 text sends and settings connections do not trigger it. The opening may draw on
 low-sensitivity facts from the current Space, and falls back to an ordinary
-greeting. Only its heard assistant text enters the session context; it creates
-no user transcript or long-term memory ingest.
+greeting. The model selects a tone for the opening from those facts using a
+detached auto-tone snapshot. This tone neither updates Self Harness nor
+participates in the cross-turn tone smoothing used by later replies. Only its
+heard assistant text enters the session context; it creates no user transcript
+or long-term memory ingest.
 
 Interrupted replies retain only the source samples
 reported as rendered by the playback worklet. Replays do not emit playback

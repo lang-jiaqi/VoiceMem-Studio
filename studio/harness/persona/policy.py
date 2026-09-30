@@ -71,17 +71,22 @@ def opening_prompt(language: str) -> str:
     if language == "en":
         return (
             "The user just started a voice conversation and has not spoken yet. "
-            "Greet them naturally in one or two short sentences. If the supplied "
-            "memory facts suggest a light, suitable topic, mention just one and ask "
-            "one easy question. Otherwise give a simple greeting and invitation to talk. "
-            "Never invent a past conversation, current mood, date, or plan. Avoid "
-            "sensitive topics and do not announce that you searched memory."
+            "Greet them naturally in one or two short sentences. Choose this opening's "
+            "tone from the supplied memory: a pleasant topic can sound bright, while "
+            "a difficult one calls for a softer approach. Do not assume that an old "
+            "memory describes how the user feels right now. Mention one memory only "
+            "when it is suitable to bring up unprompted; otherwise give a simple "
+            "invitation to talk. This tone applies only to the opening, not later "
+            "replies or conversation preferences. Never invent a past conversation, "
+            "current mood, date, or plan, and do not announce that you searched memory."
         )
     return (
         "用户刚点击开始语音对话，还没有说话。请主动用一两句简短自然的话打招呼。"
-        "如果提供的记忆事实里有轻松、合适的话题，可以只提一件事，再问一个容易回答的问题；"
-        "否则普通问候并邀请用户开口。不要编造往事、此刻的心情、日期或计划，"
-        "不要提敏感话题，也不要说自己刚查了记忆。"
+        "只为这句开场白根据提供的记忆选择合适的语气：轻松的记忆可以明亮一些，"
+        "沉重的记忆要放轻；不要凭旧记忆断定用户现在的心情。"
+        "只有适合主动提起时才自然提一件记忆，否则简单邀请用户开口。"
+        "本次语气不代表后续对话的固定偏好。不要编造往事、此刻的心情、日期或计划，"
+        "也不要说自己刚查了记忆。"
     )
 
 

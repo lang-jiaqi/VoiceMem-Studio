@@ -14,6 +14,8 @@ from studio.core.utils.conversation.component import Conversation
 from studio.core.utils.contracts.component import Pending
 from studio.core.utils.session_context.component import SessionBuffer
 from studio.core.voicemem import greeting_memories
+from studio.harness.persona.policy import opening_prompt
+from studio.core.utils.tts import control as tts_control
 from voicemem.stream import empty_result
 
 
@@ -36,6 +38,12 @@ class SessionBufferCleanupTests(unittest.TestCase):
 
 
 class GreetingMemoryTests(unittest.TestCase):
+    def test_opening_tone_is_selected_for_this_reply_only(self):
+        prompt = opening_prompt('zh')
+        self.assertIn('根据提供的记忆选择合适的语气', prompt)
+        self.assertIn('不代表后续对话的固定偏好', prompt)
+        self.assertNotIn('默认平静', prompt)
+
     def test_only_current_user_low_sensitivity_facts_are_selected(self):
         entries = [
             {'id': 'daily', 'text': '用户喜欢看电影', 'date': '2026-09-30', 'role': 'user'},
@@ -135,6 +143,7 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         f = test_reply_text.ShortReplyTextTests()
         f.setUp()
         self.agent = f.agent
+        self.tts_instructions = []
         self.agent.BC_ECHO_WINDOW_S = 4
         self.agent.MIC_RATE = 24000
         self.agent.space_language = lambda _: 'zh'
@@ -166,7 +175,8 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 self.model_closed.set()
 
-        async def tts(*_):
+        async def tts(_text, instruction=None):
+            self.tts_instructions.append(instruction)
             yield bytes(48000)
 
         self.memory.reply_stream = model
@@ -241,6 +251,65 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.session.opening_started)
         self.assertIsNone(self.session.turn['task'])
         self.assertFalse(self.messages)
+
+    async def test_opening_uses_its_own_tone_without_changing_later_turns(self):
+        self.agent._LAST_TONE['tag'] = '俏皮'
+
+        async def model(*_):
+            yield '共情|我在，想聊什么都可以。'
+
+        self.memory.reply_stream = model
+        with patch('studio.core.utils.conversation.component.greeting_memories',
+                   return_value=['用户最近遇到挫折']):
+            self.session.start_opening()
+            await asyncio.wait_for(self.session.turn['task'], 1)
+        self.assertTrue(any(tts_control.TONES['共情'] in instruction
+                            for instruction in self.tts_instructions))
+        self.assertEqual(self.agent._LAST_TONE['tag'], '俏皮')
+        self.assertEqual(self.session.self_harness.profile['speaking_style']['tone'], 'auto')
+
+        async def next_model(*_):
+            yield '认真|接下来回答你的问题。'
+
+        self.memory.reply_stream = next_model
+        await self.start()
+        await asyncio.wait_for(self.session.turn['task'], 1)
+        self.assertEqual(self.agent._LAST_TONE['tag'],
+                         tts_control.smooth('俏皮', '认真'))
+
+    async def test_opening_cannot_update_harness_preference(self):
+        async def model(*_):
+            yield ('<self_harness>{"speaking_style":{"tone":"平静"}}</self_harness>'
+                   '平静|你好，想聊什么都可以。')
+
+        self.memory.reply_stream = model
+        with patch('studio.core.utils.conversation.component.greeting_memories',
+                   return_value=[]):
+            self.session.start_opening()
+            await asyncio.wait_for(self.session.turn['task'], 1)
+        self.assertEqual(self.session.self_harness.profile['speaking_style']['tone'], 'auto')
+
+    async def test_opening_memory_tone_does_not_replace_fixed_conversation_tone(self):
+        self.session.self_harness.set_explicit(
+            {'speaking_style': {'tone': '轻快'}})
+
+        async def model(*_):
+            yield '共情|我在，想聊什么都可以。'
+
+        self.memory.reply_stream = model
+        with patch('studio.core.utils.conversation.component.greeting_memories',
+                   return_value=['用户最近遇到挫折']):
+            self.session.start_opening()
+            await asyncio.wait_for(self.session.turn['task'], 1)
+        self.assertTrue(any(tts_control.TONES['共情'] in instruction
+                            for instruction in self.tts_instructions))
+        self.assertEqual(self.session.self_harness.profile['speaking_style']['tone'], '轻快')
+
+        self.tts_instructions.clear()
+        await self.start()
+        await asyncio.wait_for(self.session.turn['task'], 1)
+        self.assertTrue(any(tts_control.TONES['轻快'] in instruction
+                            for instruction in self.tts_instructions))
 
     def saved(self):
         return self.context.turns(self.session.context_session, 'fixture')

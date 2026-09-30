@@ -753,6 +753,9 @@ class Conversation:
         self.reset_output_state(pending, timeline, reply_state,
                                 memory_vm=memory_vm, context_space=context_space)
         self_harness_profile = self.self_harness.snapshot()
+        # The greeting chooses its own tone from memory. Keep the session's
+        # explicit tone preference untouched for the user's actual turns.
+        self_harness_profile['profile']['speaking_style']['tone'] = 'auto'
         pending.self_harness_profile = self_harness_profile
 
         async def run_opening():
@@ -772,8 +775,7 @@ class Conversation:
                     lambda pcm: self.send_audio(pcm, timeline), self.owner, timeline,
                     said=reply_state, context_session=self.context_session,
                     context_space=context_space, memory_vm=memory_vm,
-                    self_harness_profile=self_harness_profile,
-                    on_self_harness_update=self.self_harness.apply)
+                    self_harness_profile=self_harness_profile)
                 await self.wait_reply_playback(pending, timeline)
             except asyncio.CancelledError:
                 timeline.mark_interrupted()
