@@ -88,6 +88,20 @@ class ShortReplyTextTests(unittest.IsolatedAsyncioTestCase):
         self.assert_body('二加二等于四。')
         self.assertEqual(sum(m['type'] == 'answer_delta' for m in self.messages), 1)
 
+    async def test_stranger_reply_excludes_owner_session_history(self):
+        self.pending.stranger = True
+        self.agent._SESSION_CONTEXT.messages = Mock(return_value=[
+            {"role": "user", "content": "主人的私人信息"}])
+        received = []
+
+        async def model(text, context, history):
+            received.append(history)
+            yield '认真|这道题等于零。'
+
+        await asyncio.wait_for(self.pipeline(model), 1)
+        self.assertEqual(received, [[]])
+        self.agent._SESSION_CONTEXT.messages.assert_not_called()
+
     async def test_plain_text_at_prefix_buffer_boundary_is_not_duplicated(self):
         for size in (25, 26, 27):
             with self.subTest(size=size):

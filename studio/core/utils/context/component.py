@@ -40,8 +40,7 @@ class Context:
                                text: str = "", context_session: str = "",
                                context_space: str = "") -> str:
         if stranger:
-            out = f"{self._rt_persona()}\n\n{self._by_lang(CONTEXT['stranger'])}"
-            return out
+            return self._rt_persona()
         parts = [self._rt_persona()]
         if memory_context:
             parts.append(memory_context)
@@ -67,7 +66,7 @@ class Context:
                             route=None, replay: str = "", text: str = "",
                             emotion: str = "", continuation: bool = False) -> str:
         """Compose history, eligible memory, and dialogue directives for a reply."""
-        ctx = self._by_lang(CONTEXT["stranger"]) if stranger else (memory_context or "")
+        ctx = "" if stranger else (memory_context or "")
         if not stranger and gate.needs_memory(route) and not ctx.strip():
             ctx = self._by_lang(CONTEXT["no_memory"])
         note = (self._by_lang(self._REPLAY_NOTE) if replay

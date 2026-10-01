@@ -235,6 +235,12 @@ Spaces use Chinese so VoiceMem's process-wide language override stays stable.
 The account owns its turn recordings. Browser chat lists remain page-local;
 long-term memory persists with the account. Mobile demo requests enter a dedicated
 browser pet page, which reuses the desktop Live2D behavior and browser voice client.
+Per-account agents retain the same speaker gate as local Studio. In both
+deployments, an `llm_tts` stranger turn excludes retrieved memory and recent
+session messages from the reply request. The gate's identity decision stays in server state and diagnostics;
+it is not included in text or realtime reply prompts. The gate also skips or
+discards speculative replies before playback. Background ingestion and speaker
+tracking retain their existing lifecycle so a later matching voice can clear the gate.
 Conversation text and input live in a separate sheet so the avatar remains visible
 by default. The VoiceMem sheet shows this turn's retrieved hits and watches the account's memory snapshot
 for new stored entries. Its top-right settings panel exposes only Self Harness
@@ -761,14 +767,21 @@ that both paths retrieved the same memory before releasing early output.
 One session-scoped `TurnTakingStateMachine` then chooses the handoff. Ready
 audio is released directly. An ordinary predicted wait may use a cached
 acknowledgement, while `memory_cot` may request an LLM-generated work filler
-when main audio is not ready. The harness configures its probability and
-session cooldown separately from in-speech acknowledgements. A confirmed input
-gets at most one random draw, retained across handoff retries; speculative EOT
-work does not draw. A sent work filler reserves its clip duration plus cooldown;
+when main audio is not ready after an actual wait threshold. The wait is measured
+from the last voiced frame, including confirmation and routing; generation and
+playback of fillers begin only after the turn is confirmed. Main reply work runs
+concurrently during that wait. Ready audio, audio-free completion or an error
+releases the buffered reply without generating a filler. The harness configures
+the wait threshold and session cooldown separately from probabilistic in-speech
+acknowledgements. Self Harness `silent` disables work fillers; `reassuring` uses
+a shorter wait threshold, while `auto` restores the default. A cooldown-blocked
+turn remains ineligible across handoff retries even if the cooldown later expires.
+A sent work filler reserves its clip duration plus cooldown;
 an acknowledged playback completion extends that deadline when playback started late.
 Skipped work fillers do not fall back to a cached acknowledgement. Existing
-readiness races still cancel unplayed fillers if the main reply wins; the route
-does not guarantee a spoken filler.
+readiness races still cancel unplayed fillers if the main reply wins. Work-filler
+eligibility has no random draw; readiness, preferences, cooldown and successful
+synthesis still determine whether a filler is spoken.
 First audio observations update the session estimate used by later
 decisions. Main reply work runs into a `ReplySink` while either filler plays.
 For every emitted end-of-turn filler, the browser reports actual playback
@@ -837,6 +850,13 @@ endpoint.
 `build_reply_context` is the shared context builder used by actual generation
 and local-model prewarming. Keeping one builder preserves local prefix-cache
 compatibility.
+All Studio reply adapters opt into `context_as_system`: backend context follows
+the immutable persona in the leading system message, history follows that
+message, and the final user message contains only the actual input. The static
+persona remains a reusable prefix; changing backend context precedes history.
+OpenAI, DeepSeek, Qwen and local MLX replies share the message composer; local
+prewarming uses the same ordering. Direct VoiceMem provider callers retain the
+default context-in-user format and existing custom callable signatures.
 
 ### Prompt ownership
 

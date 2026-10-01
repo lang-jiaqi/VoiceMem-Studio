@@ -27,6 +27,7 @@ def display_namespace():
     code = ast.Module(body=[n for n in tree.body if getattr(n, "name", "") in names],
                       type_ignores=[])
     ns = dict(asyncio=asyncio, threading=threading, time=time, MEMORY_COT="memory_cot",
+              aclosing=contextlib.aclosing,
               _REPLY_DISPLAY_LOCK=threading.Lock(), ACTIVE_SPACE="test", vm=object(),
               gate=types.SimpleNamespace(needs_memory=lambda _: True),
               note_hits=lambda _: None, audio_of=None, hit_cluster=None,

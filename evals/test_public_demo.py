@@ -20,6 +20,7 @@ class FakeAgent:
     def __init__(self, args, root):
         self.root = root
         self.ACTIVE_SPACE = "default"
+        self.SPEAKER_GATE = True
         self.vm = SimpleNamespace(classify=lambda query: SimpleNamespace(slots=[], entities=[]))
 
     def memory_snapshot(self):
@@ -92,6 +93,11 @@ class PublicDemoTest(unittest.TestCase):
                                     headers={"origin": "https://demo.ts.net"}).status_code, 200)
         self.assertEqual(alice.get("/api/memories").status_code, 200)
         self.assertEqual(bob.get("/api/memories").status_code, 200)
+
+    def test_account_agent_preserves_single_owner_speaker_gate(self):
+        _, token = self.accounts.register("alice", "long-secret-123")
+        agent = self.accounts.agent(self.accounts.user(token)[0])
+        self.assertTrue(agent.SPEAKER_GATE)
 
     def test_origin_and_websocket_auth(self):
         client = self.client()

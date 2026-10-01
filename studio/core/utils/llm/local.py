@@ -16,8 +16,10 @@ _MARK = "\x00__VM__\x00"
 class LocalLLM:
     """Stream local MLX replies through the process GPU scheduler."""
 
-    def __init__(self, model_name: str = MODEL, system: str | None = None):
+    def __init__(self, model_name: str = MODEL, system: str | None = None,
+                 *, context_as_system: bool = False):
         self.model_name = model_name
+        self.context_as_system = context_as_system
 
         from voicemem.reply import default_system
         self.system = system or default_system()
@@ -60,10 +62,9 @@ class LocalLLM:
                                        tokenize=False, enable_thinking=False)
 
     def _msgs(self, text: str, memory_context: str, history):
-        out = [{"role": "system", "content": self.system}] + list(history or [])
-        out.append({"role": "user",
-                    "content": f"{memory_context}\n\n{text}" if memory_context else text})
-        return out
+        from voicemem.reply import compose_reply_messages
+        return compose_reply_messages(text, memory_context, history, system=self.system,
+                                      context_as_system=self.context_as_system)
 
     def _fork(self, src_cache):
         from mlx_lm.models.cache import make_prompt_cache

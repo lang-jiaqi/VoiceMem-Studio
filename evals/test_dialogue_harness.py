@@ -50,6 +50,13 @@ from web.harness import (
 from evals.test_short_turns import anticipate_namespace
 
 
+class ReplyPromptTests(unittest.TestCase):
+    def test_new_topic_does_not_trigger_old_topic_or_internal_rule_explanation(self):
+        prompt = system_prompt('zh')
+        self.assertIn('用户换了问题就直接回答新问题', prompt)
+        self.assertIn('不要把内部处理指令说成用户提过的话', prompt)
+
+
 class BackchannelTests(unittest.TestCase):
     def test_pause_ack_accepts_incomplete_continuation_points(self):
         with patch('random.Random.random', return_value=0):
@@ -633,7 +640,7 @@ class SpeakingStyleTests(unittest.TestCase):
 
 class TurnTakingTimingTests(unittest.IsolatedAsyncioTestCase):
     def test_first_slow_turn_can_offer_work_filler_after_fast_smalltalk(self):
-        machine = TurnTakingStateMachine(initial_wait_s=.2, work_filler_probability=1.0)
+        machine = TurnTakingStateMachine(initial_wait_s=.2)
         self.assertIs(machine.decide_handoff(main_audio_ready=False, reply_mode='memory_cot',
                                              cached_ack_available=False).kind, HandoffKind.LLM_FILLER)
         for mode in ('direct', 'memory'):
@@ -643,7 +650,7 @@ class TurnTakingTimingTests(unittest.IsolatedAsyncioTestCase):
                                              cached_ack_available=False).kind, HandoffKind.DIRECT)
 
     def test_state_machine_selects_handoff_from_readiness_and_reply_mode(self):
-        machine = TurnTakingStateMachine(initial_wait_s=2.0, work_filler_probability=1.0)
+        machine = TurnTakingStateMachine(initial_wait_s=2.0)
         machine.commit_user_turn()
 
         self.assertIs(

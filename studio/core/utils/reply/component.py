@@ -330,8 +330,8 @@ class Reply:
             if control_enabled:
                 ctx = f"{ctx}\n\n{profile_context(active_self_harness)}"
 
-            hist = self._SESSION_CONTEXT.messages(context_session, context_space,
-                                             window=self.HISTORY_TURNS)
+            hist = ([] if pending.stranger else self._SESSION_CONTEXT.messages(
+                context_session, context_space, window=self.HISTORY_TURNS))
             _lat["pre"] = (time.monotonic() - _t0) * 1000
             from voicemem.reply import apply_reply_request_options
             reply_mode = getattr(pending, "reply_mode", "")

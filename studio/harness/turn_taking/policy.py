@@ -23,7 +23,7 @@ CONTROLS = {
 }
 
 # Work fillers are independent of in-speech acknowledgement quotas.
-WORK_FILLER_PROBABILITY = 0.30
+WORK_FILLER_AFTER_S = 1.5
 WORK_FILLER_COOLDOWN_S = 20.0
 WORK_FILLER_TIMEOUT_S = 1.2
 

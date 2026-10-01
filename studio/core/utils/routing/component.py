@@ -61,6 +61,8 @@ class Routing:
                                      history=None) -> Pending:
         """Combine VoiceMem memory eligibility with local reasoning depth off-loop."""
         from studio.core.utils.self_harness.component import reasoning_preference
+        if pending.stranger:
+            history = []
         depth_preference = reasoning_preference(
             getattr(pending, "self_harness_profile", None))
         query = (contextual_memory_query(pending.text, history)

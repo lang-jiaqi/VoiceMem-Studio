@@ -1,13 +1,12 @@
 """Session-scoped policy for backchannels and end-of-turn handoffs."""
 from __future__ import annotations
 
-import random
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 
 from studio.harness.reply_modes.policy import MEMORY_COT
-from studio.harness.turn_taking.policy import WORK_FILLER_COOLDOWN_S, WORK_FILLER_PROBABILITY
+from studio.harness.turn_taking.policy import WORK_FILLER_AFTER_S, WORK_FILLER_COOLDOWN_S
 
 from .backchannel import Backchannel
 
@@ -31,6 +30,7 @@ class HandoffDecision:
     kind: HandoffKind
     reason: str
     expected_wait_s: float
+    filler_after_s: float = 0.0
 
 @dataclass
 class TurnTakingStateMachine:
@@ -38,26 +38,29 @@ class TurnTakingStateMachine:
 
     backchannel: Backchannel = field(default_factory=Backchannel)
     short_ack_after_s: float = 0.8
-    long_filler_after_s: float = 1.5
+    long_filler_after_s: float = WORK_FILLER_AFTER_S
     initial_wait_s: float = 1.0
     estimate_weight: float = 0.35
     echo_window_s: float = 4.0
-    work_filler_probability: float = WORK_FILLER_PROBABILITY
+    work_filler_enabled: bool = True
     work_filler_cooldown_s: float = WORK_FILLER_COOLDOWN_S
-    filler_rng: random.Random = field(default_factory=random.Random, repr=False)
     phase: TurnPhase = field(default=TurnPhase.LISTENING, init=False)
     _expected_wait_s: float = field(init=False)
     _recent_emissions: list[tuple[float, str]] = field(default_factory=list, init=False)
-    _work_filler_selected: bool | None = field(default=None, init=False)
+    _work_filler_eligible: bool | None = field(default=None, init=False)
     _work_filler_until: float = field(default=0.0, init=False)
-    _default_work_filler_probability: float = field(init=False, repr=False)
+    _default_work_filler_enabled: bool = field(init=False, repr=False)
+    _default_long_filler_after_s: float = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if not 0 <= self.work_filler_probability <= 1:
-            raise ValueError("work filler probability must be between zero and one")
+        if not isinstance(self.work_filler_enabled, bool):
+            raise ValueError("work filler enabled must be a boolean")
+        if not 0 <= self.long_filler_after_s < float('inf'):
+            raise ValueError("work filler delay must be finite and nonnegative")
         if not 0 <= self.work_filler_cooldown_s < float('inf'):
             raise ValueError("work filler cooldown must be finite and nonnegative")
-        self._default_work_filler_probability = self.work_filler_probability
+        self._default_work_filler_enabled = self.work_filler_enabled
+        self._default_long_filler_after_s = self.long_filler_after_s
         self._expected_wait_s = max(0.0, self.initial_wait_s)
 
     @property
@@ -74,7 +77,7 @@ class TurnTakingStateMachine:
 
     def commit_user_turn(self) -> None:
         self.backchannel.complete_turn()
-        self._work_filler_selected = None
+        self._work_filler_eligible = None
         self.phase = TurnPhase.COMMITTED
 
     def record_work_filler(self, duration: float, *, now: float | None = None) -> None:
@@ -123,15 +126,16 @@ class TurnTakingStateMachine:
             return HandoffDecision(HandoffKind.DIRECT, "main_audio_ready", wait)
         if reply_mode == MEMORY_COT:
             at = time.monotonic() if now is None else now
-            if self._work_filler_selected is None:
-                self._work_filler_selected = (
-                    at >= self._work_filler_until
-                    and self.filler_rng.random() < self.work_filler_probability)
+            if not self.work_filler_enabled:
+                return HandoffDecision(HandoffKind.DIRECT, "filler_silent", wait)
+            if self._work_filler_eligible is None:
+                self._work_filler_eligible = at >= self._work_filler_until
             if at < self._work_filler_until:
                 return HandoffDecision(HandoffKind.DIRECT, "filler_cooldown", wait)
-            if self._work_filler_selected:
-                return HandoffDecision(HandoffKind.LLM_FILLER, "long_work", wait)
-            return HandoffDecision(HandoffKind.DIRECT, "filler_probability", wait)
+            if self._work_filler_eligible:
+                return HandoffDecision(HandoffKind.LLM_FILLER, "long_wait", wait,
+                                       filler_after_s=self.long_filler_after_s)
+            return HandoffDecision(HandoffKind.DIRECT, "filler_cooldown", wait)
         if cached_ack_available and wait >= self.short_ack_after_s:
             return HandoffDecision(HandoffKind.CACHED_ACK, "reply_not_ready", wait)
         return HandoffDecision(HandoffKind.DIRECT, "short_wait", wait)

@@ -183,7 +183,7 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         self.memory.utils = types.SimpleNamespace(get=lambda _: types.SimpleNamespace(stream=tts))
         self.sock = types.SimpleNamespace(send_json=self.send, send_bytes=self.send_audio)
         self.session = Conversation(self.agent, self.sock)
-        self.session.turn_taking.work_filler_probability = 0
+        self.session.turn_taking.work_filler_enabled = False
 
     async def asyncTearDown(self):
         await self.session.close_session()
@@ -320,6 +320,31 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         self.agent.queue_remember_turn.assert_called_once()
         self.assertIs(self.agent.queue_remember_turn.call_args.args[0], value)
 
+    async def test_stranger_turn_keeps_original_background_speaker_tracking(self):
+        value = self.pending(stranger=True)
+        await self.start(value)
+        await asyncio.wait_for(self.session.turn['task'], 1)
+        self.assert_once(value)
+
+    async def test_known_stranger_does_not_start_speculative_reply(self):
+        self.agent.SPEAKER_GATE = True
+        self.agent.STRANGER_MIN_TURNS = 1
+        self.session.owner.update(id='owner', miss=1)
+        st = types.SimpleNamespace(memory=empty_result(), route='shallow')
+        await self.session.start_early('测试', st)
+        self.assertIsNone(self.session.early['task'])
+        self.assertEqual(self.model_calls, 0)
+
+    async def test_final_stranger_discards_speculative_reply(self):
+        await self.early()
+        value = self.pending(stranger=True, early_ok=True)
+        thinking_task = await self.session.route(value)
+        await thinking_task
+        self.assertIsNone(self.session.early['task'])
+        self.assertFalse(await self.session.commit_early(value, thinking_task))
+        self.assertEqual(self.messages, [])
+        self.assertEqual(self.audio, [])
+
     async def test_cancel_unconfirmed_audio_has_no_history_or_ingest(self):
         self.block_model = True
         sink, timeline, task = await self.early()
@@ -413,6 +438,36 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         self.assert_once(value)
         self.assertEqual(self.saved()[0].assistant_text, self.session.turn['timeline'].generated_text)
         await self.session.close_session()
+        self.assert_once(value)
+
+    async def test_fast_deep_reply_keeps_generation_concurrent_without_filler(self):
+        self.session.turn_taking.work_filler_enabled = True
+        self.session.turn_taking.long_filler_after_s = 10
+        self.session.synthesize_work_filler = AsyncMock()
+        value = self.pending(reply_mode='memory_cot', speech_end=time.monotonic())
+        await asyncio.wait_for(await self.start(value), 1)
+        self.session.synthesize_work_filler.assert_not_awaited()
+        self.assertEqual(self.model_calls, 1)
+        self.assertTrue(self.audio)
+        self.assert_once(value)
+
+    async def test_accepted_ready_deep_reply_skips_filler_after_long_confirmation(self):
+        async def route(pending, *_args, **_kwargs):
+            pending.reply_mode = 'memory_cot'
+        self.agent.route_pending_thinking = route
+        self.session.turn_taking.work_filler_enabled = True
+        self.session.synthesize_work_filler = AsyncMock()
+        _, _, generation = await self.early()
+        await asyncio.wait_for(generation, 1)
+        value = self.pending(early_ok=True, reply_mode='memory_cot',
+                             speech_end=time.monotonic() - 10)
+        routed = asyncio.get_running_loop().create_future()
+        routed.set_result(value)
+        self.assertTrue(await self.session.commit_early(value, routed))
+        await asyncio.wait_for(self.session.turn['task'], 1)
+        self.session.synthesize_work_filler.assert_not_awaited()
+        self.assertEqual(self.model_calls, 1)
+        self.assertTrue(self.audio)
         self.assert_once(value)
 
     async def test_first_audio_does_not_wait_for_model_end_or_playback_reports(self):
@@ -558,7 +613,8 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(current.sent_samples, 0)
 
     async def test_main_audio_held_behind_filler_is_not_saved_as_heard(self):
-        self.session.turn_taking.work_filler_probability = 1
+        self.session.turn_taking.work_filler_enabled = True
+        self.session.turn_taking.long_filler_after_s = .01
         filler_sent = asyncio.Event()
         model_release = asyncio.Event()
         original_send = self.sock.send_json

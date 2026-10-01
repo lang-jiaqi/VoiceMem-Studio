@@ -384,10 +384,12 @@ class MemoryRoutingIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_stranger_cannot_use_owner_memory_even_in_deep_mode(self):
         self.router.classify_async.return_value = ThinkingDecision(SLOW, '深思')
         pending = self.pending(prepared=True, stranger=True)
-        await self.agent.route_pending_thinking(pending)
+        await self.agent.route_pending_thinking(
+            pending, history=[{"role": "user", "content": "主人的私人信息"}])
         self.assertEqual(pending.memory_context, '')
         self.assertEqual(pending.replay, '')
         self.agent.vm.search.assert_not_called()
+        self.assertEqual(self.router.classify_async.call_args.kwargs['history'], [])
 
     async def test_unavailable_search_does_not_silently_downgrade_memory_mode(self):
         self.agent.vm.search.side_effect = RuntimeError('synthetic retrieval failure')

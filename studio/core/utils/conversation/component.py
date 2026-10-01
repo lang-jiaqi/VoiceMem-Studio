@@ -340,26 +340,39 @@ class Conversation:
                 # already-running TTS generation.
                 await self.emit_filler(*ack)
             elif decision.kind is HandoffKind.LLM_FILLER:
-                filler_task = asyncio.create_task(self.synthesize_work_filler(pending, memory_vm, context_space))
                 ready_task = asyncio.create_task(sink.wait_for_output())
-                (done, _) = await asyncio.wait((filler_task, ready_task), return_when=asyncio.FIRST_COMPLETED)
+                # Include confirmation, routing and early generation in the wait,
+                # while keeping speculative fillers private until commitment.
+                started = getattr(pending, 'speech_end', 0.0) or time.monotonic()
+                delay = max(0.0, getattr(decision, 'filler_after_s', 0.0)
+                            - (time.monotonic() - started))
+                print(f'[filler] waiting remaining_ms={delay * 1000:.0f}', flush=True)
+                (done, _) = await asyncio.wait((ready_task,), timeout=delay)
                 if ready_task in done or sink.buffered_ms > 0:
-                    filler_task.cancel()
-                else:
-                    try:
-                        (text, pcm) = await filler_task
-                    except Exception as e:
-                        print(f'[web] 垫话生成失败，直接回复：{type(e).__name__}: {e}', flush=True)
-                        (text, pcm) = ('', b'')
-                    if text and pcm and (sink.buffered_ms <= 0):
-                        filler_id = uuid.uuid4().hex
-                        self.filler_waiters[filler_id] = asyncio.Event()
+                    print('[filler] skipped reason=main_output_ready', flush=True)
+                elif self.turn_taking.work_filler_enabled:
+                    print('[filler] trigger reason=wait_elapsed', flush=True)
+                    filler_task = asyncio.create_task(self.synthesize_work_filler(pending, memory_vm, context_space))
+                    (done, _) = await asyncio.wait((filler_task, ready_task), return_when=asyncio.FIRST_COMPLETED)
+                    if ready_task in done or sink.buffered_ms > 0:
+                        print('[filler] cancelled reason=main_output_ready', flush=True)
+                        filler_task.cancel()
+                    else:
                         try:
-                            duration = await self.emit_filler(text, pcm, filler_id=filler_id)
-                        except BaseException:
-                            self.filler_waiters.pop(filler_id, None)
-                            raise
-                        await wait_for_filler_and_output(self.wait_for_filler_end(filler_id, duration), ready_task)
+                            (text, pcm) = await filler_task
+                        except Exception as e:
+                            print(f'[web] 垫话生成失败，直接回复：{type(e).__name__}: {e}', flush=True)
+                            (text, pcm) = ('', b'')
+                        if (text and pcm and not ready_task.done()
+                                and sink.buffered_ms <= 0 and self.turn_taking.work_filler_enabled):
+                            filler_id = uuid.uuid4().hex
+                            self.filler_waiters[filler_id] = asyncio.Event()
+                            try:
+                                duration = await self.emit_filler(text, pcm, filler_id=filler_id)
+                            except BaseException:
+                                self.filler_waiters.pop(filler_id, None)
+                                raise
+                            await wait_for_filler_and_output(self.wait_for_filler_end(filler_id, duration), ready_task)
             self.turn['until'] = 0.0
             self.turn_taking.start_reply()
             if sink.first_audio_at and self.turn['measure_started']:
@@ -390,6 +403,9 @@ class Conversation:
         """Run final ASR on the EOT snapshot, then buffer the early reply."""
         self.stop_prewarm()
         await self.drop_early('换了新的赌注')
+        if (getattr(self.agent, 'SPEAKER_GATE', False) and self.owner.get('id')
+                and self.owner.get('miss', 0) >= self.agent.STRANGER_MIN_TURNS):
+            return
         if refined_text is None:
             refined_text = asyncio.create_task(asyncio.sleep(0, result=text))
         from voicemem.stream import empty_result
@@ -602,6 +618,8 @@ class Conversation:
         return pending
 
     async def route(self, pending):
+        if pending.stranger and self.early['task'] is not None:
+            await self.drop_early('声纹门禁不复用提前生成')
         if self.early['task'] is not None and (self.early.get('space') != self.agent.ACTIVE_SPACE or self.early.get('memory_vm') is not self.agent.vm):
             await self.drop_early('记忆空间已改变')
         if self.early['task'] is not None and pending.early_ok and (not self.agent._early_reply_compatible(self.early['text'], pending.text)):

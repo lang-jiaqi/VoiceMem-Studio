@@ -458,10 +458,7 @@ def apply_turn_taking_profile(machine, value=None) -> None:
         tuple(validate_backchannel_curve(custom_curve))
         if custom_curve is not None else None)
     filler = profile["turn_taking"]["work_filler"]
-    baseline = getattr(machine, "_default_work_filler_probability",
-                       machine.work_filler_probability)
-    machine.work_filler_probability = {
-        "auto": baseline,
-        "silent": 0.0,
-        "reassuring": max(0.75, baseline),
-    }[filler]
+    machine.work_filler_enabled = (
+        filler != "silent" and machine._default_work_filler_enabled)
+    baseline = machine._default_long_filler_after_s
+    machine.long_filler_after_s = min(0.8, baseline) if filler == "reassuring" else baseline

@@ -85,29 +85,42 @@ def compose_system(memory_context: str, system: str | None = None) -> str:
     return "\n\n".join(parts)
 
 
-def openai_reply(model: str | None = None, api_key: str | None = None,
-                 base_url: str | None = None, system: str | None = None) -> Callable:
-    """内置回复 provider：OpenAI 兼容 api，流式吐字。返回一个异步生成器函数。
+def compose_reply_messages(text: str, memory_context: str = "", history=None,
+                           *, system: str | None = None,
+                           context_as_system: bool = False) -> list[dict]:
+    """Build provider messages, optionally separating backend context from user speech.
 
-    模型走 ``reply`` 角色：``model`` 参数 → ``VOICEMEM_REPLY_MODEL`` → 跟随 ``chat``。
-    回复是用户直接听得见的一路，所以单独留了一个角色让它能和后台整理记忆的模型
-    分开配；不配就跟着 chat 走，不会出现"设了模型但回复还在用默认值"这种一半生效。
-    ``import voicemem`` 不会因此要求有 key（client 首次调用时才建）。
+    The default retains the library's existing context-in-user format. Studio
+    opts into the leading system message so its private dialogue directives do
+    not become attributed user input or replace the persona on providers that
+    treat later system messages as complete prompt updates.
+    """
+    prompt = (compose_system(memory_context, system) if context_as_system
+              else (system or default_system()))
+    messages = [{"role": "system", "content": prompt}]
+    messages.extend(history or [])
+    messages.append({"role": "user", "content": (
+        f"{memory_context}\n\n{text}" if memory_context and not context_as_system else text)})
+    return messages
+
+
+def openai_reply(model: str | None = None, api_key: str | None = None,
+                 base_url: str | None = None, system: str | None = None,
+                 *, context_as_system: bool = False) -> Callable:
+    """Return a lazy OpenAI-compatible streaming reply provider.
+
+    Model and credentials resolve through the reply role. The SDK client is
+    created on first use. ``context_as_system`` separates backend context from
+    user input without changing the returned callable's argument contract.
     """
     client = None
 
     async def fn(text: str, memory_context: str = "",
                  history: list | None = None) -> AsyncIterator[str]:
-        """``history``：user/assistant 交替的历史消息，排在 system 和本轮之间。
+        """Yield reply deltas with dialogue history between system and current input.
 
-        为什么历史要单独传、而不是拼进 memory_context：服务端的 prompt 缓存复用的是
-        **最长公共前缀**。记忆每轮都变，把它和历史一起塞进 system，前缀从人设之后
-        就断了，历史再长也复用不了。拆开之后顺序是
-
-            [system 人设]  [历史各轮]  [这轮记忆 + 这轮的话]
-             └── 稳定，可复用 ──┘      └ 变的全在最后
-
-        不传 history 就是老行为（两条消息），既有调用方不受影响。
+        Library defaults append context to user input for history prefix reuse;
+        Studio opts into system context to keep private directives out of speech.
         """
         nonlocal client
         if client is None:
@@ -116,12 +129,8 @@ def openai_reply(model: str | None = None, api_key: str | None = None,
                 api_key=resolve_api_key(api_key),
                 base_url=resolve_base_url(base_url),
             )
-        msgs = [{"role": "system", "content": system or default_system()}]
-        msgs += list(history or [])
-        # 记忆跟本轮的话放同一条消息：它是"回答这句话时该知道的事"，本来就属于
-        # 这一轮；单独一条 system 会把它变成前缀的一部分，缓存又断了。
-        msgs.append({"role": "user",
-                     "content": f"{memory_context}\n\n{text}" if memory_context else text})
+        msgs = compose_reply_messages(text, memory_context, history, system=system,
+                                      context_as_system=context_as_system)
         request = {"model": resolve_model(model, "reply"), "stream": True, "messages": msgs}
         if str(request["model"]).startswith("qwen"):
             options = _REQUEST_OPTIONS.get() or ReplyRequestOptions()
@@ -141,8 +150,9 @@ def openai_reply(model: str | None = None, api_key: str | None = None,
 
 def deepseek_reply(model: str | None = None, api_key: str | None = None,
                    base_url: str | None = None, system: str | None = None,
-                   protocol: str = "deepseek") -> Callable:
-    """DeepSeek 流式语音回复：独立凭据，不改变后台记忆整理的厂商配置。"""
+                   protocol: str = "deepseek", *,
+                   context_as_system: bool = False) -> Callable:
+    """Stream DeepSeek or Qwen replies with optional system-scoped backend context."""
     key = api_key or os.environ.get("DEEPSEEK_API_KEY")
     if not key:
         raise ValueError("DeepSeek 回复需要 DEEPSEEK_API_KEY；不要把密钥写进仓库")
@@ -194,10 +204,8 @@ def deepseek_reply(model: str | None = None, api_key: str | None = None,
 
     async def fn(text: str, memory_context: str = "", history: list | None = None):
         nonlocal client
-        messages = [{"role": "system", "content": system or default_system()}]
-        messages += list(history or [])
-        messages.append({"role": "user", "content":
-                         f"{memory_context}\n\n{text}" if memory_context else text})
+        messages = compose_reply_messages(text, memory_context, history, system=system,
+                                          context_as_system=context_as_system)
         # Consume SSE directly so early generator closure releases httpcore cleanly.
         options = _REQUEST_OPTIONS.get() or ReplyRequestOptions()
         effort = options.reasoning_effort

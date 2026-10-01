@@ -27,42 +27,43 @@ class WorkFillerPolicyTests(unittest.TestCase):
 
     def test_default_limits_and_validation(self):
         machine = TurnTakingStateMachine()
-        self.assertEqual(machine.work_filler_probability, .3)
+        self.assertTrue(machine.work_filler_enabled)
+        self.assertEqual(machine.long_filler_after_s, 1.5)
         self.assertEqual(machine.work_filler_cooldown_s, 20)
-        for probability in (-1, 1.01, float('nan')):
+        for delay in (-1, float('inf'), float('nan')):
             with self.assertRaises(ValueError):
-                TurnTakingStateMachine(work_filler_probability=probability)
+                TurnTakingStateMachine(long_filler_after_s=delay)
+        with self.assertRaises(ValueError):
+            TurnTakingStateMachine(work_filler_enabled='silent')
         for cooldown in (-1, float('inf'), float('nan')):
             with self.assertRaises(ValueError):
                 TurnTakingStateMachine(work_filler_cooldown_s=cooldown)
 
-    def test_one_draw_per_confirmed_turn_including_retries(self):
-        rng = Mock(random=Mock(side_effect=[.8, .1]))
-        machine = TurnTakingStateMachine(filler_rng=rng)
+    def test_deep_turns_are_eligible_independent_of_predicted_wait(self):
+        machine = TurnTakingStateMachine(initial_wait_s=.1)
         machine.commit_user_turn()
-        self.assertIs(self.choose(machine).kind, HandoffKind.DIRECT)
+        decision = self.choose(machine)
+        self.assertIs(decision.kind, HandoffKind.LLM_FILLER)
+        self.assertEqual(decision.filler_after_s, 1.5)
         machine.begin_user_turn()
-        self.assertIs(self.choose(machine).kind, HandoffKind.DIRECT)
-        self.assertEqual(rng.random.call_count, 1)
+        self.assertIs(self.choose(machine).kind, HandoffKind.LLM_FILLER)
         machine.commit_user_turn()
         self.assertIs(self.choose(machine).kind, HandoffKind.LLM_FILLER)
         self.assertIs(self.choose(machine).kind, HandoffKind.LLM_FILLER)
-        self.assertEqual(rng.random.call_count, 2)
 
-    def test_ready_text_and_ordinary_turns_do_not_draw(self):
-        machine = TurnTakingStateMachine(filler_rng=Mock())
+    def test_ready_text_and_ordinary_turns_do_not_offer_long_filler(self):
+        machine = TurnTakingStateMachine()
         for kwargs in ({'main_audio_ready':True}, {'spoken':False},
                        {'reply_mode':'direct'}, {'reply_mode':'memory'}):
-            self.choose(machine, **kwargs)
-        machine.filler_rng.random.assert_not_called()
+            self.assertIsNot(self.choose(machine, **kwargs).kind, HandoffKind.LLM_FILLER)
 
-    def test_probability_miss_does_not_fall_back_to_cached_ack(self):
-        machine = TurnTakingStateMachine(initial_wait_s=10, work_filler_probability=0)
-        self.assertEqual(self.choose(machine).reason, 'filler_probability')
+    def test_silent_does_not_fall_back_to_cached_ack(self):
+        machine = TurnTakingStateMachine(initial_wait_s=10, work_filler_enabled=False)
+        self.assertEqual(self.choose(machine).reason, 'filler_silent')
         self.assertIs(self.choose(machine).kind, HandoffKind.DIRECT)
 
     def test_cooldown_covers_clip_and_twenty_seconds_then_new_turn(self):
-        machine = TurnTakingStateMachine(work_filler_probability=1)
+        machine = TurnTakingStateMachine()
         machine.record_work_filler(4, now=100)
         machine.commit_user_turn()
         self.assertEqual(self.choose(machine, now=123).reason, 'filler_cooldown')
@@ -72,34 +73,36 @@ class WorkFillerPolicyTests(unittest.TestCase):
         self.assertIs(self.choose(machine, now=125).kind, HandoffKind.LLM_FILLER)
 
     def test_cancelled_or_failed_attempt_does_not_start_cooldown(self):
-        machine = TurnTakingStateMachine(work_filler_probability=1)
+        machine = TurnTakingStateMachine()
         self.choose(machine)
         machine.finish_reply()
         machine.commit_user_turn()
         self.assertIs(self.choose(machine, now=101).kind, HandoffKind.LLM_FILLER)
 
     def test_cooldown_is_session_local_and_does_not_change_short_ack(self):
-        first = TurnTakingStateMachine(work_filler_probability=1, initial_wait_s=2)
-        second = TurnTakingStateMachine(work_filler_probability=1)
+        first = TurnTakingStateMachine(initial_wait_s=2)
+        second = TurnTakingStateMachine()
         first.record_work_filler(4, now=100)
         self.assertIs(self.choose(second).kind, HandoffKind.LLM_FILLER)
         self.assertIs(self.choose(first, reply_mode='memory').kind, HandoffKind.CACHED_ACK)
-        self.assertIsNot(first.filler_rng, first.backchannel.rng)
+        self.assertIsNot(first.backchannel.rng, second.backchannel.rng)
 
     def test_self_harness_turn_taking_overlay_is_session_local_and_resettable(self):
-        machine = TurnTakingStateMachine(work_filler_probability=.3)
+        machine = TurnTakingStateMachine()
         apply_turn_taking_profile(machine, {"turn_taking": {
             "backchannel": "off", "work_filler": "silent"}})
         self.assertFalse(machine.backchannel.enabled)
-        self.assertEqual(machine.work_filler_probability, 0)
+        self.assertFalse(machine.work_filler_enabled)
         apply_turn_taking_profile(machine, {"turn_taking": {
             "backchannel": "more", "work_filler": "reassuring"}})
         self.assertTrue(machine.backchannel.enabled)
         self.assertEqual(machine.backchannel.frequency, "more")
-        self.assertEqual(machine.work_filler_probability, .75)
+        self.assertTrue(machine.work_filler_enabled)
+        self.assertEqual(machine.long_filler_after_s, .8)
         apply_turn_taking_profile(machine, {})
         self.assertEqual(machine.backchannel.frequency, "auto")
-        self.assertEqual(machine.work_filler_probability, .3)
+        self.assertTrue(machine.work_filler_enabled)
+        self.assertEqual(machine.long_filler_after_s, 1.5)
 
 
 class LocalFillerTests(unittest.IsolatedAsyncioTestCase):
@@ -324,6 +327,83 @@ class FillerHandoffTests(unittest.IsolatedAsyncioTestCase):
 
     def release(self):
         return self.session.release_buffered_reply(self.sink, self.decision, None, self.value, object(), 'fixture')
+
+    async def test_fast_main_audio_skips_filler_without_waiting_for_threshold(self):
+        self.decision.filler_after_s = 10
+        self.session.synthesize_work_filler = AsyncMock()
+        task = asyncio.create_task(self.release())
+        await self.sink.send({'type':'answer_start'})
+        await self.sink.send_audio(bytes(480))
+        await asyncio.wait_for(task, 1)
+        self.session.synthesize_work_filler.assert_not_awaited()
+        self.assertTrue(self.sink.live)
+        self.assertEqual(self.events, [{'type':'answer_start'}])
+
+    async def test_audio_free_completion_and_error_skip_filler(self):
+        for event in ('answer_done', 'error'):
+            with self.subTest(event=event):
+                self.setUp()
+                self.decision.filler_after_s = 10
+                self.session.synthesize_work_filler = AsyncMock()
+                task = asyncio.create_task(self.release())
+                await self.sink.send({'type':event})
+                await asyncio.wait_for(task, 1)
+                self.session.synthesize_work_filler.assert_not_awaited()
+                self.assertEqual(self.events, [{'type':event}])
+
+    async def test_filler_generation_starts_only_after_actual_wait(self):
+        entered = asyncio.Event()
+        self.decision.filler_after_s = .06
+        self.value.speech_end = time.monotonic()
+        async def work(*_):
+            entered.set()
+            return ('', b'')
+        self.session.synthesize_work_filler = AsyncMock(side_effect=work)
+        task = asyncio.create_task(self.release())
+        await asyncio.sleep(.005)
+        self.session.synthesize_work_filler.assert_not_awaited()
+        await asyncio.wait_for(entered.wait(), 1)
+        self.assertGreaterEqual(time.monotonic() - self.value.speech_end, .06)
+        await asyncio.wait_for(task, 1)
+        self.session.synthesize_work_filler.assert_awaited_once()
+
+    async def test_confirmation_wait_is_included_in_filler_deadline(self):
+        self.decision.filler_after_s = 10
+        self.value.speech_end = time.monotonic() - 11
+        self.session.synthesize_work_filler = AsyncMock(return_value=('', b''))
+        await asyncio.wait_for(self.release(), 1)
+        self.session.synthesize_work_filler.assert_awaited_once()
+
+    async def test_cancel_during_wait_reaps_readiness_without_generating_filler(self):
+        entered, closed = asyncio.Event(), asyncio.Event()
+        async def ready():
+            try:
+                entered.set()
+                await asyncio.Event().wait()
+            finally:
+                closed.set()
+        self.sink.wait_for_output = ready
+        self.decision.filler_after_s = 10
+        self.session.synthesize_work_filler = AsyncMock()
+        task = asyncio.create_task(self.release())
+        await asyncio.wait_for(entered.wait(), 1)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertTrue(closed.is_set())
+        self.session.synthesize_work_filler.assert_not_awaited()
+        self.assertFalse(self.events)
+
+    async def test_silent_selected_during_wait_prevents_filler(self):
+        self.decision.filler_after_s = .04
+        self.session.synthesize_work_filler = AsyncMock()
+        task = asyncio.create_task(self.release())
+        await asyncio.sleep(.005)
+        apply_turn_taking_profile(self.session.turn_taking, {
+            'turn_taking': {'work_filler': 'silent'}})
+        await asyncio.wait_for(task, 1)
+        self.session.synthesize_work_filler.assert_not_awaited()
+        self.assertFalse(self.events)
 
     async def test_main_ready_cancels_unplayed_filler_without_cooldown(self):
         cancelled = asyncio.Event()

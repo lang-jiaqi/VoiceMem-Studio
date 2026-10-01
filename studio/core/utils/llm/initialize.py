@@ -47,9 +47,10 @@ def create(system, provider=PROVIDER, api_key=None):
         model = cfg["model"]
         bundled = MODELS / "llm/Qwen3.5-4B-4bit"
         return LocalLLM(str(bundled if model == "mlx-community/Qwen3.5-4B-4bit" else Path(model)),
-                        system=system)
+                        system=system, context_as_system=True)
     from voicemem.reply import deepseek_reply, openai_reply
     cfg["api_key"] = api_key or credential(provider, "reply")
+    cfg["context_as_system"] = True
     if provider == "qwen":
         if not cfg["api_key"]:
             raise ValueError("Qwen 回复需要 DASHSCOPE_API_KEY")

@@ -110,7 +110,7 @@ def inspect(args, stage="all"):
         from studio.harness.reply_modes.policy import SYSTEM
         from studio.harness.self_harness.policy import CONTROL_RULE, PROFILE_SCHEMA
         from studio.harness.turn_taking.policy import (
-            CONTROLS, FILLER_PROMPT, FILLER_INPUT_PROMPT, WORK_FILLER_PROBABILITY,
+            CONTROLS, FILLER_PROMPT, FILLER_INPUT_PROMPT, WORK_FILLER_AFTER_S,
             WORK_FILLER_COOLDOWN_S, WORK_FILLER_TIMEOUT_S)
         if not all(isinstance(text, str) and text.strip() for text in (
                 SYSTEM_PROMPT, PROMPT, SYSTEM, CONTROL_RULE,
@@ -123,8 +123,8 @@ def inspect(args, stage="all"):
             raise ValueError('unfinished_followup_s must be positive')
         FILLER_PROMPT.format(task_context='')
         FILLER_INPUT_PROMPT.format(language='中文', history='', task_context='')
-        if not 0 <= WORK_FILLER_PROBABILITY <= 1:
-            raise ValueError('WORK_FILLER_PROBABILITY must be between zero and one')
+        if not 0 <= WORK_FILLER_AFTER_S < float('inf'):
+            raise ValueError('WORK_FILLER_AFTER_S must be finite and nonnegative')
         if not 0 <= WORK_FILLER_COOLDOWN_S < float('inf'):
             raise ValueError('WORK_FILLER_COOLDOWN_S must be finite and nonnegative')
         if not 0 < WORK_FILLER_TIMEOUT_S < float('inf'):
