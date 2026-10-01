@@ -339,6 +339,34 @@ lists are page-local and reset on refresh; opening a previous list item starts a
 new backend context for subsequent input. Both styles let each new chat choose a
 Memory Space. Chats retain that choice and share the Space's persistent memory;
 switching chats selects the corresponding backend Space before further turns.
+The technical, digital-human and mobile pet pages render assistant Markdown
+through one DOM-only preview, including headings, emphasis, lists, quotes, links,
+tables, code and delimited LaTeX math. Math is recognized before Markdown escapes
+or emphasis so `\[...\]`, `\(...\)`, `$$...$$` and `$...$` retain their commands
+and subscripts. Fences labelled `math`, `latex` or `tex` also use math layout;
+ordinary code, escaped dollars and currency remain literal. A vendored KaTeX
+0.18.10 runtime, stylesheet, fonts and license ship with the UI; users do not
+need a browser CDN or an additional npm install for formulas. Mobile asset
+versioning and caching include these files and their relative font URLs.
+KaTeX receives untrusted input with resource/HTML commands disabled, fresh macros
+per expression, bounded expansion, bounded size and an 8192-character input
+limit. Incomplete streaming math waits for closure; malformed final input falls
+back to text without failing the reply. Up to 128 rendered expressions are
+cached in the page to avoid repeated parsing of unchanged formulas on each
+streaming frame. Formula base size inherits the reply font; superscripts and
+fractions retain their mathematical proportions, and wide display formulas
+scroll inside the reply. Root containers retain their page-specific typography; nested
+paragraphs, headings, code and tables inherit the existing font size and line
+height. Desktop reading-size rules target the reply root, not nested Markdown
+paragraphs, so the common stylesheet cannot enlarge only part of an answer.
+Browser text-size adjustment is fixed at 100 percent to prevent independent
+mobile block inflation; user zoom and content-size settings remain available.
+Heading weight distinguishes sections without enlarging subtitle text.
+Raw HTML remains text, images display their alt text, and only HTTP, HTTPS or
+mailto links are clickable. Streaming paints coalesce per animation frame;
+completion/reset cancels stale paints. User transcripts remain plain text, and
+copy/history retain source Markdown. Interrupted previews render the heard
+prefix without requiring closing formatting markers.
 The brain backdrop remains an illustration, while graph nodes are rebuilt from
 the current Space's `/api/memories` snapshot. Node placement uses the visible
 hemisphere bounds and keeps space between memory nodes and domain labels on
@@ -862,6 +890,14 @@ participates in depth classification.
 Provider-neutral request options carry the required reasoning across async reply
 iteration: `direct` and `memory` use non-thinking generation, while `memory_cot`
 uses high effort. Reasoning content remains private and is never spoken.
+The DeepSeek/Qwen SSE adapter requires nonempty answer content at normal EOF;
+reasoning-only completion is a failure, including `finish_reason=length`.
+Before any nonblank answer content is emitted, it may retry once with a fresh
+connection and the same input, reasoning effort and token budget. Partial answers
+are never replayed, and cancellation does not retry. Stream diagnostics record
+completion reason, duration and character counts without logging generated text.
+The first-event timeout includes reasoning events; it does not impose a separate
+deadline on reasoning duration or reduce the requested reasoning effort.
 
 Auxiliary conversation-title generation follows the configured Studio reply
 provider and model with its own short prompt. In particular, DeepSeek reply
@@ -932,8 +968,41 @@ a deadline flush. Sentence endings release promptly; comma boundaries are a
 fallback for long phrases. Bounded first/rest waits and maximum lengths prevent
 indefinite buffering. Confirmed active playback headroom permits a longer bounded
 wait for subsequent phrases, without changing client playback or filler gates.
-Text offsets retain the original reply, including punctuation; only unsent text
-may be regrouped. Cancellation reaps the segmenter together with synthesis and
+After private control and tone parsing, Studio sends the original Markdown to
+the browser and keeps it as the reply history. A reply-local `MarkdownSpeech`
+parser emits separate speech text plus source code-point boundaries before
+sentence segmentation. It removes common formatting and link targets. Fenced
+code becomes a brief viewing cue as soon as its bounded language header is
+available; its body is skipped while the model continues streaming. Fences
+labelled `math`, `latex` or `tex` use formula cues. Delimited math (`$...$`,
+`$$...$$`, `\(...\)` and `\[...\]`) uses at most 256 source characters of
+lookahead: short numeric expressions become spoken operators, and complex
+expressions become viewing cues. Recognizable complex syntax can release a cue
+before the closing delimiter arrives. Inline code retains short identifiers and
+simple expressions; long, multiline or symbol-dense snippets use an inline
+reference. Numeric expressions are parsed, never evaluated. Ordinary unmarked
+arithmetic remains unchanged, and currency text is preserved when distinguishable
+from math. Pipe-prefixed tables with a separator row become comma-separated
+spoken cells. Cue wording rotates from a random reply-local starting position
+in the captured space language, without shared cross-session cue counters. Repeated
+block cues require 64 new prose characters and are capped at three per type per
+reply; adjacent blocks do not each add another announcement. Short inline
+references remain available where omitting them would break a spoken sentence.
+The speaking harness asks the reply model to retain complete display material
+and supply useful oral explanations around it, without duplicating viewing
+cues. The projection itself does not infer or summarize a formula's meaning and
+does not issue a second LLM request. Ambiguous syntax uses bounded lookahead;
+ordinary prose does not wait for the entire reply or an emphasis closing marker.
+Only normal EOF flushes pending syntax.
+Segment and provider timing offsets refer to the actual synthesized text;
+`AudioTimeline` maps heard prefixes back to the original Markdown before browser,
+context or memory consumers receive them. Formatting-only skipped ranges advance
+source boundaries without adding speech duration. A viewing cue maps to the
+source material it references, rather than pretending the code was literally
+read aloud; following unheard prose stays outside that span. Buffered short
+inline content does not advance source boundaries before its speech is emitted.
+Realtime/direct timeline callers retain their original plain-text behavior. Only unsent text may be
+regrouped. Cancellation reaps the segmenter together with synthesis and
 delivery, and discarded text is never flushed into a replacement reply. This
 policy is shared by CUDA and MLX; their inference and PCM chunk settings are unchanged.
 
@@ -1022,6 +1091,11 @@ DeepSeek-only deployments require only DeepSeek credentials.
 Torch-backed embedding and related MPS operations use the process-level lock in
 `utils/torch_lock.py`. Lock scope covers device inference, not unrelated search
 coordination or waits on work that may need the same lock.
+Shared embedding lookup and construction also acquire this lock before checking
+the cache, preventing concurrent cold loads from initializing MPS alongside ASR
+or another encoder. Equivalent omitted, positional and keyword tokenizer defaults
+resolve to one cache entry; memory, Gate, slot classification and Studio perception
+reuse the same weights. Distinct tokenizer settings retain distinct entries.
 The optional local work-filler decoder also reuses this lock, releasing it
 between forward passes so a whole sentence does not monopolize ASR/router
 access. Each request owns its KV cache and checks cancellation and deadline

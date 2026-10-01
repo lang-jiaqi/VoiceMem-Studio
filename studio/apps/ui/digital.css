@@ -175,11 +175,11 @@ body.memory-on .log-glass{opacity:0;transform:translateZ(0) scale(.975) translat
 .log-scroll::-webkit-scrollbar-thumb{background:#ffffffcc;border-radius:4px}
 .turn{max-width:min(62ch,86%);margin-bottom:18px;animation:rise var(--slow) var(--ease) both}
 .turn .from{font-size:calc(11.5px * var(--font-scale,1));color:#625f6e;margin-bottom:3px}
-.turn p{font-size:calc(14.5px * var(--font-scale,1));line-height:1.85;color:#2f2d39;white-space:pre-wrap;overflow-wrap:anywhere}
+.turn .turn-body{font-size:calc(14.5px * var(--font-scale,1));line-height:1.85;color:#2f2d39;white-space:pre-wrap;overflow-wrap:anywhere}
 .turn.me{margin-left:auto}
 .turn.me .from{text-align:right}
-.turn.me p{padding:10px 14px;border-radius:16px 16px 4px 16px;background:rgba(255,255,255,.72)}
-.turn.her p{font-family:var(--serif);font-size:calc(15.5px * var(--font-scale,1));line-height:1.95}
+.turn.me .turn-body{padding:10px 14px;border-radius:16px 16px 4px 16px;background:rgba(255,255,255,.72)}
+.turn.her .turn-body{font-family:var(--serif);font-size:calc(15.5px * var(--font-scale,1));line-height:1.95}
 .turn .marks{margin-top:7px;min-height:0}
 .log-empty{color:#625f6e;font-size:calc(14px * var(--font-scale,1));padding:14px 0}
 

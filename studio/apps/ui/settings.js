@@ -74,7 +74,7 @@ function t(value){
 }
 en.set('事实记忆','info');en.set('说话人 ID','Speaker ID');
 const textCache=new WeakMap(),attrCache=new WeakMap();
-const skip='script,style,textarea,input,[data-no-i18n],.msg-body,.turn p,.conv-title,.conv-select,.item,#liveEcho,#liveEchoPrev,#aiEcho,#said,#voice';
+const skip='script,style,textarea,input,[data-no-i18n],.msg-body,.turn p,.turn .turn-body,.conv-title,.conv-select,.item,#liveEcho,#liveEchoPrev,#aiEcho,#said,#voice';
 function translate(root=document.body){
  const walk=node=>{
   if(node.nodeType===3){const parent=node.parentElement;if(!parent||parent.closest(skip))return;

@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#302734">
-<title>VoiceMem Studio</title><link rel="stylesheet" href="/ui/pet-mobile.css"></head>
+<title>VoiceMem Studio</title><link rel="stylesheet" href="/ui/pet-mobile.css"><link rel="stylesheet" href="/ui/vendor/katex/katex.min.css"><link rel="stylesheet" href="/ui/markdown.css"></head>
 <body>
 <main class="pet-page">
   <canvas id="live" hidden aria-label="白藤"></canvas>
@@ -15,5 +15,5 @@
 <div id="toast" role="status" hidden></div>
 <script>window.VM_PET_ASSET_ROOT=new URL('/pet/',location.href).href;window.VM_PET_PORTRAIT=true;window.VM_PET_MOBILE=true;window.VMUI={notify(message){const n=document.getElementById('toast');n.textContent=message;n.hidden=false;clearTimeout(n._timer);n._timer=setTimeout(()=>n.hidden=true,4500);}};</script>
 <script defer src="/pet/avatar-parameter-controller.js"></script><script defer src="/pet/avatar-behavior-controller.js"></script><script defer src="/pet/audio-lip-sync.js"></script><script defer src="/pet/live2d-renderer.js"></script><script defer src="/pet/avatar-controller.js"></script>
-<script defer src="/ui/studio-client.js"></script><script defer src="/ui/pet-mobile.js"></script>
+<script defer src="/ui/studio-client.js"></script><script defer src="/ui/vendor/katex/katex.min.js"></script><script defer src="/ui/markdown.js"></script><script defer src="/ui/pet-mobile.js"></script>
 </body></html>

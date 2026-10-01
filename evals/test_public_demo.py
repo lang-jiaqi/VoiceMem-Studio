@@ -165,7 +165,9 @@ class PublicDemoTest(unittest.TestCase):
         prefix = re.search(r"/pet/v/[0-9a-f]{16}", page.text).group()
         self.assertIn(f"new URL('{prefix}/',location.href)", page.text)
         for path in ("avatar-controller.js", "ui/studio-client.js", "ui/pet-mobile.js",
-                     "vendor/pixi.min.js", "vendor/cubism4.min.js", "ui/pet-mobile.css"):
+                     "vendor/pixi.min.js", "vendor/cubism4.min.js", "ui/pet-mobile.css",
+                     "ui/markdown.js", "ui/markdown.css", "ui/vendor/katex/katex.min.js",
+                     "ui/vendor/katex/katex.min.css", "ui/vendor/katex/fonts/KaTeX_Main-Regular.woff2"):
             with self.subTest(path=path):
                 url = f"{prefix}/{path}"
                 response = client.get(url)
@@ -196,13 +198,33 @@ class PublicDemoTest(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.headers["cache-control"], "no-store")
 
+    def test_mobile_math_runtime_and_font_urls_use_local_versioned_assets(self):
+        client = self.client()
+        self.register(client, "alice")
+        page = client.get("/ui/pet-mobile.html")
+        prefix = re.search(r"/pet/v/[0-9a-f]{16}", page.text).group()
+        scripts = [entry["src"] for entry in PageResources(page.text).scripts]
+        self.assertLess(scripts.index(f"{prefix}/ui/vendor/katex/katex.min.js"),
+                        scripts.index(f"{prefix}/ui/markdown.js"))
+        self.assertLess(scripts.index(f"{prefix}/ui/markdown.js"),
+                        scripts.index(f"{prefix}/ui/pet-mobile.js"))
+        css = client.get(f"{prefix}/ui/vendor/katex/katex.min.css").text
+        fonts = set(re.findall(r"url\((fonts/[^)]+)\)", css))
+        self.assertTrue(fonts)
+        self.assertNotIn("https://", css)
+        for font in fonts:
+            response = client.get(f"{prefix}/ui/vendor/katex/{font}")
+            self.assertEqual(response.status_code, 200, font)
+            self.assertIn("immutable", response.headers["cache-control"])
+            self.assertGreater(len(response.content), 1024, font)
+
     def test_first_visit_preloads_match_authenticated_runtime_and_model_urls(self):
         client = self.client()
         self.register(client, "alice")
         page = client.get("/ui/pet-mobile.html")
         prefix = re.search(r"/pet/v/[0-9a-f]{16}", page.text).group()
         resources = PageResources(page.text)
-        self.assertEqual(len(resources.scripts), 7)
+        self.assertEqual(len(resources.scripts), 9)
         self.assertTrue(all("defer" in script for script in resources.scripts))
         links = {item["href"]: item for item in resources.preloads}
         model_url = f"{prefix}/{MODEL_PATH}"
@@ -388,7 +410,9 @@ class MobileAssetVersionTests(unittest.TestCase):
     def test_model_texture_scripts_styles_and_runtime_updates_change_version(self):
         for path in (self.pet / "assets" / "model.moc3", self.pet / "assets" / "texture.png",
                      self.pet / "avatar-controller.js", self.ui / "studio-client.js",
-                     self.ui / "pet-mobile.css", self.vendor / PET_VENDORS["pixi.min.js"]):
+                     self.ui / "pet-mobile.css", self.vendor / PET_VENDORS["pixi.min.js"],
+                     self.ui / "vendor/katex/katex.min.js", self.ui / "vendor/katex/katex.min.css",
+                     self.ui / "vendor/katex/fonts/KaTeX_Main-Regular.woff2"):
             with self.subTest(path=path.name):
                 before = self.bundle()
                 path.write_bytes(path.read_bytes() + b"updated")

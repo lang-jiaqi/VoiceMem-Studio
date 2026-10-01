@@ -4,8 +4,10 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>VoiceMem · 技术空间</title>
-<link rel="stylesheet" href="technical.css" />
-<link rel="stylesheet" href="ui.css?v=20260928-2" />
+<link rel="stylesheet" href="technical.css?v=20261001-1" />
+<link rel="stylesheet" href="vendor/katex/katex.min.css?v=0.18.10">
+<link rel="stylesheet" href="markdown.css?v=20261001-3">
+<link rel="stylesheet" href="ui.css?v=20261001-2" />
 <link rel="stylesheet" href="settings.css?v=20260921-4" />
 </head>
 <body data-style="technical">
@@ -99,7 +101,7 @@
       </div>
       <section class="airesp" aria-labelledby="responseHeading">
         <h2 class="label" id="responseHeading">模型回复</h2>
-        <p class="empty" id="aiEcho" aria-live="polite">回答会同步显示在这里。</p>
+        <div class="empty" id="aiEcho" aria-live="polite">回答会同步显示在这里。</div>
       </section>
     </section>
 
@@ -131,9 +133,11 @@
 <script src="ui.js"></script>
 <script src="studio-client.js?v=20260921-4"></script>
 <script src="conversation-spaces.js?v=20260928-3"></script>
-<script src="settings.js?v=20260921-4"></script>
+<script src="settings.js?v=20261001-2"></script>
 <script src="liquid-orb.js"></script>
-<script src="technical.js?v=20260925-1"></script>
+<script src="vendor/katex/katex.min.js?v=0.18.10"></script>
+<script src="markdown.js?v=20261001-3"></script>
+<script src="technical.js?v=20261001-1"></script>
 <script src="memory-scene.js?v=20260928-3"></script>
 </body>
 </html>

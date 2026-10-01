@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import os
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -200,6 +201,9 @@ def deepseek_reply(model: str | None = None, api_key: str | None = None,
                         content = delta.get("content")
                         if content:
                             yield "content", content
+                        finish_reason = choices[0].get("finish_reason")
+                        if finish_reason:
+                            yield "finish", finish_reason
             raise RuntimeError("DeepSeek stream ended before [DONE]")
 
     async def fn(text: str, memory_context: str = "", history: list | None = None):
@@ -220,31 +224,64 @@ def deepseek_reply(model: str | None = None, api_key: str | None = None,
             request["enable_thinking"] = effort != "none"
         elif effort != "none":
             request["reasoning_effort"] = effort
-        record_request("llm", protocol, request)
         last_error = None
         for attempt in range(2):
             if client is None:
                 client = httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0))
             active_client = client
+            record_request("llm", protocol, request)
             stream = stream_once(active_client, request)
+            started = time.monotonic()
+            content_chars = reasoning_chars = 0
+            has_content = False
+            finish_reason = "unknown"
+            status = "failed"
             try:
-                # SSE keepalives renew httpx's read timeout. Enforce wall-clock
-                # time so a live connection cannot wait forever without content.
+                # Keepalives renew the read timeout; bound the first content or
+                # reasoning event separately from the remaining token stream.
                 first = await asyncio.wait_for(
                     anext(stream), timeout=first_token_timeout)
+                kind, value = first
+                while True:
+                    if kind == "content":
+                        content_chars += len(value)
+                        has_content = has_content or bool(value.strip())
+                        yield value
+                    elif kind == "reasoning":
+                        if not reasoning_chars:
+                            print(f"[llm] {protocol} thinking started effort={effort} "
+                                  f"attempt={attempt + 1}", flush=True)
+                        reasoning_chars += len(value)
+                    elif kind == "finish":
+                        finish_reason = value
+                    try:
+                        kind, value = await anext(stream)
+                    except StopAsyncIteration:
+                        break
+                if not has_content:
+                    raise RuntimeError(
+                        f"{protocol} returned no answer content "
+                        f"(finish_reason={finish_reason}, reasoning_chars={reasoning_chars})")
+                status = "complete"
+                return
             except asyncio.CancelledError:
-                await stream.aclose()
+                status = "cancelled"
+                raise
+            except GeneratorExit:
+                status = "closed"
                 raise
             except httpx.HTTPStatusError:
-                await stream.aclose()
                 raise                         # Explicit HTTP failures are not transient stalls.
             except (asyncio.TimeoutError, httpx.TransportError,
                     RuntimeError, StopAsyncIteration) as exc:
                 last_error = exc
                 await stream.aclose()
+                # Never replay an answer whose content has already been emitted.
+                if has_content:
+                    raise
                 if attempt == 0:
-                    print(f"[llm] DeepSeek 首字超时/断流，立即换连接重试一次："
-                          f"{type(exc).__name__}", flush=True)
+                    print(f"[llm] {protocol} 首字超时/断流/空正文，换连接重试一次："
+                          f"{type(exc).__name__} finish_reason={finish_reason}", flush=True)
                     await reset_client(active_client)
                     continue
                 await reset_client(active_client)
@@ -254,17 +291,12 @@ def deepseek_reply(model: str | None = None, api_key: str | None = None,
                 if isinstance(exc, StopAsyncIteration):
                     raise RuntimeError("DeepSeek 连续两次返回了空回复") from exc
                 raise
-            else:
-                try:
-                    kind, value = first
-                    if kind == "content":
-                        yield value
-                    async for kind, value in stream:
-                        if kind == "content":
-                            yield value
-                    return
-                finally:
-                    await stream.aclose()
+            finally:
+                await stream.aclose()
+                print(f"[llm] {protocol} stream status={status} effort={effort} "
+                      f"attempt={attempt + 1} elapsed_ms={(time.monotonic() - started) * 1000:.0f} "
+                      f"finish_reason={finish_reason} content_chars={content_chars} "
+                      f"reasoning_chars={reasoning_chars}", flush=True)
         raise RuntimeError("DeepSeek reply failed") from last_error
 
     async def close():

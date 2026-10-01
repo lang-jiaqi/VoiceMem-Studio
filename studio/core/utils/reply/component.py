@@ -143,6 +143,8 @@ class Reply:
             speak_as = tts_control.instruction(forced_tone, speak_base)
         control = {"head": control_enabled, "buf": ""}
         tone = {"tag": "", "head": True, "buf": ""}
+        from studio.core.utils.tts.markdown import MarkdownSpeech
+        speech_markdown = MarkdownSpeech(getattr(self, "SPACE_LANG", "zh"))
         logged_instruction = object()
 
         qwen_voice = is_qwen36(getattr(self, "REPLY", None))
@@ -158,7 +160,7 @@ class Reply:
                     effective, "", "", qwen=qwen_voice)
             else:
                 effective = qwen_segment_instruction(
-                    effective, pending.text, reply[:text_start + len(seg)],
+                    effective, pending.text, timeline.generated_text[:text_start + len(seg)],
                     qwen=qwen_voice)
             effective = speech_rate_instruction(
                 effective, active_self_harness)
@@ -365,14 +367,21 @@ class Reply:
                 elif "tone" in effective.get("speaking_style", {}):
                     speak_as = self._speak_instruction(pending.emotion)
 
+            def emit_speech(delta, *, final=False):
+                spoken = speech_markdown.feed(delta, final=final)
+                timeline.append_speech_text(spoken.text, spoken.source_ends, spoken.consumed,
+                                            previous_end=spoken.previous_end)
+                if spoken.text:
+                    text_queue.put_nowait(spoken.text)
+
             async def emit_visible(delta):
                 nonlocal reply
                 if not delta:
                     return
                 reply += delta
-                timeline.append_text(delta)
+                timeline.append_source_text(delta)
                 await send({"type": "answer_delta", "text": delta})
-                text_queue.put_nowait(delta)
+                emit_speech(delta)
 
             async def consume_tone(delta, *, final=False):
                 nonlocal speak_as
@@ -432,6 +441,8 @@ class Reply:
                 await consume_tone(parsed.rest, final=True)
             else:
                 await consume_tone("", final=True)
+            if timeline.source_text is not None:
+                emit_speech("", final=True)
         except asyncio.CancelledError:
             interrupted = True
         except Exception:

@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Markdown typography regression</title>
+<style>
+  body { margin:24px; font:14px/1.6 system-ui,sans-serif; background:#faf9fc; color:#28232f; }
+  h1 { font-size:18px; } #summary { font-weight:600; }
+  iframe { position:fixed; left:-20000px; top:0; border:0; }
+  td, th { padding:5px 12px; text-align:left; border-bottom:1px solid #ddd; }
+  .fail { color:#b22; }
+</style>
+<h1>Markdown typography regression</h1>
+<p id="summary">Running full stylesheet cascade checks…</p>
+<table><thead><tr><th>Surface</th><th>Viewport</th><th>Content scale</th><th>Reply size</th><th>Result</th></tr></thead><tbody id="results"></tbody></table>
+<script>
+// Load the real stylesheets in page order, including shared reading-size rules.
+const asset = name => new URL('../studio/apps/ui/' + name, location.href).href;
+const sample = '# 标题一\n## 标题二\n### 标题三\n#### 标题四\n##### 标题五\n###### 标题六\n正文 **加粗**、*斜体*、~~删除线~~、`x_1`。\n\n- 普通列表\n  - 嵌套列表\n\n1. 编号列表\n\n> 引用\n\n```python\nattention = softmax(Q @ K.T / sqrt(d)) @ V\n```\n\n| 内容 | 结果 |\n| --- | --- |\n| 计算 | **完成** |\n\n查询 $q$，键 $k_i$。\n\\[\n\\mathrm{Attention}(Q,K,V)=\\mathrm{softmax}\\left(\\frac{QK^\\top}{\\sqrt{d_k}}\\right)V\n\\]\n解释 $QK^\\top$ 和 $\\sqrt{d_k}$。';
+const cases = [
+  {name:'Mobile chat', style:'pet-mobile', body:'', markup:'<div class="chat-turn user"><div class="chat-bubble" id="user">用户正文</div></div><div class="chat-turn assistant"><div class="chat-bubble" id="reply"></div></div>'},
+  {name:'Digital subtitle', style:'digital', body:'digital', markup:'<p class="said" id="user">用户正文</p><div class="glass"><div class="voice" id="reply"></div></div>'},
+  {name:'Digital chat', style:'digital', body:'digital', markup:'<article class="turn me"><div class="turn-body" id="user">用户正文</div></article><article class="turn her"><div class="turn-body" id="reply"></div></article>'},
+  {name:'Technical subtitle', style:'technical', body:'technical', markup:'<p class="live-echo" id="user">用户正文</p><section class="airesp"><div id="aiEcho"></div></section>'},
+  {name:'Technical chat', style:'technical', body:'technical', markup:'<div class="msg-body" id="user">用户正文</div><div class="msg-body" id="reply"></div>'},
+];
+const checks = [];
+for (const width of [390,1200,2200]) for (const scale of [1,1.25]) for (const item of cases) checks.push({ ...item, width, scale });
+const frames = new Map(), reports = [];
+addEventListener('message', event => {
+  const check = frames.get(event.source);
+  if (!check || event.data?.type !== 'typography-result') return;
+  frames.delete(event.source);
+  const report = { ...check, ...event.data }; reports.push(report);
+  const tr = document.createElement('tr');
+  for (const text of [check.name,check.width,check.scale,report.font,report.ok?'PASS':report.errors.join('; ')]) {
+    const td=document.createElement('td');td.textContent=text;tr.append(td);
+  }
+  if (!report.ok) tr.className='fail';
+  document.getElementById('results').append(tr);
+  if (reports.length === checks.length) {
+    const failed=reports.filter(row=>!row.ok).length;
+    document.getElementById('summary').textContent=`${failed?'FAIL':'PASS'}: ${reports.length} full-cascade checks, ${failed} failures.`;
+    document.title=failed?'FAIL: Markdown typography':'PASS: Markdown typography';
+  }
+});
+for (const check of checks) {
+  const frame=document.createElement('iframe');frame.style.width=check.width+'px';frame.style.height='1100px';
+  const styles=[check.style+'.css','vendor/katex/katex.min.css','markdown.css',...(check.body?['ui.css','settings.css']:[])];
+  const childScript=`
+    const host=document.querySelector('#reply,#aiEcho');
+    VMMarkdown.render(host,${JSON.stringify(sample)});
+    const font=getComputedStyle(host).fontSize, line=getComputedStyle(host).lineHeight, errors=[];
+    if(getComputedStyle(document.getElementById('user')).fontSize!==font) errors.push('user/reply size differs');
+    for(const node of host.querySelectorAll('p,h1,h2,h3,h4,h5,h6,li,code,pre,table,th,td,strong,em,blockquote')) {
+      const style=getComputedStyle(node);
+      if(style.fontSize!==font) errors.push(node.tagName+': '+style.fontSize+' vs '+font);
+      if(style.lineHeight!==line) errors.push(node.tagName+' line-height: '+style.lineHeight+' vs '+line);
+    }
+    if(!host.querySelector('table')||!host.querySelector('pre')||!host.querySelector('h6')) errors.push('missing Markdown content');
+    if(!host.querySelector('p').textContent.includes('正文')) errors.push('missing paragraph');
+    if(host.querySelectorAll('.markdown-math .katex').length!==5) errors.push('missing typeset math');
+    if(host.querySelector('.markdown-math-fallback,.markdown-math-pending')) errors.push('math did not finish rendering');
+    for(const node of host.querySelectorAll('.markdown-math>.katex,.markdown-math>.katex-display>.katex')) {
+      if(getComputedStyle(node).fontSize!==font) errors.push('formula base font differs');
+    }
+    const display=host.querySelector('.markdown-math-display');
+    if(display.getBoundingClientRect().width>host.getBoundingClientRect().width+1) errors.push('formula exceeds reply width');
+    parent.postMessage({type:'typography-result',ok:!errors.length,font,errors},'*');
+  `;
+  frame.srcdoc='<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'+
+    styles.map(name=>'<link rel="stylesheet" href="'+asset(name)+'">').join('')+
+    '<body data-style="'+check.body+'">'+check.markup+
+    '<script>window.VMSettings={contentScale:'+check.scale+',uiScale:1};<\/script>'+
+    (check.body?'<script src="'+asset('ui.js')+'"><\/script>':'')+
+    '<script src="'+asset('vendor/katex/katex.min.js')+'"><\/script>'+
+    '<script src="'+asset('markdown.js')+'"><\/script><script>'+childScript+'<\/script>';
+  document.body.append(frame);frames.set(frame.contentWindow,check);
+}
+</script>

@@ -94,8 +94,8 @@ body{
 .mem .score{display:block;margin-top:5px;font-size:calc(10.5px * var(--font-scale,1));color:var(--faint);letter-spacing:.04em}
 .mem.enter{animation:memIn .38s ease both}
 @keyframes memIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-.airesp p{margin:16px 0 0;font-size:calc(13.5px * var(--font-scale,1));line-height:1.7;color:#dcdde3}
-.airesp p.empty{color:var(--faint)}
+.airesp #aiEcho{margin:16px 0 0;font-size:calc(13.5px * var(--font-scale,1));line-height:1.7;color:#dcdde3}
+.airesp #aiEcho.empty{color:var(--faint)}
 .caret{display:inline-block;width:7px;height:14px;margin-left:2px;vertical-align:-2px;background:var(--violet);animation:blink 1s steps(1,end) infinite}
 @keyframes blink{50%{opacity:0}}
 
@@ -282,7 +282,7 @@ html,body{background:#000}body{isolation:isolate}
 .mem{display:block;padding:6px 0!important;font-size:calc(12px * var(--font-scale,1));line-height:1.5;color:#c3c7d1;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-color:#ffffff08}
 .mem .score{display:none}
 .airesp{margin-top:12px;flex:1 0 auto;min-height:112px;padding:13px 12px;display:flex;flex-direction:column;overflow:visible}
-.airesp p{margin:9px 0 0;font-size:calc(12px * var(--font-scale,1));line-height:1.7;white-space:pre-wrap;overflow:visible;overflow-wrap:anywhere;flex:none;color:#c4c8d2}
+.airesp #aiEcho{margin:9px 0 0;font-size:calc(12px * var(--font-scale,1));line-height:1.7;white-space:pre-wrap;overflow:visible;overflow-wrap:anywhere;flex:none;color:#c4c8d2}
 .col-stage{position:relative;isolation:isolate;background:transparent;padding:24px!important}
 .view{position:relative;margin-top:20px}.space{display:flex;align-items:center;justify-content:center;overflow:hidden;padding-bottom:38px}
 .legend{left:0;bottom:12px;gap:12px;flex-wrap:wrap;font-size:calc(11px * var(--font-scale,1))}.hint{bottom:0;right:0;font-size:calc(10px * var(--font-scale,1))}

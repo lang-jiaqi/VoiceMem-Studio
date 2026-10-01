@@ -22,7 +22,11 @@ PET_VENDORS = {
     "pixi.min.js": "pixi.js/dist/browser/pixi.min.js",
     "cubism4.min.js": "pixi-live2d-display/dist/cubism4.min.js",
 }
-MOBILE_FILES = ("pet-mobile.css", "studio-client.js", "pet-mobile.js")
+_MATH_ROOT = Path(__file__).resolve().parents[1] / "apps" / "ui" / "vendor" / "katex"
+MATH_FILES = ("vendor/katex/katex.min.js", "vendor/katex/katex.min.css", *(
+    f"vendor/katex/fonts/{path.name}" for path in sorted((_MATH_ROOT / "fonts").glob("*"))
+    if path.is_file() and path.suffix in {".woff2", ".woff", ".ttf"}))
+MOBILE_FILES = ("pet-mobile.css", "studio-client.js", "pet-mobile.js", "markdown.js", "markdown.css", *MATH_FILES)
 CORE_PATH = "assets/live2d/vendor/live2dcubismcore.min.js"
 CORE_CDN = "https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"
 MODEL_PATH = "assets/live2d/rattan/rattan.model3.json"

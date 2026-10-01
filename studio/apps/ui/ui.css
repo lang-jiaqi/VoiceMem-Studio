@@ -1,5 +1,5 @@
 /* Shared timing only; each page owns its palette, layout and state. */
-:root{--motion-fast:180ms;--motion-view:420ms;--motion-ease:cubic-bezier(.22,.7,.25,1)}
+:root{--motion-fast:180ms;--motion-view:420ms;--motion-ease:cubic-bezier(.22,.7,.25,1);-webkit-text-size-adjust:100%;text-size-adjust:100%}
 button,a,input{ -webkit-tap-highlight-color:transparent }
 button:disabled{cursor:default;opacity:.45}
 [hidden]{display:none!important}
@@ -18,9 +18,9 @@ body[data-style=digital] .start-talk[aria-pressed=true]{background:#8c294b}
 
 /* Readable content in both styles. JS adds a bounded screen-size allowance. */
 :root{--reading-font:clamp(18px,calc(12px + .45vw),28px);--ui-font:clamp(14px,calc(10px + .25vw),19px)}
-body[data-style=technical] .live-echo,body[data-style=technical] .airesp p,
+body[data-style=technical] .live-echo,body[data-style=technical] .airesp #aiEcho,
 body[data-style=technical] .msg-body,body[data-style=digital] .said,
-body[data-style=digital] .voice,body[data-style=digital] .turn p{font-size:var(--reading-font);line-height:1.7;overflow-wrap:anywhere}
+body[data-style=digital] .voice,body[data-style=digital] .turn .turn-body{font-size:var(--reading-font);line-height:1.7;overflow-wrap:anywhere}
 body[data-style=technical] .live-echo{white-space:pre-wrap;overflow:visible;text-overflow:clip}
 body[data-style=technical] .input-wrap input,body[data-style=digital] .ask input{font-size:var(--memory-font,var(--reading-font))}
 body[data-style=technical] .label,

@@ -14,7 +14,7 @@ from voicemem.breeze_tts import BreezeMLXTTS
 ROOT = Path(__file__).resolve().parents[1]
 
 PROBE = r'''
-import ast, asyncio, json, os, queue, types
+import ast, asyncio, contextlib, json, os, queue, sys, types
 from pathlib import Path
 from unittest.mock import patch
 import httpx
@@ -44,7 +44,7 @@ def handle(req):
         'data: {"choices":[{"delta":{"content":"ok"}}]}\\n\\n'
         'data: [DONE]\\n\\n').replace('\\n','\n'))
 async def main():
-    with patch('httpx.AsyncClient', side_effect=lambda **kw: original(
+    with contextlib.redirect_stdout(sys.stderr), patch('httpx.AsyncClient', side_effect=lambda **kw: original(
             transport=httpx.MockTransport(handle), **kw)):
         reply = deepseek_reply(api_key='test-only', system=system)
         try:
@@ -121,6 +121,7 @@ class PromptConfigTests(unittest.TestCase):
         out = json.loads(result.stdout)
         self.assertIn('你是 VoiceMem Studio', out['system'])
         self.assertIn('语音控制协议', out['system'])
+        self.assertIn('略过这些结构化内容后仍然连贯、有帮助', out['system'])
         self.assertNotIn('学长修改的人设', out['system'])
         self.assertEqual(out['user'], '自定义无记忆提示。\n\n问题')
         self.assertEqual(out['tts']['instruct'], '自定义基调。自定义认真语气。')

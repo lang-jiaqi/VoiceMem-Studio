@@ -211,6 +211,121 @@ class DeepSeekTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(made), 2)
         self.assertTrue(all(b.closed for b in bodies))
 
+    async def test_reasoning_only_completion_retries_without_reducing_effort(self):
+        for protocol in ("deepseek", "qwen"):
+            bodies = [Body(
+                event({"choices": [{"delta": {"reasoning_content": "private"}}]})
+                + event({"choices": [{"delta": {}, "finish_reason": "length"}]})
+                + b"data: [DONE]\n\n"),
+                Body(event({"choices": [{"delta": {"content": "答案"}}]})
+                     + b"data: [DONE]\n\n")]
+            requests, clients = [], []
+            original = httpx.AsyncClient
+
+            def client(**kw):
+                body = bodies[len(clients)]
+                def handle(request):
+                    requests.append(json.loads(request.content))
+                    return httpx.Response(200, stream=body)
+                made = original(transport=httpx.MockTransport(handle), **kw)
+                clients.append(made)
+                return made
+
+            with self.subTest(protocol=protocol), patch("httpx.AsyncClient", side_effect=client):
+                provider = deepseek_reply(api_key="fixture", protocol=protocol)
+                try:
+                    with reply_request_options(reasoning_effort="high"):
+                        self.assertEqual([x async for x in provider("推导", "context")], ["答案"])
+                finally:
+                    await provider.aclose()
+            self.assertEqual(len(requests), 2)
+            self.assertEqual(requests[0], requests[1])
+            self.assertEqual(requests[1]["max_tokens"], 4096)
+            self.assertTrue(all(c.is_closed for c in clients))
+            self.assertTrue(all(b.closed for b in bodies))
+
+    async def test_repeated_reasoning_only_response_is_an_error(self):
+        bodies, clients = [], []
+        original = httpx.AsyncClient
+        def client(**kw):
+            body = Body(event({"choices": [{"delta": {"reasoning_content": "private"}}]})
+                        + event({"choices": [{"delta": {}, "finish_reason": "length"}]})
+                        + b"data: [DONE]\n\n")
+            bodies.append(body)
+            made = original(transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, stream=body)), **kw)
+            clients.append(made)
+            return made
+        with patch("httpx.AsyncClient", side_effect=client):
+            provider = deepseek_reply(api_key="fixture")
+            try:
+                with self.assertRaisesRegex(RuntimeError, "no answer content.*finish_reason=length"):
+                    await anext(provider("推导"))
+            finally:
+                await provider.aclose()
+        self.assertEqual(len(clients), 2)
+        self.assertTrue(all(b.closed for b in bodies))
+
+    async def test_empty_done_is_not_success(self):
+        calls = []
+        original = httpx.AsyncClient
+        def handle(request):
+            calls.append(request)
+            return httpx.Response(200, stream=Body(b"data: [DONE]\n\n"))
+        with patch("httpx.AsyncClient", side_effect=lambda **kw: original(
+                transport=httpx.MockTransport(handle), **kw)):
+            provider = deepseek_reply(api_key="fixture")
+            try:
+                with self.assertRaisesRegex(RuntimeError, "空回复"):
+                    await anext(provider("hello"))
+            finally:
+                await provider.aclose()
+        self.assertEqual(len(calls), 2)
+
+    async def test_partial_answer_failure_does_not_duplicate_output(self):
+        body = Body(event({"choices": [{"delta": {"content": "部分答案"}}]}))
+        calls = []
+        original = httpx.AsyncClient
+        def handle(request):
+            calls.append(request)
+            return httpx.Response(200, stream=body)
+        with patch("httpx.AsyncClient", side_effect=lambda **kw: original(
+                transport=httpx.MockTransport(handle), **kw)):
+            provider = deepseek_reply(api_key="fixture")
+            stream = provider("hello")
+            try:
+                self.assertEqual(await anext(stream), "部分答案")
+                with self.assertRaisesRegex(RuntimeError, "before.*DONE"):
+                    await anext(stream)
+            finally:
+                await stream.aclose()
+                await provider.aclose()
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(body.closed)
+
+    async def test_cancel_during_reasoning_closes_without_retry(self):
+        body = Body(event({"choices": [{"delta": {"reasoning_content": "private"}}]}), wait=True)
+        calls = []
+        original = httpx.AsyncClient
+        def handle(request):
+            calls.append(request)
+            return httpx.Response(200, stream=body)
+        with patch("httpx.AsyncClient", side_effect=lambda **kw: original(
+                transport=httpx.MockTransport(handle), **kw)):
+            provider = deepseek_reply(api_key="fixture")
+            stream = provider("推导")
+            task = asyncio.create_task(anext(stream))
+            try:
+                await asyncio.wait_for(body.waiting.wait(), 1)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            finally:
+                await stream.aclose()
+                await provider.aclose()
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(body.closed)
+
     def test_no_implicit_openai_key_fallback_and_factory_support(self):
         from voicemem.config import _reply_factory
         with patch.dict(os.environ, {"OPENAI_API_KEY": "wrong-provider"}, clear=True):

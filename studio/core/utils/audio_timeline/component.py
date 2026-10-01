@@ -89,6 +89,8 @@ class AudioTimeline:
         self.rate_estimator = rate_estimator or SpeechRateEstimator(
             speech_units_per_second)
         self.generated_text = ""
+        self.source_text: str | None = None
+        self._source_ends: list[int] = []
         self.generated_samples = 0
         self.sent_samples = 0
         self.rendered_samples = 0
@@ -110,6 +112,38 @@ class AudioTimeline:
 
     def append_text(self, delta: str) -> None:
         self.generated_text += delta or ""
+
+    def append_source_text(self, delta: str) -> None:
+        """Keep display Markdown separate from the text synthesized as speech."""
+        if self.source_text is None:
+            self.source_text = ""
+        self.source_text += delta
+
+    def append_speech_text(self, delta: str, source_ends: tuple[int, ...], consumed: int,
+                           *, previous_end: int = 0) -> None:
+        """Map synthesized code points to monotonic source boundaries."""
+        if self.source_text is None or len(delta) != len(source_ends):
+            raise ValueError("Speech text requires one source boundary per code point")
+        previous = self._source_ends[-1] if self._source_ends else 0
+        previous = max(previous, min(previous_end, len(self.source_text)))
+        for end in source_ends:
+            if not previous <= end <= len(self.source_text):
+                raise ValueError("Speech source boundaries must be monotonic and in range")
+            previous = end
+        if self._source_ends:
+            self._source_ends[-1] = max(self._source_ends[-1], min(previous_end, len(self.source_text)))
+        self.generated_text += delta
+        self._source_ends.extend(source_ends)
+        if self._source_ends:
+            self._source_ends[-1] = max(self._source_ends[-1], min(consumed, len(self.source_text)))
+
+    def _heard_prefix(self, text_end: int) -> str:
+        if self.source_text is None:
+            return self.generated_text[:text_end].rstrip()
+        if text_end <= 0 or not self._source_ends:
+            return ""
+        source_end = self._source_ends[min(text_end, len(self._source_ends)) - 1]
+        return self.source_text[:source_end].rstrip()
 
     def begin_segment(self, text_start: int, text_end: int) -> int:
         segment_id = len(self._segments)
@@ -330,7 +364,7 @@ class AudioTimeline:
                 elif alignment.audio_start_samples < rendered:
                     text_end = max(text_end, alignment.text_start)
                     break
-            return self.generated_text[:min(len(self.generated_text), text_end)].rstrip()
+            return self._heard_prefix(min(len(self.generated_text), text_end))
         if self._segments:
             text_end = 0
             for segment in self._segments:
@@ -340,11 +374,11 @@ class AudioTimeline:
                 if (not segment.complete or segment.audio_end_samples is None
                         or rendered < segment.audio_end_samples):
                     break
-            return self.generated_text[:text_end].rstrip()
+            return self._heard_prefix(text_end)
         if self.generation_complete and self.sent_samples > 0:
             fraction = max(0.0, min(1.0, rendered / self.sent_samples))
             units = _range_cost(self.generated_text, 0, len(self.generated_text)) * fraction
         else:
             units = rendered / self.sample_rate * self.rate_estimator.value
         text_end = _prefix_end(self.generated_text, 0, len(self.generated_text), units)
-        return self.generated_text[:text_end].rstrip()
+        return self._heard_prefix(text_end)

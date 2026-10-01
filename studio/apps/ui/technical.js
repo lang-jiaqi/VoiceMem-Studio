@@ -79,6 +79,7 @@ function messageNode(m) {
       <div class="msg-body">${esc(m.text)}</div>
       ${grounded}${foot}
     </div>`;
+  if(m.role==='ai') VMMarkdown.render(wrap.querySelector('.msg-body'),m.text,{streaming:!!m.truncated});
   const buttons=wrap.querySelectorAll('.msg-foot button');
   if(buttons[0]) {buttons[0].setAttribute('aria-label','复制回复');buttons[0].onclick=()=>VMUI.copy(m.text);}
   if(buttons[1]) {
@@ -135,7 +136,7 @@ function syncConversation() {
   $('liveEcho').textContent = lastUser?.text || tr('等待你的下一句话…');
   $('liveEcho').classList.toggle('empty', !lastUser);
   $('liveEchoPrev').textContent = '';
-  $('aiEcho').textContent = lastAI?.text || tr('回答会同步显示在这里。');
+  VMMarkdown.render($('aiEcho'),lastAI?.text || tr('回答会同步显示在这里。'),{streaming:!!lastAI?.truncated});
   $('aiEcho').classList.toggle('empty', !lastAI);
   renderTopK(lastUser?.text || '');
   renderConvList();
@@ -220,21 +221,24 @@ function handleStudio(message) {
   } else if (message.type === 'answer_start') {
     conv.busy = true;
     replyMessage = {role:'ai',text:'',time:now(),outputId:message.output_id};
-    conv.messages.push(replyMessage); $('aiEcho').textContent = ''; renderThread();
+    conv.messages.push(replyMessage); VMMarkdown.render($('aiEcho'),''); renderThread();
   } else if (message.type === 'answer_delta' && replyMessage) {
-    replyMessage.text += message.text || ''; $('aiEcho').textContent = replyMessage.text;
+    replyMessage.text += message.text || ''; VMMarkdown.render($('aiEcho'),replyMessage.text,{streaming:true});
     $('aiEcho').classList.remove('empty');
     const body = $('thread').querySelector('.thread-card .msg:last-child .msg-body');
-    if (body) { body.textContent = replyMessage.text; $('thread').scrollTop = $('thread').scrollHeight; }
+    if (body) VMMarkdown.render(body,replyMessage.text,{streaming:true,onRender:()=>{$('thread').scrollTop=$('thread').scrollHeight;}});
     else renderThread();
+  } else if (message.type === 'answer_done' && replyMessage) {
+    VMMarkdown.render($('aiEcho'),replyMessage.text);
+    VMMarkdown.render($('thread').querySelector('.thread-card .msg:last-child .msg-body'),replyMessage.text);
   } else if (message.type === 'answer_interrupt') {
-    if (replyMessage) { replyMessage.text = message.heard_text || ''; $('aiEcho').textContent = replyMessage.text; }
+    if (replyMessage) { replyMessage.text = message.heard_text || '';replyMessage.truncated=true;VMMarkdown.render($('aiEcho'),replyMessage.text,{streaming:true}); }
     replyMessage = null; conv.busy = false; renderThread();
   } else if (['playback_done','disconnected','error'].includes(message.type)) {
     if (message.type !== 'playback_done' && replyMessage) {
       const index = conv.messages.indexOf(replyMessage);
       if (index >= 0) conv.messages.splice(index, 1);
-      $('aiEcho').textContent = ''; renderThread();
+      VMMarkdown.render($('aiEcho'),''); renderThread();
     }
     conv.busy = false; replyMessage = null;
   } else if (message.type === 'memory_hits') {

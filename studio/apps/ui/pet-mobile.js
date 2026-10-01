@@ -44,6 +44,7 @@
     for (const message of messages.slice(-100)) {
       const row = document.createElement('div'); row.className = `chat-turn ${message.role}`;
       const body = document.createElement('div'); body.className = 'chat-bubble'; body.textContent = message.text;
+      if(message.role==='assistant') VMMarkdown.render(body,message.text,{streaming:!!message.truncated});
       message.element = body; row.append(body); host.append(row);
     }
     if (atBottom || $('chatDialog').open) host.scrollTop = host.scrollHeight;
@@ -72,12 +73,12 @@
           const host = $('chatMessages');
           const atBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 48;
           replyMessage.text += event.text || '';
-          if (replyMessage.element) replyMessage.element.textContent = replyMessage.text;
-          if (atBottom) host.scrollTop = host.scrollHeight;
+          if (replyMessage.element) VMMarkdown.render(replyMessage.element,replyMessage.text,{streaming:true,onRender:()=>{if(atBottom)host.scrollTop=host.scrollHeight;}});
         }
       }
+      if (event.type === 'answer_done' && replyMessage) VMMarkdown.render(replyMessage.element,replyMessage.text);
       if (event.type === 'answer_interrupt') {
-        if (replyMessage) { replyMessage.text = event.heard_text || ''; const index = messages.indexOf(replyMessage); if (!replyMessage.text && index >= 0) messages.splice(index, 1); renderChat(); }
+        if (replyMessage) { replyMessage.text = event.heard_text || '';replyMessage.truncated=true; const index = messages.indexOf(replyMessage); if (!replyMessage.text && index >= 0) messages.splice(index, 1); renderChat(); }
         replyMessage = null;
       }
       if (event.type === 'playback_done' || event.type === 'disconnected' || event.type === 'error') replyMessage = null;

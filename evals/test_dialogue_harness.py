@@ -51,6 +51,15 @@ from evals.test_short_turns import anticipate_namespace
 
 
 class ReplyPromptTests(unittest.TestCase):
+    def test_structured_answers_keep_display_details_and_spoken_explanations(self):
+        for language in ("zh", "en"):
+            prompt = prompt_rule(language)
+            self.assertIn("成段代码使用 Markdown 代码块", prompt)
+            self.assertIn("略过这些结构化内容后仍然连贯、有帮助", prompt)
+            self.assertIn("不必每段再说", prompt)
+            self.assertIn("不要用查看提示代替真正的解释", prompt)
+            self.assertIn(prompt, system_prompt(language, tagged=True))
+
     def test_new_topic_does_not_trigger_old_topic_or_internal_rule_explanation(self):
         prompt = system_prompt('zh')
         self.assertIn('用户换了问题就直接回答新问题', prompt)

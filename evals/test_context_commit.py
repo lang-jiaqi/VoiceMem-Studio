@@ -589,6 +589,40 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         self.assert_once(value)
         self.assertEqual(self.saved()[0].assistant_text, '')
 
+    async def test_provider_failure_after_filler_releases_handoff_and_reports_error(self):
+        from studio.core.utils.reply.component import Reply
+        self.agent.voicemem_llm_tts = types.MethodType(Reply.voicemem_llm_tts, self.agent)
+        self.session.turn_taking.work_filler_enabled = True
+        self.session.turn_taking.long_filler_after_s = .01
+        self.session.synthesize_work_filler = AsyncMock(
+            return_value=('嗯，让我想一想。', bytes(4800)))
+        filler_sent, error_queued = asyncio.Event(), asyncio.Event()
+        original_send = self.sock.send_json
+
+        async def send(message):
+            await original_send(message)
+            if message['type'] == 'backchannel':
+                filler_sent.set()
+        self.sock.send_json = send
+
+        async def fail(*_):
+            await filler_sent.wait()
+            error_queued.set()
+            raise RuntimeError('synthetic provider failure')
+            yield  # Make the fixture an async generator without producing text.
+        self.memory.reply_stream = fail
+        value = self.pending(reply_mode='memory_cot')
+        task = await self.start(value)
+        await asyncio.wait_for(error_queued.wait(), 1)
+        filler = next(m for m in self.messages if m['type'] == 'backchannel')
+        self.session.filler_done(filler['filler_id'])
+        with self.assertRaisesRegex(RuntimeError, 'synthetic provider'):
+            await asyncio.wait_for(task, 1)
+        self.assertEqual(sum(m['type'] == 'error' for m in self.messages), 1)
+        self.assertFalse(self.audio)
+        self.assert_once(value)
+        self.assertEqual(self.saved()[0].assistant_text, '')
+
     async def test_candidate_pause_and_resume_neither_save_nor_restart_generation(self):
         self.block_model = True
         await self.start()

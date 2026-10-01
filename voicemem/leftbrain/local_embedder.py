@@ -157,16 +157,22 @@ class _LockedEncoder:
         return getattr(self._m, name)
 
 
-@lru_cache(maxsize=4)
 def shared_model(path: str, tokenizer_kwargs: tuple = ()):
-    """按路径缓存 SentenceTransformer：记忆向量和 slot 分类共用一份，省一份权重。
+    """Reuse one encoder per path/tokenizer pair, serializing cold loads.
 
-    ``tokenizer_kwargs`` 走元组而不是 dict，因为 lru_cache 的键必须可哈希；同一个
-    模型配不同 tokenizer 参数会各缓存一份，这是对的——它们不是同一个编码器。
+    Lookup occurs inside the Torch lock so concurrent cache misses cannot create
+    duplicate models or initialize MPS while another model is encoding. Pass
+    both arguments positionally to canonicalize omitted and explicit defaults.
     """
+    from voicemem.utils.torch_lock import TORCH_LOCK
+    with TORCH_LOCK:
+        return _cached_shared_model(path, tokenizer_kwargs)
+
+
+@lru_cache(maxsize=4)
+def _cached_shared_model(path: str, tokenizer_kwargs: tuple):
+    """Construct the encoder while the caller holds the process Torch lock."""
     if os.environ.get("VOICEMEM_VERBOSE", "0") == "0":
-        # 每次启动刷一条 "Loading weights: 100%|███"（transformers 的 tqdm），
-        # 模型在本地、一瞬间就加载完，这条除了吓人没有信息量。
         try:
             from transformers.utils import logging as _hf_logging
             _hf_logging.disable_progress_bar()
@@ -175,14 +181,17 @@ def shared_model(path: str, tokenizer_kwargs: tuple = ()):
     from sentence_transformers import SentenceTransformer
     if not tokenizer_kwargs:
         return _LockedEncoder(SentenceTransformer(path))
-    # sentence-transformers 6.x 把 tokenizer_kwargs 改名成 processor_kwargs，旧名
-    # 还认但会打 DeprecationWarning。两个名字都试：这个参数不是可有可无的装饰，
-    # Qwen 的 last-token pooling 少了它会静默取到 padding 上。
+    # Preserve left-padding for last-token pooling across library versions.
     kw = dict(tokenizer_kwargs)
     try:
         return _LockedEncoder(SentenceTransformer(path, processor_kwargs=kw))
     except TypeError:
         return _LockedEncoder(SentenceTransformer(path, tokenizer_kwargs=kw))
+
+
+shared_model.cache_clear = _cached_shared_model.cache_clear
+shared_model.cache_info = _cached_shared_model.cache_info
+shared_model.cache_parameters = _cached_shared_model.cache_parameters
 
 
 class LocalEmbedder:

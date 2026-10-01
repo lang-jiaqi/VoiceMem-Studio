@@ -93,7 +93,7 @@ function selectConversation(c){
   const me=[...c.messages].reverse().find(m=>m.role==='me');
   const her=[...c.messages].reverse().find(m=>m.role==='her');
   $('said').textContent=me?.text||tr('说点什么，她在听。');$('said').classList.add('on');
-  replyMessage=null;renderMarks($('marks'),me?.marks||[],false);$('voice').textContent=her?.text||tr('我在。今天想从哪里说起？');
+  replyMessage=null;renderMarks($('marks'),me?.marks||[],false);VMMarkdown.render($('voice'),her?.text||tr('我在。今天想从哪里说起？'),{streaming:!!her?.truncated});
   $('say').value='';renderLog();renderRail();syncSend();setRail(innerWidth>1024 && !document.body.classList.contains('rail-collapsed'));
 }
 function toast(text){
@@ -124,7 +124,9 @@ function renderLog(){
   state.messages.forEach((m, idx) => {
     const turn = el('article','turn '+(m.role==='me'?'me':'her'));
     turn.style.animationDelay = (idx*0.05)+'s';
-    turn.append(el('div','from', m.role==='me'?'你':'Echo'), el('p',null,m.text));
+    const body=el('div','turn-body',m.text);
+    if(m.role==='her') VMMarkdown.render(body,m.text,{streaming:!!m.truncated});
+    turn.append(el('div','from', m.role==='me'?'你':'Echo'),body);
     if(m.marks){ const mk = el('div','marks'); renderMarks(mk, m.marks, false); turn.append(mk); }
     if(m.role==='her'){
       const actions=el('div','turn-actions');const copy=el('button',null,'复制');copy.onclick=()=>VMUI.copy(m.text);
@@ -144,6 +146,7 @@ function renderLog(){
 /* ── 她说话 ── */
 function speak(text){
   clearTimeout(typeTimer);
+  VMMarkdown.render($('voice'),'');
   if(reduced){$('voice').textContent=text;return;}
   const box = $('voice'); box.textContent = '';
   const cursor = el('span','cursor'); box.append(cursor);
@@ -172,20 +175,23 @@ function handleStudio(message) {
   } else if (message.type === 'answer_start') {
     clearTimeout(typeTimer); current.busy = state.busy = true;
     replyMessage = {role:'her',text:'',outputId:message.output_id}; current.messages.push(replyMessage);
-    $('voice').textContent = ''; renderLog(); syncSend();
+    VMMarkdown.render($('voice'),''); renderLog(); syncSend();
   } else if (message.type === 'answer_delta' && replyMessage) {
-    replyMessage.text += message.text || ''; $('voice').textContent = replyMessage.text;
-    const body = $('logScroll').querySelector('.turn:last-child p');
-    if (body) { body.textContent = replyMessage.text; $('logScroll').scrollTop = $('logScroll').scrollHeight; }
+    replyMessage.text += message.text || ''; VMMarkdown.render($('voice'),replyMessage.text,{streaming:true});
+    const body = $('logScroll').querySelector('.turn:last-child .turn-body');
+    if (body) VMMarkdown.render(body,replyMessage.text,{streaming:true,onRender:()=>{$('logScroll').scrollTop=$('logScroll').scrollHeight;}});
     else renderLog();
+  } else if (message.type === 'answer_done' && replyMessage) {
+    VMMarkdown.render($('voice'),replyMessage.text);
+    VMMarkdown.render($('logScroll').querySelector('.turn:last-child .turn-body'),replyMessage.text);
   } else if (message.type === 'answer_interrupt') {
-    if (replyMessage) {replyMessage.text = message.heard_text || ''; $('voice').textContent = replyMessage.text;}
+    if (replyMessage) {replyMessage.text = message.heard_text || '';replyMessage.truncated=true;VMMarkdown.render($('voice'),replyMessage.text,{streaming:true});}
     replyMessage = null; current.busy = state.busy = false; renderLog(); syncSend();
   } else if (['playback_done','disconnected','error'].includes(message.type)) {
     if (message.type !== 'playback_done' && replyMessage) {
       const index = current.messages.indexOf(replyMessage);
       if (index >= 0) current.messages.splice(index, 1);
-      $('voice').textContent = ''; renderLog();
+      VMMarkdown.render($('voice'),''); renderLog();
     }
     replyMessage = null; current.busy = state.busy = false; syncSend();
   } else if (message.type === 'memory_hits' || message.type === 'tag_update') {

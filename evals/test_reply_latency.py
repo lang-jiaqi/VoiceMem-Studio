@@ -174,12 +174,9 @@ class DisplayTests(unittest.IsolatedAsyncioTestCase):
         ns["vm"] = types.SimpleNamespace(
             reply_stream=stream,
             utils=types.SimpleNamespace(get=lambda _: types.SimpleNamespace(stream=tts_stream)))
-        timeline = types.SimpleNamespace(
-            output_id="output-1", sample_rate=24000, sent_samples=480, context_saved=False,
-            checkpoint_seen=False, playback_state="idle",
-            begin_segment=lambda *a: 0, append_audio=lambda _: None, append_text=lambda _: None,
-            finish_segment=lambda *a, **kw: None, mark_generation_complete=lambda: None,
-            wait_playback_done=lambda: asyncio.wait_for(displayed.wait(), 2))
+        from studio.core.utils.audio_timeline.component import AudioTimeline
+        timeline = AudioTimeline()
+        timeline.wait_playback_done = lambda: asyncio.wait_for(displayed.wait(), 2)
         self.pending.__dict__.update(replay="", emotion="", memory_context="original-memory",
                                      stranger=False, speech_end=time.monotonic(), spoken=True)
         try:
