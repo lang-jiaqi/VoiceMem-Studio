@@ -14,6 +14,6 @@
 <dialog id="settingsDialog" class="sheet"><header><h2>设置</h2><button class="close" type="button" data-close="settingsDialog" aria-label="关闭">×</button></header><section><p class="account">账号 <strong id="accountName"></strong></p><h3>对话偏好</h3><p id="harnessStatus" class="status">正在连接…</p><div id="harnessControls"></div><button id="logoutButton" class="logout" type="button">退出登录</button></section></dialog>
 <div id="toast" role="status" hidden></div>
 <script>window.VM_PET_ASSET_ROOT=new URL('/pet/',location.href).href;window.VM_PET_PORTRAIT=true;window.VM_PET_MOBILE=true;window.VMUI={notify(message){const n=document.getElementById('toast');n.textContent=message;n.hidden=false;clearTimeout(n._timer);n._timer=setTimeout(()=>n.hidden=true,4500);}};</script>
-<script src="/pet/avatar-parameter-controller.js"></script><script src="/pet/avatar-behavior-controller.js"></script><script src="/pet/audio-lip-sync.js"></script><script src="/pet/live2d-renderer.js"></script><script src="/pet/avatar-controller.js"></script>
-<script src="/ui/studio-client.js"></script><script src="/ui/pet-mobile.js"></script>
+<script defer src="/pet/avatar-parameter-controller.js"></script><script defer src="/pet/avatar-behavior-controller.js"></script><script defer src="/pet/audio-lip-sync.js"></script><script defer src="/pet/live2d-renderer.js"></script><script defer src="/pet/avatar-controller.js"></script>
+<script defer src="/ui/studio-client.js"></script><script defer src="/ui/pet-mobile.js"></script>
 </body></html>

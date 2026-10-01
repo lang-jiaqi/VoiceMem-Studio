@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -211,19 +211,24 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
         async def require_demo_login(request: Request, call_next):
             path = request.url.path
             if request.method not in {"GET", "HEAD", "OPTIONS"} and not same_origin(request.headers):
-                return JSONResponse({"detail": "来源不受信任"}, status_code=403)
+                return JSONResponse({"detail": "来源不受信任"}, status_code=403, headers=_NOCACHE)
             if path.startswith("/auth/") or path == "/ui/login.html":
-                return await call_next(request)
+                response = await call_next(request)
+                response.headers["Cache-Control"] = "no-store"
+                return response
             user = await asyncio.to_thread(demo_accounts.user, request.cookies.get(COOKIE, ""))
             if not user:
                 if path == "/" or path.startswith("/ui/"):
-                    return RedirectResponse("/ui/login.html", status_code=303)
-                return JSONResponse({"detail": "请先登录"}, status_code=401)
+                    return RedirectResponse("/ui/login.html", status_code=303, headers=_NOCACHE)
+                return JSONResponse({"detail": "请先登录"}, status_code=401, headers=_NOCACHE)
             request.state.demo_user = user
             if path in {"/ui/technical.html", "/ui/digital.html", "/legacy", "/classic"} and re.search(
                     r"iPhone|Android|Mobile", request.headers.get("user-agent", ""), re.I):
-                return RedirectResponse("/ui/pet-mobile.html", status_code=303)
-            return await call_next(request)
+                return RedirectResponse("/ui/pet-mobile.html", status_code=303, headers=_NOCACHE)
+            response = await call_next(request)
+            if path.startswith("/api/") or response.status_code >= 400:
+                response.headers["Cache-Control"] = "no-store"
+            return response
 
         class Credentials(BaseModel):
             name: str
@@ -436,7 +441,7 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
     @app.get("/")
     def index(request: Request, pet_on: bool = Query(False, alias="pet")):
         if demo_accounts and re.search(r"iPhone|Android|Mobile", request.headers.get("user-agent", ""), re.I):
-            return RedirectResponse("/ui/pet-mobile.html", status_code=303)
+            return RedirectResponse("/ui/pet-mobile.html", status_code=303, headers=_NOCACHE)
         if pet_on and not demo_accounts:
             pet.ensure_running(loopback_ws_url(request))
         headers = {**_NOCACHE}
@@ -445,21 +450,62 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
         return FileResponse(HERE.parent / "apps" / "ui" / "index.html", headers=headers)
 
     if demo_accounts:
+        from studio.web.pet_assets import (
+            CACHE_CONTROL, MOBILE_FILES, PET_SCRIPTS, PET_VENDORS,
+            CachedStaticFiles, MobilePetAssets, accepts_gzip, cached_response,
+        )
         pet_root = HERE.parent / "pet"
+        ui_root = HERE.parent / "apps" / "ui"
+        vendor_root = HERE.parent / "apps" / "node_modules"
+        bundle = MobilePetAssets(pet_root, ui_root, vendor_root)
+        cached_vendor = CachedStaticFiles(vendor_root, files=PET_VENDORS, check_dir=False,
+                                         gzip_assets={PET_VENDORS[name]: bundle.gzip_assets[f"vendor/{name}"]
+                                                      for name in PET_VENDORS if f"vendor/{name}" in bundle.gzip_assets})
+
+        @app.api_route("/ui/pet-mobile.html", methods=["GET", "HEAD"])
+        def mobile_pet_index(request: Request):
+            html = bundle.html
+            if request.query_params.get("model") and bundle.model_preloads:
+                html = html.replace(bundle.model_preloads, "")
+            return HTMLResponse(html, headers=_NOCACHE)
+
+        @app.api_route(f"{bundle.prefix}/ui/pet-mobile.css", methods=["GET", "HEAD"])
+        def mobile_pet_css(request: Request):
+            headers = {"Cache-Control": CACHE_CONTROL, "ETag": bundle.css_etag,
+                       "Content-Type": "text/css; charset=utf-8", "Vary": "Accept-Encoding"}
+            if bundle.css_gzip and accepts_gzip(request.headers) and "range" not in request.headers:
+                return bundle.css_gzip.response(headers, request.scope)
+            return cached_response(bundle.css, headers, request.scope)
+
+        @app.api_route(f"{bundle.prefix}/vendor/{{name}}", methods=["GET", "HEAD"])
+        async def mobile_pet_vendor(name: str, request: Request):
+            if name not in PET_VENDORS:
+                raise HTTPException(404)
+            if not (vendor_root / PET_VENDORS[name]).is_file():
+                raise HTTPException(503, "请先安装 studio/apps 的 npm 依赖")
+            return await cached_vendor.get_response(name, request.scope)
+
+        def gzip_files(category):
+            return {name.removeprefix(f"{category}/"): asset for name, asset in bundle.gzip_assets.items()
+                    if name.startswith(f"{category}/")}
+
+        app.mount(f"{bundle.prefix}/assets", CachedStaticFiles(pet_root / "assets", gzip_assets=gzip_files("assets")),
+                  name="versioned-pet-assets")
+        app.mount(f"{bundle.prefix}/ui", CachedStaticFiles(
+            ui_root, files={name: name for name in MOBILE_FILES}, gzip_assets=gzip_files("ui")), name="versioned-pet-ui")
+        app.mount(bundle.prefix, CachedStaticFiles(
+            pet_root, files={name: name for name in PET_SCRIPTS}, gzip_assets=gzip_files("pet")), name="versioned-pet-scripts")
         app.mount("/pet/assets", StaticFiles(directory=pet_root / "assets"), name="demo-pet-assets")
-        pet_scripts = {"avatar-parameter-controller.js", "avatar-behavior-controller.js",
-                       "audio-lip-sync.js", "live2d-renderer.js", "avatar-controller.js"}
 
         @app.get("/pet/{name}")
         def demo_pet_script(name: str):
-            if name not in pet_scripts:
+            if name not in PET_SCRIPTS:
                 raise HTTPException(404)
             return FileResponse(pet_root / name, media_type="application/javascript", headers=_NOCACHE)
 
         @app.get("/pet/vendor/{name}")
         def demo_pet_vendor(name: str):
-            packages = {"pixi.min.js": "pixi.js/dist/browser/pixi.min.js",
-                        "cubism4.min.js": "pixi-live2d-display/dist/cubism4.min.js"}
+            packages = PET_VENDORS
             if name not in packages:
                 raise HTTPException(404)
             path = HERE.parent / "apps" / "node_modules" / packages[name]

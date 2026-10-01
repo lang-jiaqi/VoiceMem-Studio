@@ -3,23 +3,38 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   else Object.assign(root, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, root => {
-  const CORES = ['assets/live2d/vendor/live2dcubismcore.min.js', 'https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js'];
+  const CORES = root.VM_PET_CORE_URL
+    ? [root.VM_PET_CORE_URL, 'https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js']
+    : ['assets/live2d/vendor/live2dcubismcore.min.js', 'https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js'];
   const PIXI = root.VM_PET_ASSET_ROOT ? 'vendor/pixi.min.js' : 'node_modules/pixi.js/dist/browser/pixi.min.js';
   const DISPLAY = root.VM_PET_ASSET_ROOT ? 'vendor/cubism4.min.js' : 'node_modules/pixi-live2d-display/dist/cubism4.min.js';
+  let runtimeReady = null;
+  const pendingScripts = new Map();
 
   function script(path, ready) {
     if (ready()) return Promise.resolve();
     const source = new URL(path, root.VM_PET_ASSET_ROOT || location.href).href;
-    const existing = document.querySelector(`script[src="${source}"]`);
-    if (existing) return new Promise((resolve, reject) => {
-      existing.addEventListener('load', resolve, { once: true });
-      existing.addEventListener('error', reject, { once: true });
-    });
-    return new Promise((resolve, reject) => {
+    if (pendingScripts.has(source)) return pendingScripts.get(source);
+    const pending = new Promise((resolve, reject) => {
       const tag = document.createElement('script');
-      tag.src = source; tag.onload = resolve; tag.onerror = () => reject(new Error(`Unable to load ${path}`));
+      tag.src = source;
+      tag.onload = () => { pendingScripts.delete(source); resolve(); };
+      tag.onerror = () => { pendingScripts.delete(source); tag.remove(); reject(new Error(`Unable to load ${path}`)); };
       document.head.appendChild(tag);
     });
+    pendingScripts.set(source, pending);
+    return pending;
+  }
+
+  async function coreRuntime() {
+    let cause;
+    for (const source of new Set(CORES)) {
+      try { await script(source, () => Boolean(root.Live2DCubismCore)); }
+      catch (error) { cause = error; }
+      if (root.Live2DCubismCore) return;
+    }
+    const error = new Error(`Cubism Core is missing. Copy live2dcubismcore.min.js to assets/live2d/vendor/`);
+    error.code = 'CUBISM_CORE_MISSING'; error.cause = cause; throw error;
   }
 
   class Live2DRenderer {
@@ -36,14 +51,12 @@
       canvas.addEventListener('webglcontextrestored', () => { this.contextLost = false; if (this.path) this.loadModel(this.path).catch(() => {}); });
     }
     async ensureRuntime() {
-      let cause;
-      for (const source of CORES) {
-        try { await script(source, () => Boolean(root.Live2DCubismCore)); break; }
-        catch (error) { cause = error; }
+      if (!runtimeReady) {
+        runtimeReady = Promise.all([coreRuntime(), script(PIXI, () => Boolean(root.PIXI))])
+          .then(() => script(DISPLAY, () => Boolean(root.PIXI?.live2d?.Live2DModel)))
+          .catch(error => { runtimeReady = null; throw error; });
       }
-      if (!root.Live2DCubismCore) { const error = new Error(`Cubism Core is missing. Copy live2dcubismcore.min.js to ${CORES[0]}`); error.code = 'CUBISM_CORE_MISSING'; error.cause = cause; throw error; }
-      await script(PIXI, () => Boolean(root.PIXI));
-      await script(DISPLAY, () => Boolean(root.PIXI?.live2d?.Live2DModel));
+      await runtimeReady;
     }
     async loadModel(path) {
       if (!path || !String(path).endsWith('.model3.json')) throw new Error('A Cubism .model3.json path is required');
@@ -52,7 +65,9 @@
       if (!this.app) this.app = new root.PIXI.Application({ view: this.canvas, transparent: true,
         backgroundAlpha: 0, antialias: true, autoStart: false, sharedTicker: false, resolution: 1 });
       try {
-        this.model = await root.PIXI.live2d.Live2DModel.from(this.path, { autoUpdate: false, autoInteract: false });
+        const options = { autoUpdate: false, autoInteract: false };
+        if (root.VM_PET_MOBILE) options.crossOrigin = 'anonymous';
+        this.model = await root.PIXI.live2d.Live2DModel.from(this.path, options);
         this.model.autoUpdate = false;
         const internal = this.model.internalModel;
         internal.eyeBlink = null; internal.breath = null;

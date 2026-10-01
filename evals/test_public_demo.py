@@ -1,16 +1,25 @@
 """Account isolation and browser access checks for the opt-in public demo."""
 import asyncio
+import gzip
+import json
+import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
+from html.parser import HTMLParser
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import urljoin
 
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from studio.web.demo_accounts import DemoAccounts
 from studio.web.transport import build_app
+from studio.web.pet_assets import (
+    CORE_CDN, CORE_PATH, MODEL_PATH, MobilePetAssets, MOBILE_FILES, PET_SCRIPTS, PET_VENDORS,
+)
 from studio.core.utils.spaces.component import Spaces
 from studio.core.utils.conversation.component import Conversation
 from studio.core.utils.self_harness.component import SelfHarnessState
@@ -41,6 +50,20 @@ class FakeAgent:
 
     def set_lang(self, lang):
         return "zh"
+
+
+class PageResources(HTMLParser):
+    def __init__(self, html):
+        super().__init__()
+        self.preloads, self.scripts = [], []
+        self.feed(html)
+
+    def handle_starttag(self, tag, attributes):
+        values = dict(attributes)
+        if tag == "link" and values.get("rel") == "preload":
+            self.preloads.append(values)
+        if tag == "script" and "src" in values:
+            self.scripts.append(values)
 
 
 class PublicDemoTest(unittest.TestCase):
@@ -134,6 +157,168 @@ class PublicDemoTest(unittest.TestCase):
         self.assertEqual(self.accounts.load_harness(alice_id)["persona"], "先听我说")
         self.assertEqual(self.accounts.load_harness(bob_id), {})
 
+    def test_mobile_fixed_resources_are_versioned_and_cacheable(self):
+        client = self.client()
+        self.register(client, "alice")
+        page = client.get("/ui/pet-mobile.html")
+        self.assertEqual(page.headers["cache-control"], "no-store")
+        prefix = re.search(r"/pet/v/[0-9a-f]{16}", page.text).group()
+        self.assertIn(f"new URL('{prefix}/',location.href)", page.text)
+        for path in ("avatar-controller.js", "ui/studio-client.js", "ui/pet-mobile.js",
+                     "vendor/pixi.min.js", "vendor/cubism4.min.js", "ui/pet-mobile.css"):
+            with self.subTest(path=path):
+                url = f"{prefix}/{path}"
+                response = client.get(url)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("private", response.headers["cache-control"])
+                self.assertIn("max-age=31536000", response.headers["cache-control"])
+                self.assertIn("immutable", response.headers["cache-control"])
+                head = client.head(url)
+                self.assertEqual(head.status_code, 200)
+                self.assertFalse(head.content)
+                self.assertEqual(head.headers["etag"], response.headers["etag"])
+                self.assertEqual(head.headers["content-length"], response.headers["content-length"])
+                cached = client.get(url, headers={"if-none-match": response.headers["etag"]})
+                self.assertEqual(cached.status_code, 304)
+                self.assertFalse(cached.content)
+                self.assertEqual(cached.headers["cache-control"], response.headers["cache-control"])
+        css = client.get(f"{prefix}/ui/pet-mobile.css").text
+        self.assertIn(f"url('{prefix}/assets/scene/call-background.png')", css)
+        self.assertNotIn("url('/pet/assets/", css)
+
+    def test_missing_versioned_runtime_is_not_cached_as_success(self):
+        client = self.client()
+        self.register(client, "alice")
+        prefix = re.search(r"/pet/v/[0-9a-f]{16}", client.get("/ui/pet-mobile.html").text).group()
+        original = Path.is_file
+        with patch.object(Path, "is_file", lambda path: False if path.name == "pixi.min.js" else original(path)):
+            response = client.get(f"{prefix}/vendor/pixi.min.js")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+
+    def test_first_visit_preloads_match_authenticated_runtime_and_model_urls(self):
+        client = self.client()
+        self.register(client, "alice")
+        page = client.get("/ui/pet-mobile.html")
+        prefix = re.search(r"/pet/v/[0-9a-f]{16}", page.text).group()
+        resources = PageResources(page.text)
+        self.assertEqual(len(resources.scripts), 7)
+        self.assertTrue(all("defer" in script for script in resources.scripts))
+        links = {item["href"]: item for item in resources.preloads}
+        model_url = f"{prefix}/{MODEL_PATH}"
+        refs = client.get(model_url).json()["FileReferences"]
+        for name in (None, refs["Moc"], refs["Physics"], *refs["Textures"]):
+            url = urljoin(model_url, name) if name else model_url
+            self.assertIn(url, links)
+            self.assertIn("crossorigin", links[url])
+            self.assertEqual(links[url]["as"], "image" if name in refs["Textures"] else "fetch")
+            self.assertEqual(client.head(url).status_code, 200)
+        for name in PET_VENDORS:
+            self.assertEqual(links[f"{prefix}/vendor/{name}"]["as"], "script")
+        custom = PageResources(client.get("/ui/pet-mobile.html?model=/pet/assets/custom.model3.json").text)
+        self.assertFalse(any(item["as"] in {"fetch", "image"} for item in custom.preloads))
+        self.assertEqual(len(custom.preloads), 3)
+
+    def test_gzip_is_lossless_prepared_once_and_has_separate_cache_validators(self):
+        client = self.client()
+        self.register(client, "alice")
+        prefix = re.search(r"/pet/v/[0-9a-f]{16}", client.get("/ui/pet-mobile.html").text).group()
+        paths = (f"{prefix}/assets/live2d/rattan/rattan.moc3", f"{prefix}/vendor/pixi.min.js",
+                 f"{prefix}/ui/pet-mobile.css", f"{prefix}/live2d-renderer.js")
+        with patch("studio.web.pet_assets.gzip.compress", side_effect=AssertionError("request compression")):
+            for url in paths:
+                with self.subTest(url=url):
+                    original = client.get(url, headers={"accept-encoding": "identity"})
+                    self.assertNotIn("content-encoding", original.headers)
+                    with client.stream("GET", url, headers={"accept-encoding": "gzip"}) as encoded:
+                        raw = b"".join(encoded.iter_raw())
+                        headers = encoded.headers
+                    self.assertEqual(headers["content-encoding"], "gzip")
+                    self.assertEqual(headers["vary"], "Accept-Encoding")
+                    self.assertEqual(int(headers["content-length"]), len(raw))
+                    self.assertEqual(gzip.decompress(raw), original.content)
+                    self.assertLess(len(raw), len(original.content) * .9)
+                    self.assertNotEqual(headers["etag"], original.headers["etag"])
+                    head = client.head(url, headers={"accept-encoding": "gzip"})
+                    self.assertFalse(head.content)
+                    self.assertEqual(head.headers["content-length"], str(len(raw)))
+                    cached = client.get(url, headers={"accept-encoding": "gzip",
+                                                      "if-none-match": f'W/{headers["etag"]}, "other"'})
+                    self.assertEqual(cached.status_code, 304)
+                    self.assertFalse(cached.content)
+                    self.assertEqual(cached.headers["vary"], "Accept-Encoding")
+                    self.assertEqual(client.get(url, headers={"accept-encoding": "gzip",
+                                                              "if-none-match": original.headers["etag"]}).status_code, 200)
+                    self.assertEqual(client.get(url, headers={"accept-encoding": "identity",
+                                                              "if-none-match": headers["etag"]}).status_code, 200)
+
+    def test_encoding_negotiation_range_requests_and_errors_keep_original_semantics(self):
+        client = self.client()
+        self.register(client, "alice")
+        prefix = re.search(r"/pet/v/[0-9a-f]{16}", client.get("/ui/pet-mobile.html").text).group()
+        url = f"{prefix}/assets/live2d/rattan/rattan.moc3"
+        for encoding in ("identity", "gzip;q=0, *;q=1", "gzip;q=invalid", "br"):
+            with self.subTest(encoding=encoding):
+                self.assertNotIn("content-encoding", client.head(url, headers={"accept-encoding": encoding}).headers)
+        for encoding in ("gzip;q=0.5", "br, GZIP;q=1", "*;q=1"):
+            self.assertEqual(client.head(url, headers={"accept-encoding": encoding}).headers["content-encoding"], "gzip")
+        original = client.get(url, headers={"accept-encoding": "identity"}).content
+        response = client.get(url, headers={"accept-encoding": "gzip", "range": "bytes=0-15"})
+        self.assertEqual(response.status_code, 206)
+        self.assertNotIn("content-encoding", response.headers)
+        self.assertEqual(response.content, original[:16])
+        texture = client.head(f"{prefix}/assets/live2d/rattan/rattan.2048/texture_00.png")
+        self.assertNotIn("content-encoding", texture.headers)
+        for path in ("/api/memories", "/auth/me", "/ui/pet-mobile.html", f"{prefix}/assets/missing.moc3"):
+            self.assertNotIn("content-encoding", client.get(path).headers)
+        client.post("/auth/logout", headers={"origin": "https://demo.ts.net"})
+        denied = client.get(url, headers={"accept-encoding": "gzip"})
+        self.assertEqual(denied.status_code, 401)
+        self.assertNotIn("content-encoding", denied.headers)
+        self.assertEqual(denied.headers["cache-control"], "no-store")
+
+    def test_model_relative_resources_stay_inside_versioned_cache(self):
+        client = self.client()
+        self.register(client, "alice")
+        prefix = re.search(r"/pet/v/[0-9a-f]{16}", client.get("/ui/pet-mobile.html").text).group()
+        model_url = f"{prefix}/assets/live2d/rattan/rattan.model3.json"
+        response = client.get(model_url)
+        self.assertEqual(response.status_code, 200)
+        refs = response.json()["FileReferences"]
+        for path in [refs["Moc"], refs["Physics"], *refs["Textures"], refs["Expressions"][0]["File"]]:
+            url = urljoin(model_url, path)
+            self.assertTrue(url.startswith(f"{prefix}/assets/"))
+            resource = client.head(url)
+            self.assertEqual(resource.status_code, 200)
+            self.assertIn("immutable", resource.headers["cache-control"])
+            self.assertEqual(client.head(url, headers={"if-none-match": resource.headers["etag"]}).status_code, 304)
+
+    def test_cache_does_not_include_account_data_or_bypass_login(self):
+        client = self.client()
+        self.register(client, "alice")
+        prefix = re.search(r"/pet/v/[0-9a-f]{16}", client.get("/ui/pet-mobile.html").text).group()
+        url = f"{prefix}/avatar-controller.js"
+        etag = client.get(url).headers["etag"]
+        for path in ("/auth/me", "/api/memories", "/ui/pet-mobile.html", "/ui/studio-client.js"):
+            self.assertEqual(client.get(path).headers["cache-control"], "no-store")
+        response = client.post("/auth/logout", headers={"origin": "https://demo.ts.net"})
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        denied = client.get(url, headers={"if-none-match": etag})
+        self.assertEqual(denied.status_code, 401)
+        self.assertEqual(denied.headers["cache-control"], "no-store")
+        self.assertEqual(client.get(f"{prefix}/assets/live2d/rattan/rattan.model3.json").status_code, 401)
+
+    def test_versioned_routes_preserve_allowlists_and_reject_old_versions(self):
+        client = self.client()
+        self.register(client, "alice")
+        prefix = re.search(r"/pet/v/[0-9a-f]{16}", client.get("/ui/pet-mobile.html").text).group()
+        for path in (f"{prefix}/main.cjs", f"{prefix}/ui/settings.js", f"{prefix}/vendor/package.json",
+                     f"{prefix}/assets/%2e%2e/main.cjs", "/pet/v/old/avatar-controller.js"):
+            with self.subTest(path=path):
+                response = client.get(path)
+                self.assertEqual(response.status_code, 404)
+                self.assertEqual(response.headers["cache-control"], "no-store")
+
     def test_explicit_harness_choices_survive_a_new_session(self):
         client = self.client()
         self.register(client, "alice")
@@ -170,6 +355,82 @@ class PublicDemoTest(unittest.TestCase):
                 space.get_space("default")
         self.assertEqual([item["memory_root"] for item in opened],
                          [str(root / "default") for root in roots])
+
+
+class MobileAssetVersionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.pet, self.ui, self.vendor = root / "pet", root / "ui", root / "node_modules"
+        files = {
+            **{self.pet / name: "// fixture script" for name in PET_SCRIPTS},
+            **{self.ui / name: "// fixture client" for name in MOBILE_FILES},
+            **{self.vendor / path: "// fixture runtime" for path in PET_VENDORS.values()},
+            self.ui / "pet-mobile.html": '<head><link href="/ui/pet-mobile.css"></head><script>window.VM_PET_ASSET_ROOT="/pet/";</script><script src="/pet/avatar-controller.js"></script>',
+            self.ui / "pet-mobile.css": "body {background:url('/pet/assets/scene/background.png')}",
+            self.pet / "assets" / "model.moc3": "fixture model",
+            self.pet / "assets" / "texture.png": "fixture texture",
+        }
+        for path, content in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+
+    def bundle(self):
+        return MobilePetAssets(self.pet, self.ui, self.vendor)
+
+    def test_version_is_stable_across_restarts_and_file_timestamp_changes(self):
+        original = self.bundle()
+        path = self.pet / "assets" / "texture.png"
+        os.utime(path, (100, 100))
+        self.assertEqual(self.bundle().version, original.version)
+
+    def test_model_texture_scripts_styles_and_runtime_updates_change_version(self):
+        for path in (self.pet / "assets" / "model.moc3", self.pet / "assets" / "texture.png",
+                     self.pet / "avatar-controller.js", self.ui / "studio-client.js",
+                     self.ui / "pet-mobile.css", self.vendor / PET_VENDORS["pixi.min.js"]):
+            with self.subTest(path=path.name):
+                before = self.bundle()
+                path.write_bytes(path.read_bytes() + b"updated")
+                after = self.bundle()
+                self.assertNotEqual(after.version, before.version)
+                self.assertIn(f'{after.prefix}/ui/pet-mobile.css', after.html)
+                self.assertIn(f'{after.prefix}/assets/', after.css.decode())
+
+    def test_installing_local_cubism_core_changes_version(self):
+        before = self.bundle()
+        self.assertEqual(before.core_url, CORE_CDN)
+        path = self.pet / CORE_PATH
+        path.parent.mkdir(parents=True)
+        path.write_text("// fixture core")
+        after = self.bundle()
+        self.assertNotEqual(after.version, before.version)
+        self.assertEqual(after.core_url, f"{after.prefix}/{CORE_PATH}")
+        self.assertIn(f'window.VM_PET_CORE_URL={json.dumps(after.core_url)}', after.html)
+        self.assertIn(after.core_url, [item["href"] for item in PageResources(after.html).preloads])
+        self.assertNotIn(CORE_CDN, after.html)
+
+    def test_missing_vendor_can_still_build_mobile_page(self):
+        path = self.vendor / PET_VENDORS["pixi.min.js"]
+        before = self.bundle().version
+        path.unlink()
+        after = self.bundle()
+        self.assertNotEqual(after.version, before)
+        self.assertNotIn(f"{after.prefix}/vendor/pixi.min.js", after.html)
+
+    def test_preloads_reject_paths_outside_model_and_tolerate_invalid_models(self):
+        model = self.pet / MODEL_PATH
+        model.parent.mkdir(parents=True)
+        model.write_text(json.dumps({"FileReferences": {"Moc": "../../../../avatar-controller.js",
+                                                       "Textures": ["https://example.test/private.png", "missing.png"]}}))
+        bundle = self.bundle()
+        links = [item["href"] for item in PageResources(bundle.html).preloads]
+        self.assertIn(f"{bundle.prefix}/{MODEL_PATH}", links)
+        self.assertFalse(any("avatar-controller" in url or "example.test" in url or "missing.png" in url for url in links))
+        for invalid in ("invalid json", '{"FileReferences": null}', '{"FileReferences": {"Textures": null}}'):
+            with self.subTest(invalid=invalid):
+                model.write_text(invalid)
+                self.assertIn(f"{self.bundle().prefix}/{MODEL_PATH}", self.bundle().html)
 
 
 if __name__ == "__main__":

@@ -247,7 +247,28 @@ for new stored entries. Its top-right settings panel exposes only Self Harness
 controls. Explicit Harness choices persist in the account's default Space via the
 demo account database; model-driven changes remain conversation scoped. The demo
 serves only allowlisted pet scripts and local PixiJS runtime files to authenticated
-accounts. The ordinary desktop homepage does not redirect based on viewport size.
+accounts. The mobile HTML remains uncached and supplies a content-versioned pet
+resource root. Model-relative texture, expression and physics URLs stay within
+that root; the background, mobile CSS/client scripts and local runtime libraries
+use the same version. These fixed resources use private browser caching and
+conditional requests. The content version is computed once at backend startup;
+pulling updated resources and restarting changes their URLs automatically.
+The mobile HTML preloads the default model manifest, moc, physics, full-resolution
+textures and runtime scripts. Texture preloads and the mobile Pixi loader share
+anonymous CORS mode with same-origin account cookies. Deferred page scripts
+download concurrently but execute in document order. The renderer loads Core and
+Pixi concurrently, then the display plugin after both are ready; pending loads
+are shared and failures permit retries. Startup selects a local Core when present;
+otherwise the mobile page requests the official CDN directly. Native desktop
+loading retains its local-first fallback.
+The transport prepares gzip variants of compressible fixed resources once at
+startup. Representation-specific ETags and `Vary: Accept-Encoding` keep compressed
+and original browser caches distinct; range requests retain the original file
+response. PNG textures and backgrounds remain unchanged. Compression never wraps
+account APIs, WebSockets or streamed conversation output.
+Authentication and account APIs remain uncached, and actual asset requests retain
+the login check. Unversioned compatibility paths retain their existing behavior.
+The ordinary desktop homepage does not redirect based on viewport size.
 `studio/apps/` owns the Windows/macOS Electron desktop client and pet. Linux is
 a backend deployment target, not a desktop release target. Windows runs capture,
 playback and the pet natively, while local CUDA inference belongs in WSL2 or its
