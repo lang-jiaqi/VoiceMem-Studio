@@ -32,7 +32,8 @@ if ! .venv/bin/python -c 'import pathlib, tomllib; config = tomllib.loads(pathli
   echo '[setup] 当前 VoiceMem pyproject.toml 缺少 Studio 的 [project.optional-dependencies].studio；请先完成最小包配置集成。' >&2
   exit 1
 fi
-.venv/bin/python -m pip install -e '.[studio]'
+.venv/bin/python -m pip install -c studio/constraints-macos-py312.txt -e '.[studio]'
+.venv/bin/python -m pip check
 pet_root="$project_root/studio/pet"
 if [[ ! -f "$pet_root/package-lock.json" ]]; then
   pet_root="$project_root/pet"

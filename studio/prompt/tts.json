@@ -47,6 +47,16 @@
       "平静": ""
     }
   },
+  "tones_en": {
+    "温和": "Speak gently and warmly, with relaxed conversational phrasing.",
+    "共情": "Speak softly and attentively, leaving natural pauses without exaggerating emotion.",
+    "轻快": "Sound bright and relaxed, with a little lift in the voice.",
+    "认真": "Speak clearly and steadily, with a focused, matter-of-fact tone.",
+    "鼓励": "Sound warm and supportive, with calm confidence.",
+    "俏皮": "Sound lightly playful, with subtle humor and natural rhythm.",
+    "抱歉": "Speak softly and sincerely, without dramatizing the apology.",
+    "平静": "Speak evenly and naturally, with a calm conversational tone."
+  },
   "breeze_default_instruction": "温柔女声，语速正常",
   "backchannel_styles": {
     "zh": [

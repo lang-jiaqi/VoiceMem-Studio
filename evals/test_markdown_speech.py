@@ -10,6 +10,27 @@ from studio.core.utils.tts.markdown import MarkdownSpeech
 
 
 class MarkdownSpeechTests(unittest.TestCase):
+    def test_lazy_language_preserves_speech_and_offsets_without_scanning_each_delta(self):
+        from voicemem.lang import detect_language
+        source, calls = '', []
+
+        def language():
+            calls.append(len(source))
+            return detect_language(source, 'zh', keep_short=False)
+
+        lazy = MarkdownSpeech('zh', cue_offset=0, language_resolver=language)
+        eager = MarkdownSpeech('zh', cue_offset=0)
+        raw = ('An English explanation. ' * 40 + '\n```python\nx = 1\n```\n'
+               + '接下来我们看一个简单的算式。' * 120 + '$2+2=4$，以及 $(x, y)$。')
+        chunks = [raw[i:i+8] for i in range(0, len(raw), 8)]
+        for chunk in chunks:
+            source += chunk
+            eager.language = detect_language(source, 'zh', keep_short=False)
+            self.assertEqual(lazy.feed(chunk), eager.feed(chunk))
+        self.assertEqual(lazy.feed('', final=True), eager.feed('', final=True))
+        self.assertGreater(len(calls), 0)
+        self.assertLess(len(calls), len(chunks) // 4)
+
     def render(self, chunks, language="zh", cue_offset=0):
         parser = MarkdownSpeech(language, cue_offset=cue_offset)
         timeline = AudioTimeline(track_delivery=True)
@@ -45,6 +66,7 @@ class MarkdownSpeechTests(unittest.TestCase):
             r"先算 $2+2=4$。": "先算 2加2等于4。",
             r"负数 \(-2+-1=-3\)": "负数 负2加负1等于负3",
             r"令 $Q$ 为查询。": "令 Q 为查询。",
+            r"坐标 $(x, y)$ 对应向量 $[a, b, c]$。": "坐标 x，y 对应向量 a，b，c。",
             r"$$A=\frac{QK^T}{\sqrt{d}}V$$" + "\n按权重汇总。": "公式写在对话里了。\n\n按权重汇总。",
             r"\[A=\sum_i w_i v_i\]": "公式写在对话里了。\n",
             r"参考 $\frac{a}{b}$ 的含义。": "参考 对话里的公式 的含义。",
@@ -87,6 +109,8 @@ class MarkdownSpeechTests(unittest.TestCase):
         raw = "```js\nx=1;\n```\nThen $2-1=1$ and `cache.get` and $Q$."
         spoken = self.render(list(raw), language="en").generated_text
         self.assertEqual(spoken, "The code is in the conversation.\nThen 2 minus 1 equals 1 and cache.get and Q.")
+        self.assertEqual(self.render(list('Use $(x, y)$.'), language='en').generated_text,
+                         'Use x, y.')
 
     def test_unterminated_structures_have_bounded_buffers_and_never_leak_body(self):
         for prefix, body in (("```python\n", "code_body"), ("$$", "x_{12345}+"), ("`", "long_code_call(")):
@@ -179,6 +203,17 @@ class MarkdownReplyTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.fixture = test_reply_text.ShortReplyTextTests(methodName="runTest")
         self.fixture.setUp()
+
+    async def test_coordinate_reply_filters_private_control_and_keeps_math_source(self):
+        raw = '坐标 $(x, y)$。'
+        await self.fixture.complete(list('温和|<self_harness>{}</self_harness>' + raw),
+                                    self_harness_profile={})
+        displayed = ''.join(m['text'] for m in self.fixture.messages
+                            if m['type'] == 'answer_delta')
+        self.assertEqual(displayed, raw)
+        self.assertEqual(''.join(self.fixture.tts_text), '坐标 x，y。')
+        self.assertEqual(self.fixture.timeline.heard_text(), raw)
+        self.assertEqual(self.fixture.agent._push_history.call_args.args[3], raw)
 
     async def test_structured_reply_keeps_raw_display_and_history_and_speaks_explanation(self):
         raw = ("先按相关程度分配权重。\n$$A=\\frac{QK^T}{\\sqrt{d}}V$$\n"

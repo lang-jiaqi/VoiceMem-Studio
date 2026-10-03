@@ -4,12 +4,14 @@ import asyncio
 import base64
 import json
 import time
+from contextlib import aclosing
 from studio.core.utils.echo_guard.component import UtteranceGuard
 from studio.core.utils.dialogue.component import PauseGate, backchannel_policy, is_unfinished
 from studio.core.utils.reply_modes.initialize import DIRECT, MEMORY
 from studio.core.utils.turn_taking.initialize import Backchannel, TurnTakingStateMachine
 from voicemem import gate
 from studio.core.utils.contracts.component import Pending
+from voicemem.lang import detect_language
 
 class Capture:
     async def anticipate(self, sock, on_frame=None, on_speech=None, owner=None, is_busy=None,
@@ -21,14 +23,57 @@ class Capture:
                          on_backchannel_curve_update=None,
                          on_conversation_start=None,
                          on_speech_start=None, textless_confirm_s=None,
-                         turn_taking=None):
+                         turn_taking=None, language_state=None):
+        """Own one stream and release its workers when capture ends or is closed."""
+        pause_gate = PauseGate()
+        stream = open_stream(
+            self.vm, spec_min_chars=self.SPEC_MIN_CHARS, gamble_s=self.GAMBLE_S,
+            confirm_s=self.CONFIRM_S, eot=self._eot(),
+            textless_confirm_s=textless_confirm_s,
+            turn_end_guard=pause_gate.allow_end)
+        background_tasks = set()
+        try:
+            async with aclosing(self._capture_turns(
+                    sock, stream, pause_gate, background_tasks,
+                    on_frame=on_frame, on_speech=on_speech, owner=owner, is_busy=is_busy,
+                    said=said, on_candidate=on_candidate,
+                    on_candidate_reject=on_candidate_reject,
+                    on_playback_checkpoint=on_playback_checkpoint,
+                    on_filler_done=on_filler_done, on_early=on_early,
+                    on_early_cancel=on_early_cancel,
+                    on_self_harness_get=on_self_harness_get,
+                    on_self_harness_update=on_self_harness_update,
+                    on_harness_prompt_update=on_harness_prompt_update,
+                    on_backchannel_curve_update=on_backchannel_curve_update,
+                    on_conversation_start=on_conversation_start,
+                    on_speech_start=on_speech_start,
+                    turn_taking=turn_taking, language_state=language_state)) as turns:
+                async for pending in turns:
+                    yield pending
+        finally:
+            for task in background_tasks:
+                task.cancel()
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                await close()
+
+    async def _capture_turns(self, sock, stream, pause_gate, background_tasks,
+                         on_frame=None, on_speech=None, owner=None, is_busy=None,
+                         said=None, on_candidate=None, on_candidate_reject=None,
+                         on_playback_checkpoint=None, on_filler_done=None, on_early=None,
+                         on_early_cancel=None,
+                         on_self_harness_get=None, on_self_harness_update=None,
+                         on_harness_prompt_update=None,
+                         on_backchannel_curve_update=None,
+                         on_conversation_start=None,
+                         on_speech_start=None, textless_confirm_s=None,
+                         turn_taking=None, language_state=None):
         """Yield confirmed turns while forwarding audio, playback, and cancellation events."""
+        from voicemem.lang import detect_language
         from uuid import uuid4
         input_turn_id = uuid4().hex
-        pause_gate = PauseGate()
-        stream = open_stream(self.vm, spec_min_chars=self.SPEC_MIN_CHARS, gamble_s=self.GAMBLE_S,
-                           confirm_s=self.CONFIRM_S, eot=self._eot(), textless_confirm_s=textless_confirm_s,
-                           turn_end_guard=pause_gate.allow_end)
+        language_state = language_state if language_state is not None else {}
         utterance = UtteranceGuard()
         turn_finished = False
         last_partial = ""
@@ -164,6 +209,8 @@ class Capture:
                 snapshot = st
                 emotion_task = asyncio.create_task(
                     asyncio.to_thread(lambda: snapshot.emotion))
+                background_tasks.add(emotion_task)
+                emotion_task.add_done_callback(background_tasks.discard)
             turn_finished = bool(st.turn)
             utterance.observe(active=st.spoke or bool(st.turn) or st.state == "<speak>",
                               busy=busy_at_capture, reference=reference_at_capture)
@@ -247,17 +294,19 @@ class Capture:
             # also returns it to the user; keep the captured echo reference intact.
             if (not st.turn and not busy and not input_echo and bc_speech_t0
                     and (not utterance.started_busy or barged)):
-                voice = self._backchannel_voice() if _bc_mod.emitting() else None
+                language = detect_language(cur, language_state.get(
+                    self.ACTIVE_SPACE, self.space_language(self.ACTIVE_SPACE)))
+                voice = self._backchannel_voice(language) if _bc_mod.emitting() else None
                 token = turn_taking.offer_backchannel(
                     text=cur, silence=bc_gap, spoke=st.spoke,
                     speech_s=time.monotonic() - bc_speech_t0,
                     emotion=owner.get("emotion", ""),
                     tail_rms=bc_rms_fast, prev_rms=bc_rms_slow,
-                    lang=self.space_language(self.ACTIVE_SPACE),
+                    lang=language,
                     available=voice.available if voice else set(),
                     unfinished=unfinished)
                 if token:
-                    voice = self._backchannel_voice()
+                    voice = self._backchannel_voice(language)
                     pcm = voice.get(token, bc.rng) if voice else None
                     if pcm:
 
@@ -270,7 +319,7 @@ class Capture:
                         if self.BARGE_DEBUG:
                             print(f"[backchannel] {token!r}", flush=True)
                     elif self.BARGE_DEBUG:
-                        v = self._BC_VOICE["obj"]
+                        v = self._BC_VOICE.get("banks", {}).get(language, {}).get("obj")
                         why = ("音色对不上，这条路不附和" if v is False
                                else "预合成还没好" if v is not None else "拿不到 TTS")
                         print(f"[backchannel] 判到该说 {token!r}，但{why} → 跳过", flush=True)
@@ -499,10 +548,18 @@ class Capture:
                               input_turn_id=input_turn_id)
 
     async def _session_anticipate(self, session_id: str, sock, on_close=None, **kwargs):
+        languages = kwargs.setdefault("language_state", {})
         try:
-            async for pending in self.anticipate(sock, **kwargs):
-                yield pending
+            async with aclosing(self.anticipate(sock, **kwargs)) as turns:
+                async for pending in turns:
+                    space = self.ACTIVE_SPACE
+                    pending.language = detect_language(
+                        pending.text, languages.get(space, self.space_language(space)))
+                    languages[space] = pending.language
+                    yield pending
         finally:
-            if on_close:
-                await on_close()
-            self._SESSION_CONTEXT.clear_session(session_id)
+            try:
+                if on_close:
+                    await on_close()
+            finally:
+                self._SESSION_CONTEXT.clear_session(session_id)

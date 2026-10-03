@@ -67,8 +67,11 @@ The four policy files in `studio/harness/{persona,speaking_style,reply_modes,
 turn_taking}/policy.py` are immutable runtime defaults. Each exposes its
 pre-Self-Harness prompt as a `DEFAULT_*` value, and execution remains in the
 corresponding `studio/core/utils/` component. Studio uses one prompt per purpose
-without language variants. `--lang` still selects ASR and Memory Space language;
-the memory library retains its own prompt inputs.
+without language variants. A shared persona rule permits natural Chinese/English
+conversation, mixed terminology and explicit user language requests. No per-turn
+system message forces a reply language. `--lang` supplies an initial UI/default
+language; stored Space language is the fallback for ambiguous first inputs and
+the opening, not a restriction on speech or stored facts.
 
 `studio/harness/self_harness/policy.py` is the fifth, coordinating policy. It
 declares a typed overlay schema spanning persona interaction style, speech rate,
@@ -165,6 +168,15 @@ model classes and factories live in `core/utils/<component>/`.
 
 ### Deployment boundary
 
+Native Apple Silicon setup installs the Studio extra with
+`studio/constraints-macos-py312.txt`, a Python 3.12 profile pinning direct and
+transitive dependencies, then runs `pip check`. It does not apply these Mac
+constraints to the independent CUDA profile. The model-free GitHub Actions
+workflow installs `evals/requirements-ci.txt` and checks decoder ownership,
+connection/account cleanup, memory completion, text projection and browser
+behavior without model downloads or API credentials. It also rejects tracked
+files under `prompt/logs/`; local runtime logs remain ignored.
+
 Linux/NVIDIA deployment uses the root compatibility `compose.yaml` and
 `studio/deploy/Dockerfile.cuda` to run
 the same Studio entry point and in-process Breeze provider. The image pins the
@@ -230,8 +242,16 @@ accounts and cookie sessions. HTTP and conversation WebSocket entry points resol
 the authenticated account before reading memory or constructing a session; the pet
 observer is disabled. Each account owns one `VoiceAgent` and one private default
 Space under the demo data directory. The VoiceMem `memory_root` is set to that
-private directory; public demo browsers cannot create or switch Spaces. Demo
-Spaces use Chinese so VoiceMem's process-wide language override stays stable.
+private directory; public demo browsers cannot create or switch Spaces.
+HTTP and WebSocket requests lease their account agent for the request lifetime.
+Idle agents are released after 15 minutes or when more than eight idle agents
+are cached. Active leases, pending ingest tasks and native memory completion
+callbacks prevent eviction. A background sweep reclaims idle entries even if
+no further requests arrive; eviction leaves the account's files, credentials
+and explicit Harness preferences intact. Shared inference providers remain
+process owned.
+Demo Spaces accept Chinese and English in the same memory pool. Each conversation owns
+its recent-language fallback; accounts do not change a process language override.
 The account owns its turn recordings. Browser chat lists remain page-local;
 long-term memory persists with the account. Mobile demo requests enter a dedicated
 browser pet page, which reuses the desktop Live2D behavior and browser voice client.
@@ -242,8 +262,13 @@ it is not included in text or realtime reply prompts. The gate also skips or
 discards speculative replies before playback. Background ingestion and speaker
 tracking retain their existing lifecycle so a later matching voice can clear the gate.
 Conversation text and input live in a separate sheet so the avatar remains visible
-by default. The VoiceMem sheet shows this turn's retrieved hits and watches the account's memory snapshot
-for new stored entries. Its top-right settings panel exposes only Self Harness
+by default. The VoiceMem sheet shows this turn's retrieved hits. A turn-scoped
+`memory_store_status` event is sent only after the durable ingest callback;
+completion causes one snapshot fetch instead of polling while the reply is
+still playing. Factual entries are matched by the completed turn's memory IDs;
+affective summaries are account-level snapshot changes. A later input invalidates
+an earlier turn's pending fetch. Disconnected or changed-Space sessions receive
+no stale completion event. Its top-right settings panel exposes only Self Harness
 controls. Explicit Harness choices persist in the account's default Space via the
 demo account database; model-driven changes remain conversation scoped. The demo
 serves only allowlisted pet scripts and local PixiJS runtime files to authenticated
@@ -334,7 +359,8 @@ checkpoints and the cache is discarded on page refresh. UI replies and
 perception come from backend events. Confirmed input IDs deduplicate transcripts
 and merge continuations; interruption uses the backend's heard prefix. Streaming
 reply deltas update the active text node without rebuilding prior chat turns.
-Changing style, conversation, language, or leaving the page closes its connection. Chat
+Changing style, conversation, or leaving the page closes its connection. UI
+language changes retain the connection and do not reopen or rewrite memory. Chat
 lists are page-local and reset on refresh; opening a previous list item starts a
 new backend context for subsequent input. Both styles let each new chat choose a
 Memory Space. Chats retain that choice and share the Space's persistent memory;
@@ -648,10 +674,76 @@ session. This is a per-page guard, not a cross-client or server-wide session lim
 
 ### ASR and final refinement
 
+Studio defaults to FunASR `paraformer-zh-streaming`, which supports Chinese and
+English independently of UI or Space language. Acquisition and strict warmup
+use the same local FunASR artifact manifest. Each connection owns a decoder
+cache, input buffer and cumulative text. Studio caches model prototypes by
+backend/device and clones their stream state; accounts and Spaces reuse weights
+instead of loading another FunASR model. Cold construction and inference follow
+`TORCH_LOCK`. Stateless final-ASR weights are reused as well.
+Explicit English adapter calls retain the reusable Zipformer path. FunASR
+buffers 600 ms chunks and appends 50 ms of zero-valued right context at flush.
+Resumed input starts a fresh decoder cache while retaining the utterance text;
+reset clears that text and cache for the next utterance.
+
 Streaming ASR runs in a dedicated serial worker so chunk inference does not
 block WebSocket input. At turn end, full-audio ASR refinement may run in a
 separate final-ASR executor. Epoch checks prevent obsolete worker results from
 overwriting a newer turn.
+`VoiceStream.prepare_audio` constructs connection-owned ASR and VAD adapters
+off the event loop. VAD recurrent state and segment queues are private to a
+connection; consumed segments are discarded because capture only needs speech
+activity. Built-in recognizers expose `new_stream` for independent decoder
+state. Custom injected objects without that method keep their existing object
+semantics. Capture explicitly closes its stream and background perception tasks
+on completion, error, cancellation or generator closure. Both chained and
+Realtime session consumers close their capture iterator explicitly. Worker shutdown rejects
+new input, invalidates queued epochs, resolves pending flushes and enqueues a stop
+command. An active native call is allowed to return before the daemon exits;
+connection cleanup waits only for the existing bounded ASR deadline, never
+forcibly interrupts native inference or closes shared weights.
+
+Studio's final SenseVoice recognizer keeps automatic language detection, accepting
+Mandarin, English and Cantonese result tags. Nonempty results tagged as another
+language or with an unknown tag return no refinement, so the existing stream
+flush, frozen speculative snapshot or latest partial transcript supplies the
+fallback. This prevents an out-of-scope language result from replacing usable
+streaming text without another decode, translation or extra model. The reusable
+VoiceMem recognizer remains unrestricted unless an allowlist is explicitly
+supplied. The separate acoustic-emotion transcriber also uses automatic input
+language detection rather than forcing Mandarin.
+
+### Conversation language ownership
+
+Capture estimates the main input language from confirmed prose, using recent
+language in the same WebSocket and Space for ambiguous short inputs. Code,
+formula syntax and isolated identifiers do not determine that fallback. The
+captured `Pending.language` travels with routing, speculative generation,
+continuations, fillers and deferred ingestion; an early output with a different
+language estimate cannot be adopted. Partial recognition may select an eligible
+backchannel bank but does not commit the session's language fallback.
+
+Reply text follows the shared persona and user context naturally. TTS selects
+instructions from the actual generated segment, so an explicit user request to
+answer in another language works without a forced output-language control field.
+Tone labels stay canonical; English tone and speech-rate instructions are
+localized at the speech boundary. Backchannel caches are keyed by language and
+voice. Missing matching clips stay silent rather than playing the other language
+or synthesizing a bank during a live pause. Tone smoothing belongs to the owning
+conversation, not the account-wide agent. Speculative tone is staged on the
+output timeline and only committed with an accepted, heard reply prefix.
+
+VoiceMem retains each instance's stored default. Studio enables
+`follow_input_language`, and captured ingestion language scopes generated affect,
+trait and attribution descriptions. Context variables isolate concurrent tasks;
+native threads and executor jobs explicitly capture their parent's context.
+Constructing or opening another Space does not change a process override.
+Factual extraction preserves input language, and multilingual E5 retrieval uses
+the same index for either language; short cross-language queries can still rank
+imperfectly. Canonical slot/emotion keys stay fixed.
+Existing persisted memories and Space metadata are not translated or migrated.
+The compatibility `/api/lang` endpoint changes UI language and reports
+`reply_lang: "auto"`; authenticated demo requests retain their account resolution.
 
 ASR finalization gives full-audio refinement an 80 ms preference window, then
 accepts the first non-empty result from refinement or streaming flush. Passing
@@ -937,10 +1029,20 @@ take effect without editing or reloading those defaults.
 ### Self Harness, tone and TTS
 
 The reply model prefixes tagged replies with a private Self Harness header and
-then a tone tag. `studio/core/utils/self_harness/component.py` validates and
+then a tone tag. The speaking policy specifies the tag after the private header
+so the two prompt rules agree on ordering.
+`studio/core/utils/self_harness/component.py` validates and
 removes the header. `studio/core/utils/tts/control.py` removes the tone tag,
 smooths abrupt tone transitions when no fixed tone is selected, and converts it
 into a TTS instruction. Neither control prefix is spoken or stored as assistant text.
+Leading control headers are stripped even when the Self Harness overlay is
+disabled; updates are applied only when that overlay is enabled. A reply-local
+`PrivateControlFilter` also strips misplaced or repeated reserved control blocks
+after tone parsing, before browser deltas, speech projection and source history.
+It never applies updates from body text, retains only possible split delimiters,
+and discards unfinished private blocks at EOF. Cancellation and provider failure
+do not flush its pending delimiter. Only a validated leading header may update
+conversation preferences.
 The reply pipeline buffers a possible leading tone tag across deltas. If the
 provider ends normally before that buffer becomes a recognized tag or reaches
 the streaming fallback length, nonempty buffered text is delivered once as
@@ -976,7 +1078,8 @@ code becomes a brief viewing cue as soon as its bounded language header is
 available; its body is skipped while the model continues streaming. Fences
 labelled `math`, `latex` or `tex` use formula cues. Delimited math (`$...$`,
 `$$...$$`, `\(...\)` and `\[...\]`) uses at most 256 source characters of
-lookahead: short numeric expressions become spoken operators, and complex
+lookahead: short numeric expressions become spoken operators, short coordinate
+tuples become comma-separated values without delimiters, and complex
 expressions become viewing cues. Recognizable complex syntax can release a cue
 before the closing delimiter arrives. Inline code retains short identifiers and
 simple expressions; long, multiline or symbol-dense snippets use an inline
@@ -984,7 +1087,11 @@ reference. Numeric expressions are parsed, never evaluated. Ordinary unmarked
 arithmetic remains unchanged, and currency text is preserved when distinguishable
 from math. Pipe-prefixed tables with a separator row become comma-separated
 spoken cells. Cue wording rotates from a random reply-local starting position
-in the captured space language, without shared cross-session cue counters. Repeated
+in the generated prose language, falling back to the captured input language,
+without shared cross-session cue counters. Language detection reads the same
+accumulated reply lazily when a structured cue, arithmetic expression or TTS
+segment needs it; ordinary deltas do not repeatedly scan the growing reply.
+Repeated
 block cues require 64 new prose characters and are capped at three per type per
 reply; adjacent blocks do not each add another announcement. Short inline
 references remain available where omitting them would break a spoken sentence.
@@ -1202,18 +1309,28 @@ current user input
 
 After a normal or interrupted reply, ingest runs outside the response path.
 The completion callback removes the session turn only when durable memory was
-created. Non-persistent dialogue remains until the session ends.
+created. Non-persistent dialogue remains within a bounded rolling context until
+the session ends.
 
 Only confirmed turns enter this path. Chained conversations use one guarded
 finalizer for normal completion, interruption, errors, follow-ups and disconnect;
 unaccepted EOT snapshots never enqueue memory work. The finalizer uses the
 captured final user input and frozen heard assistant prefix, not the speculative
 input or full generated tail. Missing playback reports can therefore omit heard
-words from context rather than inventing unconfirmed playback. The existing
-200-character-per-message storage cap and recent-turn window are unchanged.
+words from context rather than inventing unconfirmed playback. Messages preserve
+up to 4,000 characters each; oversized messages keep their beginning and ending
+with an explicit omission marker. Recent history retains at most six turns and
+12,000 content characters. Uncommitted context uses the same total character
+budget, evicting its oldest turns and completion lookup entries when full.
 
 Background ingest captures the target `VoiceMem` instance and Memory Space when
-scheduled. A later UI space change cannot redirect an existing write.
+scheduled, along with the confirmed input language. A later UI space change or
+another account's language cannot redirect or relabel an existing write.
+An agent tracks unfinished native writes separately from its asyncio task set:
+returning from `ingest(async_facts=True)` does not yet release the account cache
+entry. Only its durable completion callback or a failed ingest releases that
+write. Browser completion messages contain status and IDs, never backend error
+details.
 
 ## 13. State ownership
 
@@ -1231,6 +1348,8 @@ scheduled. A later UI space change cannot redirect an existing write.
 | Self Harness profile, Persona supplement, and confirmation state | `SelfHarnessState` | WebSocket session |
 | Reply router model | `studio/core/utils/reply_modes` | Process |
 | Reply mode | Confirmed `Pending` turn | Turn |
+| Recent input-language fallback | WebSocket session + Memory Space | Session |
+| Captured input language | Confirmed `Pending` and ingest context | Turn/task |
 | Early output buffer | `ReplySink` | Speculative assistant output |
 | Short-term dialogue | `SessionBuffer` | WebSocket session + Memory Space |
 | Text/media alignment | `AudioTimeline` | Assistant output ID |

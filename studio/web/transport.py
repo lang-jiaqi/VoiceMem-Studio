@@ -200,6 +200,28 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
 
     if demo_accounts:
         from studio.web.demo_accounts import COOKIE, SESSION_SECONDS
+        app.state.account_jobs = set()
+
+        def track_account_job(task):
+            app.state.account_jobs.add(task)
+            task.add_done_callback(app.state.account_jobs.discard)
+            return task
+
+        async def acquire_demo_agent(user_id):
+            work = track_account_job(asyncio.create_task(
+                asyncio.to_thread(demo_accounts.acquire_agent, user_id)))
+            try:
+                return await asyncio.shield(work)
+            except asyncio.CancelledError:
+                # Native construction can finish after its requester disconnects.
+                def release_abandoned(done):
+                    if done.cancelled() or done.exception() is not None:
+                        return
+                    release = track_account_job(asyncio.create_task(asyncio.to_thread(
+                        demo_accounts.release_agent, user_id, done.result())))
+                    release.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
+                work.add_done_callback(release_abandoned)
+                raise
 
         def same_origin(headers):
             origin = headers.get("origin", "")
@@ -225,10 +247,16 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
             if path in {"/ui/technical.html", "/ui/digital.html", "/legacy", "/classic"} and re.search(
                     r"iPhone|Android|Mobile", request.headers.get("user-agent", ""), re.I):
                 return RedirectResponse("/ui/pet-mobile.html", status_code=303, headers=_NOCACHE)
-            response = await call_next(request)
-            if path.startswith("/api/") or response.status_code >= 400:
-                response.headers["Cache-Control"] = "no-store"
-            return response
+            request.state.demo_agent_lease = None
+            try:
+                response = await call_next(request)
+                if path.startswith("/api/") or response.status_code >= 400:
+                    response.headers["Cache-Control"] = "no-store"
+                return response
+            finally:
+                if request.state.demo_agent_lease is not None:
+                    await asyncio.to_thread(demo_accounts.release_agent, user[0],
+                                            request.state.demo_agent_lease)
 
         class Credentials(BaseModel):
             name: str
@@ -270,7 +298,28 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
             return {"name": user[1]}
 
         async def demo_agent(request: Request):
-            return await asyncio.to_thread(demo_accounts.agent, request.state.demo_user[0])
+            if request.state.demo_agent_lease is None:
+                request.state.demo_agent_lease = await acquire_demo_agent(request.state.demo_user[0])
+            return request.state.demo_agent_lease
+
+        @app.on_event("startup")
+        async def start_account_cleanup():
+            async def sweep():
+                while True:
+                    await asyncio.sleep(60)
+                    await asyncio.to_thread(demo_accounts.prune_idle)
+            app.state.account_cleanup = asyncio.create_task(sweep())
+
+        @app.on_event("shutdown")
+        async def stop_account_cleanup():
+            task = getattr(app.state, 'account_cleanup', None)
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            while app.state.account_jobs:
+                await asyncio.gather(*tuple(app.state.account_jobs), return_exceptions=True)
+                await asyncio.sleep(0)
+            await asyncio.to_thread(demo_accounts.prune_idle, idle_seconds=0, max_idle_agents=0)
 
     @app.websocket("/ws")
     async def ws(sock: WebSocket):
@@ -283,14 +332,13 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
             if not user:
                 await sock.close(code=1008)
                 return
-            active_agent = await asyncio.to_thread(demo_accounts.agent, user[0])
-        await sock.accept()
+            active_agent = await acquire_demo_agent(user[0])
         tee = TeeSocket(sock, pet_hub)
-        await sock.send_json({"type": "session_ready", "mode": mode})
-        await pet_hub.broadcast({"type": "conversation_started",
-                                 "session_id": tee.session_id})
         try:
-
+            await sock.accept()
+            await sock.send_json({"type": "session_ready", "mode": mode})
+            await pet_hub.broadcast({"type": "conversation_started",
+                                     "session_id": tee.session_id})
             if demo_accounts:
                 await demo_session(active_agent, tee)
             else:
@@ -298,8 +346,12 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
         except WebSocketDisconnect:
             pass
         finally:
-            await pet_hub.broadcast({"type": "conversation_ended",
-                                     "session_id": tee.session_id})
+            try:
+                await pet_hub.broadcast({"type": "conversation_ended",
+                                         "session_id": tee.session_id})
+            finally:
+                if demo_accounts and active_agent is not None:
+                    await asyncio.to_thread(demo_accounts.release_agent, user[0], active_agent)
 
     @app.websocket("/ws-pet")
     async def ws_pet(sock: WebSocket):
@@ -369,10 +421,10 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
         lang = (await req.json()).get("lang", "zh")
         if demo_accounts:
             agent = await demo_agent(req)
-            reply_lang = await asyncio.to_thread(agent.set_lang, lang)
-            return {"lang": "zh", "reply_lang": reply_lang}
-        reply_lang = await asyncio.to_thread(set_lang, lang) if set_lang else lang
-        return {"lang": lang, "reply_lang": reply_lang or lang}
+            ui_lang = await asyncio.to_thread(agent.set_lang, lang)
+        else:
+            ui_lang = await asyncio.to_thread(set_lang, lang) if set_lang else lang
+        return {"lang": ui_lang, "reply_lang": "auto"}
 
     if spaces:
         _list_spaces, _create_space, _use_space, _active_space = spaces

@@ -60,6 +60,10 @@ def tts_prompts():
     _strings(cfg.get("tones"), "prompt/tts.json:tones", labels)
     if set(cfg["tones"]) != labels:
         raise ValueError("prompt/tts.json:tones 请保留原有八个标签，只修改提示词正文")
+    if "tones_en" in cfg:
+        _strings(cfg["tones_en"], "prompt/tts.json:tones_en", labels)
+        if set(cfg["tones_en"]) != labels:
+            raise ValueError("prompt/tts.json:tones_en must retain the eight tone keys")
     fallback = cfg.get("fallback_by_user_emotion")
     if not isinstance(fallback, dict):
         raise ValueError("prompt/tts.json:fallback_by_user_emotion 必须是对象")

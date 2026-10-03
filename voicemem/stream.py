@@ -299,11 +299,14 @@ class _AsrWorker:
         self.backlog = 0          # 队里还没识别的样本数（16k）
         self.stats = {"chunks": 0, "busy_s": 0.0, "max_backlog": 0, "last_ms": 0.0}
         self._last_warn = 0.0
+        self.closed = False
         self.t = threading.Thread(target=self._run, name="asr-worker", daemon=True)
         self.t.start()
 
     def push(self, frame) -> str:
         with self.lock:
+            if self.closed:
+                raise RuntimeError("ASR worker is closed")
             self.backlog += len(frame)
             self.stats["max_backlog"] = max(self.stats["max_backlog"], self.backlog)
             backlog_s, text = self.backlog / 16000.0, self.text
@@ -320,11 +323,16 @@ class _AsrWorker:
         fut = asyncio.get_running_loop().create_future()
         loop = asyncio.get_running_loop()
         with self.lock:
+            if self.closed:
+                fut.set_result("")
+                return fut
             self.q.put(("flush", loop, fut, self.epoch))
         return fut
 
     def reset(self) -> None:
         with self.lock:
+            if self.closed:
+                return
             self.epoch += 1
             self.text = ""
             self.backlog = 0
@@ -338,6 +346,23 @@ class _AsrWorker:
                 if cmd == "flush":
                     self._resolve(arg, fut, "")
             self.q.put(("reset", None, None, self.epoch))
+
+    def close(self) -> None:
+        """Invalidate queued work and stop after the current native call returns."""
+        with self.lock:
+            if self.closed:
+                return
+            self.closed = True
+            self.epoch += 1
+            self.text, self.backlog = "", 0
+            while True:
+                try:
+                    cmd, arg, fut, _ = self.q.get_nowait()
+                except queue.Empty:
+                    break
+                if cmd == "flush":
+                    self._resolve(arg, fut, "")
+            self.q.put(("stop", None, None, self.epoch))
 
     @staticmethod
     def _resolve(loop, future, value):
@@ -356,6 +381,9 @@ class _AsrWorker:
     def _run(self):
         while True:
             cmd, arg, fut, epoch = self.q.get()
+            if cmd == "stop":
+                self.asr = None
+                return
             try:
                 with self.lock:
                     obsolete = epoch != self.epoch
@@ -515,6 +543,8 @@ class VoiceStream:
         # ASR/VAD 懒加载：feed_text / feed_partial（外部 ASR）不碰音频模型。
         self._asr = None
         self._vad = None
+        self._closed = False
+        self._snapshot_tasks = set()
         # 回合状态
         self._text = ""
         self._silence = 0.0
@@ -538,13 +568,63 @@ class VoiceStream:
 
     @property
     def asr(self):
+        self._check_open()
         if self._asr is None:
-            self._asr = self.vm.utils.get("asr"); self._asr.reset()
+            self._asr = self._new_audio_adapter("asr")
         return self._asr
+
+    def _check_open(self):
+        if self._closed:
+            raise RuntimeError("Voice stream is closed")
+
+    def _new_audio_adapter(self, name):
+        if name == "vad" and self.vad_threshold is not None:
+            from voicemem.utils.audio.stream_io import make_vad
+            return make_vad(threshold=self.vad_threshold)
+        adapter = self.vm.utils.get(name)
+        fork = getattr(adapter, "new_stream", None)
+        if fork is not None:
+            return fork()
+        if name == "asr":
+            adapter.reset()
+        return adapter
+
+    async def prepare_audio(self):
+        """Load weights off the event loop and retain connection-owned state."""
+        self._check_open()
+        asr, vad = self._asr, self._vad
+
+        def load():
+            return (asr if asr is not None else self._new_audio_adapter("asr"),
+                    vad if vad is not None else self._new_audio_adapter("vad"))
+
+        loaded_asr, loaded_vad = await asyncio.to_thread(load)
+        if self._closed:
+            raise RuntimeError("Voice stream is closed")
+        self._asr, self._vad = loaded_asr, loaded_vad
+
+    async def aclose(self):
+        """Release decoder work without cancelling another connection's models."""
+        if self._closed:
+            return
+        self._closed = True
+        tasks = {task for task in (self._spec, self._gate_pre, *self._snapshot_tasks)
+                 if task is not None}
+        for task in tasks:
+            task.cancel()
+        worker = getattr(self, "_asr_w", None)
+        if worker is not None:
+            worker.close()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if worker is not None:
+            await asyncio.to_thread(worker.t.join, ASR_FINISH_TIMEOUT_S)
+        self._asr = self._vad = self._asr_w = None
+        self._pcm, self._preroll = [], []
 
     @property
     def asr_worker(self) -> "_AsrWorker":
         """流式 ASR 的串行线程（见 _AsrWorker）。识别不再在事件循环里同步跑。"""
+        self._check_open()
         w = getattr(self, "_asr_w", None)
         if w is None:
             w = self._asr_w = _AsrWorker(self.asr)
@@ -552,12 +632,9 @@ class VoiceStream:
 
     @property
     def vad(self):
+        self._check_open()
         if self._vad is None:
-            if self.vad_threshold is None:
-                self._vad = self.vm.utils.get("vad")   # 可注入：VoiceMem(vad=...) / config 的 vad 段
-            else:
-                from voicemem.utils.audio.stream_io import make_vad
-                self._vad = make_vad(threshold=self.vad_threshold)
+            self._vad = self._new_audio_adapter("vad")
         return self._vad
 
     # ── 轮次闸门：这一句要不要检索 ──────────────────────────────────────────
@@ -721,7 +798,10 @@ class VoiceStream:
             refined = await self._final_text_async(pcm)
             return (refined or fallback).strip()
 
-        return asyncio.create_task(resolve())
+        task = asyncio.create_task(resolve())
+        self._snapshot_tasks.add(task)
+        task.add_done_callback(self._snapshot_tasks.discard)
+        return task
 
     async def _finish_asr(self, pcm):
         """Race both decoders after a final-ASR grace period, with one deadline."""
@@ -848,6 +928,7 @@ class VoiceStream:
 
     async def feed_text(self, text) -> Turn:
         """打字轮：闸门放行才检索。"""
+        self._check_open()
         self._route = self._gate(text)
         if self._route != _gate_mod.DEEP:
             return Turn(text, empty_result(), route=self._route)
@@ -859,6 +940,7 @@ class VoiceStream:
         换 ASR 只改「喂进来的这行文本」，本方法一字不用改。text 有新内容 = ``<speak>``
         并（重）起投机；``ended=True``（外部 VAD 判一句说完）→ 交出 Turn。
         """
+        self._check_open()
         text = (text or "").strip()
         new = bool(text) and text != self._text
         if text:
@@ -879,6 +961,8 @@ class VoiceStream:
         每块返回 ``StreamState``（``<speak>``/``<silence>`` + 当前投机记忆 + 说完时的 Turn）。
         """
         received_at = time.monotonic()
+        if getattr(self, "_asr_w", None) is None or self._vad is None:
+            await self.prepare_audio()
         frame = resample(np.frombuffer(pcm_bytes, np.int16).astype(np.float32) / 32768.0,
                          src=self.src_rate)
         self._text = self.asr_worker.push(frame)     # 入队即返回，识别在 asr-worker 线程

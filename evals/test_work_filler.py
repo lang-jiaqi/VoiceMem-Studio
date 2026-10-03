@@ -319,7 +319,7 @@ class FillerHandoffTests(unittest.IsolatedAsyncioTestCase):
             self.events.append(message)
         agent = types.SimpleNamespace(BC_ECHO_WINDOW_S=4, MIC_RATE=24000,
             _SESSION_CONTEXT=types.SimpleNamespace(messages=lambda *a,**k:[]),
-            HISTORY_TURNS=4, space_language=lambda _: 'zh', _speak_instruction=lambda _: '')
+            HISTORY_TURNS=4, space_language=lambda _: 'zh', _speak_instruction=lambda _, lang='': '')
         self.session = Conversation(agent, types.SimpleNamespace(send_json=send))
         self.sink = ReplySink(send, AsyncMock())
         self.value = types.SimpleNamespace(text='合成测试问题', emotion='')

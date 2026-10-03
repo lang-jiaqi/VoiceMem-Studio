@@ -130,13 +130,15 @@ The prompt above describes only the "memory" key. "emotion" and "traits" are
 REQUIRED as well; omitting them is an error. Use "" and [] when there is nothing.
 
 ════════════════════════════════════════════════════════════════════════
-LANGUAGE — this overrides every example above.
+LANGUAGE — preserve source facts and localize generated descriptions.
+Write each "memory" text in the language the speaker used for that fact.
+Never translate facts or entity names to match the UI, examples or other memories.
+Preserve natural Chinese/English mixing and technical terms within a fact.
 {label_rule}
-It applies to EVERY string you output: the "memory" texts, every trait
-"label", and "emotion". The only exception is "slot", which is an internal
-key and must stay exactly as listed (情绪 / 应对方式 / 表达风格 / 思维模式 /
-喜好与厌恶). If the speaker wrote in English, every one of those strings must
-be English — copying the Chinese wording from the examples is a mistake.
+This label rule applies to generated trait "label" and "emotion" descriptions,
+not to factual memory texts or entity names. "slot" is an internal key and must
+stay exactly as listed (情绪 / 应对方式 / 表达风格 / 思维模式 / 喜好与厌恶).
+Examples never override these rules.
 ════════════════════════════════════════════════════════════════════════"""
 
 

@@ -31,6 +31,7 @@ class Pending:
     replace_input_turn_id: str = ""
     transcript_managed: bool = False
     opening: bool = False
+    language: str = ""          # Captured input language; never a forced reply language.
 
 
 def input_transcript_event(pending) -> dict:

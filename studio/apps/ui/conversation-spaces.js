@@ -76,7 +76,7 @@
         try {
           const created = await request('/api/spaces', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: value, language: (window.VMSettings?.language || 'zh').startsWith('en') ? 'en' : 'zh' }),
+            body: JSON.stringify({ name: value }),
           });
           await refresh(); selected = created.id; name.value = ''; render();
         } catch (error) { window.VMUI?.notify(error.message); }

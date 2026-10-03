@@ -135,8 +135,8 @@ class ReplySegmentationTests(unittest.IsolatedAsyncioTestCase):
             reply_mode='memory_cot', route='deep')
         self.reply.__dict__.update(
             ACTIVE_SPACE='segmentation-test', _LAST_TONE={'tag': ''},
-            _speak_base_env='', _SPEAK_BASE={}, _by_lang=lambda _: '',
-            _speak_instruction=lambda _: '', BARGE_DEBUG=False,
+            _speak_base_env='', _SPEAK_BASE={}, _by_lang=lambda _, lang='': '',
+            _speak_instruction=lambda _, lang='': '', BARGE_DEBUG=False,
             _SESSION_CONTEXT=SimpleNamespace(messages=lambda *a, **kw: []), HISTORY_TURNS=6,
             build_reply_context=lambda *a, **kw: '', hot_path_enter=lambda: None,
             hot_path_exit=lambda _: None, _lat_note=lambda _: 'test', _mem_line=lambda: 'test',

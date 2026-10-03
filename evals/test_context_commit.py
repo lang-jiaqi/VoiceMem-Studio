@@ -253,7 +253,7 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.messages)
 
     async def test_opening_uses_its_own_tone_without_changing_later_turns(self):
-        self.agent._LAST_TONE['tag'] = '俏皮'
+        self.session.owner['tone'] = '俏皮'
 
         async def model(*_):
             yield '共情|我在，想聊什么都可以。'
@@ -265,7 +265,7 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.session.turn['task'], 1)
         self.assertTrue(any(tts_control.TONES['共情'] in instruction
                             for instruction in self.tts_instructions))
-        self.assertEqual(self.agent._LAST_TONE['tag'], '俏皮')
+        self.assertEqual(self.session.owner['tone'], '俏皮')
         self.assertEqual(self.session.self_harness.profile['speaking_style']['tone'], 'auto')
 
         async def next_model(*_):
@@ -274,7 +274,7 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         self.memory.reply_stream = next_model
         await self.start()
         await asyncio.wait_for(self.session.turn['task'], 1)
-        self.assertEqual(self.agent._LAST_TONE['tag'],
+        self.assertEqual(self.session.owner['tone'],
                          tts_control.smooth('俏皮', '认真'))
 
     async def test_opening_cannot_update_harness_preference(self):
@@ -347,7 +347,10 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancel_unconfirmed_audio_has_no_history_or_ingest(self):
         self.block_model = True
+        self.session.owner['tone'] = '俏皮'
         sink, timeline, task = await self.early()
+        self.assertTrue(timeline.reply_tone)
+        self.assertEqual(self.session.owner['tone'], '俏皮')
         timeline._first_audio_at = time.monotonic() - 20
         await self.session.drop_early()
         self.assertTrue(task.done())
@@ -356,7 +359,19 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.messages, [])
         self.assertEqual(self.audio, [])
         self.assertEqual(self.saved(), [])
+        self.assertEqual(self.session.owner['tone'], '俏皮')
         self.agent.queue_remember_turn.assert_not_called()
+
+    async def test_tone_smoothing_belongs_to_the_conversation(self):
+        other = Conversation(self.agent, self.sock)
+        self.session.owner['tone'] = '俏皮'
+        other.owner['tone'] = '共情'
+        try:
+            await asyncio.wait_for(await self.start(), 1)
+            self.assertEqual(self.session.owner['tone'], tts_control.smooth('俏皮', '认真'))
+            self.assertEqual(other.owner['tone'], '共情')
+        finally:
+            await other.close_session()
 
     async def test_completed_private_generation_never_waits_for_playback_or_saves(self):
         _, timeline, task = await self.early()
@@ -501,6 +516,7 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
     async def test_interrupt_without_playback_report_keeps_only_user(self):
         self.auto_playback = False
         self.block_model = True
+        self.session.owner['tone'] = '俏皮'
         value = self.pending()
         await self.start(value)
         await asyncio.wait_for(self.audio_ready.wait(), 1)
@@ -508,6 +524,7 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         await self.session.stop_reply(force=True)
         self.assert_once(value)
         self.assertEqual(self.saved()[0].assistant_text, '')
+        self.assertEqual(self.session.owner['tone'], '俏皮')
 
     async def test_stop_before_reply_task_starts_preserves_confirmed_user_once(self):
         value = self.pending()

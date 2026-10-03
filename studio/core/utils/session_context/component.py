@@ -18,26 +18,49 @@ _RECENT_KEEP = 6
 class SessionBuffer:
     """Store uncommitted turns per Memory Space.
 
-    A turn remains available to the reply model until memory ingestion reports
-    that it created persistent memory. The lock is required because ingestion
-    completion runs in a background thread.
+    Recent history retains persisted turns within a character budget; pending
+    context is removed when ingestion confirms durable memory. The lock is
+    required because ingestion completion runs in a background thread.
     """
 
-    def __init__(self, text_limit: int = 200):
+    def __init__(self, text_limit: int = 4000, context_limit: int = 12000):
+        if text_limit <= 0 or context_limit < 2 * text_limit:
+            raise ValueError("Context budget must cover one bounded user/assistant pair")
         self.text_limit = text_limit
+        self.context_limit = context_limit
         self._contexts: dict[tuple[str, str], list[SessionTurn]] = {}
 
         self._recent: dict[tuple[str, str], list[SessionTurn]] = {}
         self._turn_context: dict[str, tuple[str, str]] = {}
         self._lock = threading.RLock()
 
+    def _limit_text(self, value: str) -> str:
+        value = (value or '').strip()
+        if len(value) <= self.text_limit:
+            return value
+        if self.text_limit < 5:
+            return value[:self.text_limit]
+        available = self.text_limit - 3
+        head = available // 2
+        return value[:head] + '\n…\n' + value[-(available - head):]
+
+    def _trim(self, turns, count=None):
+        removed = []
+        total = sum(len(turn.user_text) + len(turn.assistant_text) for turn in turns)
+        while len(turns) > 1 and ((count is not None and len(turns) > count)
+                                  or total > self.context_limit):
+            turn = turns.pop(0)
+            total -= len(turn.user_text) + len(turn.assistant_text)
+            removed.append(turn)
+        return removed
+
     def add(self, session_id: str, space: str, user_text: str, assistant_text: str,
             interrupted: bool = False) -> str:
         turn_id = uuid.uuid4().hex
         turn = SessionTurn(
             turn_id=turn_id,
-            user_text=(user_text or "").strip()[:self.text_limit],
-            assistant_text=(assistant_text or "").strip()[:self.text_limit],
+            user_text=self._limit_text(user_text),
+            assistant_text=self._limit_text(assistant_text),
             interrupted=bool(interrupted),
         )
         if not turn.user_text and not turn.assistant_text:
@@ -46,9 +69,12 @@ class SessionBuffer:
             key = (session_id, space)
             recent = self._recent.setdefault(key, [])
             recent.append(turn)
-            del recent[:-_RECENT_KEEP]
+            self._trim(recent, _RECENT_KEEP)
             context = (session_id, space)
-            self._contexts.setdefault(context, []).append(turn)
+            pending = self._contexts.setdefault(context, [])
+            pending.append(turn)
+            for removed in self._trim(pending):
+                self._turn_context.pop(removed.turn_id, None)
             self._turn_context[turn_id] = context
         return turn_id
 
@@ -86,7 +112,7 @@ class SessionBuffer:
         return "\n".join(lines)
 
     def recent(self, session_id: str, space: str, n: int) -> list["SessionTurn"]:
-        """Return bounded recent turns that have not been persisted."""
+        """Return bounded recent turns, including those already persisted."""
         with self._lock:
             return list(self._recent.get((session_id, space), []))[-n:]
 

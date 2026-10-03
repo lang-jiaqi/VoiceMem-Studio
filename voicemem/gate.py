@@ -198,10 +198,10 @@ def semantic_margin(text: str, lang: str = "en") -> float:
 # ── 对外 ─────────────────────────────────────────────────────────────────────
 
 def route(text: str, *, semantic: bool = True, language: str = "") -> str:
-    """这一句走哪条路。
+    """Route input using lexical rules and an optional semantic fallback.
 
-    ``semantic=False`` 跳过句向量那一级（词表+正则就够、或者不想碰模型时用）。
-    ``language`` 不给就读当前库语言。
+    Without an explicit language, prose selects the prototype bank and ambiguous
+    short inputs use the current operation's language default.
     """
     if not ON:
         return DEEP                       # 闸门关掉 = 每轮都检索的老行为
@@ -217,8 +217,8 @@ def route(text: str, *, semantic: bool = True, language: str = "") -> str:
         return SHALLOW
     if not language:
         try:
-            from voicemem.lang import memory_language
-            language = memory_language()
+            from voicemem.lang import detect_language, memory_language
+            language = detect_language(text, memory_language())
         except Exception:
             language = "en"
     try:

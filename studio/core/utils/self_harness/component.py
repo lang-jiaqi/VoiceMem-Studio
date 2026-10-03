@@ -28,6 +28,43 @@ class ControlPrefix:
     error: str = ""
 
 
+class PrivateControlFilter:
+    """Strip reserved control blocks from streamed text without applying updates."""
+
+    def __init__(self):
+        self.pending = ""
+        self.hidden = False
+
+    def feed(self, value: str, *, final: bool = False) -> str:
+        """Release visible text; retain only a possible split control delimiter."""
+        self.pending += value
+        visible = []
+        while self.pending:
+            markers = (CONTROL_CLOSE,) if self.hidden else (CONTROL_OPEN, CONTROL_CLOSE)
+            found = [(index, marker) for marker in markers
+                     if (index := self.pending.find(marker)) >= 0]
+            if found:
+                index, marker = min(found)
+                if not self.hidden:
+                    visible.append(self.pending[:index])
+                self.pending = self.pending[index + len(marker):]
+                self.hidden = marker == CONTROL_OPEN
+                continue
+            start = self.pending.rfind("<")
+            suffix = self.pending[start:] if start >= 0 else ""
+            keep = bool(suffix) and any(marker.startswith(suffix) for marker in markers)
+            if not self.hidden:
+                visible.append(self.pending[:start] if keep else self.pending)
+            self.pending = suffix if keep else ""
+            break
+        if final:
+            # A recognizable unfinished control tag stays private at normal EOF.
+            if not self.hidden and not self.pending.startswith(("<self", "</self")):
+                visible.append(self.pending)
+            self.pending, self.hidden = "", False
+        return "".join(visible)
+
+
 def default_profile() -> dict[str, dict[str, str]]:
     """Return a fresh profile containing only immutable-policy defaults."""
     return {
@@ -280,10 +317,15 @@ def profile_context(value=None) -> str:
     return "\n".join(parts)
 
 
-def speech_rate_instruction(base: str, value=None) -> str:
+def speech_rate_instruction(base: str, value=None, *, language: str = "zh") -> str:
     profile, _ = _snapshot_parts(value)
     selected = profile["speaking_style"]["speech_rate"]
     instruction = PROFILE_SCHEMA["speaking_style"]["speech_rate"]["tts"][selected]
+    if language == "en":
+        instruction = {"very_slow": " Speak noticeably more slowly, leaving clear pauses without stretching syllables.",
+                       "slow": " Speak a little more slowly, with natural pauses.",
+                       "fast": " Speak a little faster while keeping the words clear.",
+                       "very_fast": " Speak noticeably faster, with compact phrasing and clear articulation."}.get(selected, "")
     return f"{base}{instruction}" if instruction else base
 
 

@@ -17,7 +17,10 @@ def contextual_memory_query(text: str, history) -> str:
     """Return a bounded search query for a short follow-up to personal context."""
     current = (text or "").strip()
     compact = re.sub(r"\s+", "", current)
-    if (not history or not compact or len(compact) > 18
+    english_followup = bool(_EN_FOLLOWUP.match(current))
+    too_long = ((len(current.split()) > 12 or len(current) > 120)
+                if english_followup else len(compact) > 18)
+    if (not history or not compact or too_long
             or gate.is_backchannel(current)):
         return ""
     if not (current.endswith(("?", "？", "呢", "吗", "么"))
@@ -43,7 +46,9 @@ class Routing:
 
         def search():
             from voicemem.leftbrain.query_embedding import query_embedding_scope
-            with query_embedding_scope():
+            from voicemem.lang import language_scope
+            with query_embedding_scope(), language_scope(
+                    getattr(pending, "language", "") or getattr(memory_vm, "memory_language", "en")):
                 classification = memory_vm.classify(query)
                 return memory_vm.search(
                     query,

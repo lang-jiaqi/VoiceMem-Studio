@@ -13,7 +13,8 @@
 直接报错，不会悄悄切回默认值。
 
 在 `tts.json` 中，`base.zh/en` 是基础语气，`tones` 为八个语气标签分别提供
-逐轮指令；模型没有给出标签时使用 `fallback_by_user_emotion`。
+逐轮指令，`tones_en` 使用相同八个内部标签提供英文语音指令；模型没有给出标签时使用 `fallback_by_user_emotion`。
+Studio 的主对话策略中英文共用一套，回复自然跟随用户表达；TTS 指令和公式、代码的查看提示跟随实际生成的正文语言。
 `backchannel_styles` 用于合成附和片段，`breeze_default_instruction` 用于
 没有逐轮指令的情况。请保留八个 `tones` 键和 `标签|正文` 格式；如需增加标签，
 还要同步修改解析器。

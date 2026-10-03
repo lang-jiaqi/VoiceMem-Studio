@@ -50,7 +50,7 @@ class RealtimeSession:
                 emotion=pending.emotion,
                 text=pending.text,
                 context_session=context_session,
-                context_space=context_space),
+                context_space=context_space, language=pending.language),
         })
         await send({"type": "answer_start", "output_id": timeline.output_id,
                     "sample_rate": timeline.sample_rate})
@@ -360,15 +360,13 @@ class RealtimeSession:
                             print("[barge] 等待 Realtime 取消确认超时，下一轮暂缓创建", flush=True)
 
                 pump_task = asyncio.create_task(pump())
+                capture_turns = self.anticipate(
+                    sock, on_frame=on_frame, on_speech=on_speech, owner=owner,
+                    is_busy=hearing, said=lambda: turn["reply"],
+                    on_candidate=pause_candidate, on_candidate_reject=resume_candidate,
+                    on_playback_checkpoint=playback_checkpoint)
                 try:
-                    async for pending in self.anticipate(sock, on_frame=on_frame,
-                                                    on_speech=on_speech, owner=owner,
-
-                                                    is_busy=hearing,
-                                                    said=lambda: turn["reply"],
-                                                    on_candidate=pause_candidate,
-                                                    on_candidate_reject=resume_candidate,
-                                                    on_playback_checkpoint=playback_checkpoint):
+                    async for pending in capture_turns:
 
                         if self._is_backchannel(pending.text) and hearing():
                             if self.BARGE_DEBUG:
@@ -404,19 +402,22 @@ class RealtimeSession:
                 finally:
                     pump_task.cancel()
                     try:
-                        await pump_task
-                    except asyncio.CancelledError:
-                        pass
-                    if turn["pending"] is not None:
-                        timeline = turn["timeline"]
-                        fully_played = bool(
-                            turn["response_done"] and timeline and timeline.playback_done)
-                        close_turn(interrupted=not fully_played)
-                    for task in playback_tasks:
-                        task.cancel()
-                    if playback_tasks:
-                        await asyncio.gather(
-                            *list(playback_tasks), return_exceptions=True)
+                        await capture_turns.aclose()
+                    finally:
+                        try:
+                            await pump_task
+                        except asyncio.CancelledError:
+                            pass
+                        if turn["pending"] is not None:
+                            timeline = turn["timeline"]
+                            fully_played = bool(
+                                turn["response_done"] and timeline and timeline.playback_done)
+                            close_turn(interrupted=not fully_played)
+                        for task in playback_tasks:
+                            task.cancel()
+                        if playback_tasks:
+                            await asyncio.gather(
+                                *list(playback_tasks), return_exceptions=True)
         except Exception as e:
             if connected:
                 raise

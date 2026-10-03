@@ -126,7 +126,7 @@ class Reply:
             is_qwen36, qwen_segment_instruction,
         )
         from studio.core.utils.self_harness.component import (
-            fixed_tone, merge_update, normalize_snapshot, profile_context,
+            PrivateControlFilter, fixed_tone, merge_update, normalize_snapshot, profile_context,
             speech_rate_instruction, split_control_prefix,
         )
         control_enabled = self_harness_profile is not None
@@ -136,15 +136,14 @@ class Reply:
         text_queue: asyncio.Queue = asyncio.Queue()
 
         tts = memory_vm.utils.get("tts")
-
-        speak_base = self._speak_base_env or self._by_lang(self._SPEAK_BASE)
-        speak_as = self._speak_instruction(pending.emotion)
-        if forced_tone := fixed_tone(active_self_harness):
-            speak_as = tts_control.instruction(forced_tone, speak_base)
-        control = {"head": control_enabled, "buf": ""}
+        from voicemem.lang import detect_language
+        language = getattr(pending, "language", "") or getattr(self, "SPACE_LANG", "zh")
+        control = {"head": True, "buf": ""}
+        private_control = PrivateControlFilter()
         tone = {"tag": "", "head": True, "buf": ""}
         from studio.core.utils.tts.markdown import MarkdownSpeech
-        speech_markdown = MarkdownSpeech(getattr(self, "SPACE_LANG", "zh"))
+        speech_markdown = MarkdownSpeech(
+            language, language_resolver=lambda: detect_language(reply, language, keep_short=False))
         logged_instruction = object()
 
         qwen_voice = is_qwen36(getattr(self, "REPLY", None))
@@ -152,18 +151,23 @@ class Reply:
         def _synth_one(seg, text_start):
             nonlocal logged_instruction
             import json
-            effective = speak_as or getattr(tts, "instruction", "") or getattr(tts, "instructions", "")
+            segment_language = detect_language(seg, speech_markdown.language, keep_short=False)
+            segment_base = self._speak_base_env or self._by_lang(self._SPEAK_BASE, segment_language)
+            selected_tone = fixed_tone(active_self_harness) or tone["tag"]
+            effective = (tts_control.instruction(selected_tone, segment_base, segment_language)
+                         if selected_tone else self._speak_instruction(pending.emotion, segment_language))
+            effective = effective or getattr(tts, "instruction", "") or getattr(tts, "instructions", "")
             # An explicit conversation preference wins over the model-specific
             # automatic intro arc; the general Qwen delivery hint still applies.
             if fixed_tone(active_self_harness):
                 effective = qwen_segment_instruction(
-                    effective, "", "", qwen=qwen_voice)
+                    effective, "", "", qwen=qwen_voice, language=segment_language)
             else:
                 effective = qwen_segment_instruction(
                     effective, pending.text, timeline.generated_text[:text_start + len(seg)],
-                    qwen=qwen_voice)
+                    qwen=qwen_voice, language=segment_language)
             effective = speech_rate_instruction(
-                effective, active_self_harness)
+                effective, active_self_harness, language=segment_language)
             if effective != logged_instruction:
                 logged_instruction = effective
                 print(f"[tts-prompt] {timeline.output_id[:8]} "
@@ -328,7 +332,7 @@ class Reply:
                 pending.memory_context, stranger=pending.stranger,
                 route=pending.route, replay=pending.replay, text=pending.text,
                 emotion=pending.emotion,
-                continuation=getattr(pending, "continuation_prompt", False))
+                continuation=getattr(pending, "continuation_prompt", False), language=language)
             if control_enabled:
                 ctx = f"{ctx}\n\n{profile_context(active_self_harness)}"
 
@@ -344,7 +348,8 @@ class Reply:
             )
 
             def apply_self_harness_update(update):
-                nonlocal speak_as
+                if not control_enabled:
+                    return
                 effective = update
                 if on_self_harness_update is not None:
                     try:
@@ -362,10 +367,6 @@ class Reply:
                         print(f"[self-harness] 保存会话设置失败：{type(exc).__name__}: {exc}",
                               flush=True)
                 merge_update(active_self_harness["profile"], effective)
-                if selected_tone := fixed_tone(active_self_harness):
-                    speak_as = tts_control.instruction(selected_tone, speak_base)
-                elif "tone" in effective.get("speaking_style", {}):
-                    speak_as = self._speak_instruction(pending.emotion)
 
             def emit_speech(delta, *, final=False):
                 spoken = speech_markdown.feed(delta, final=final)
@@ -374,8 +375,9 @@ class Reply:
                 if spoken.text:
                     text_queue.put_nowait(spoken.text)
 
-            async def emit_visible(delta):
+            async def emit_visible(delta, *, final=False):
                 nonlocal reply
+                delta = private_control.feed(delta, final=final)
                 if not delta:
                     return
                 reply += delta
@@ -384,7 +386,6 @@ class Reply:
                 emit_speech(delta)
 
             async def consume_tone(delta, *, final=False):
-                nonlocal speak_as
                 if tone["head"]:
                     tone["buf"] += delta
                     tag, rest = tts_control.split(tone["buf"])
@@ -392,12 +393,11 @@ class Reply:
                         selected = fixed_tone(active_self_harness)
                         opening = getattr(pending, "opening", False)
                         tag = selected or (tag if opening else tts_control.smooth(
-                            self._LAST_TONE["tag"], tag))
+                            owner.get("tone", ""), tag))
                         tone["tag"], tone["head"], tone["buf"] = (
                             tag, False, "")
                         if not opening:
-                            self._LAST_TONE["tag"] = tag
-                        speak_as = tts_control.instruction(tag, speak_base)
+                            timeline.reply_tone = tag
                         delta = rest
                         if self.BARGE_DEBUG:
                             print(f"[tone] 模型标的语气：{tag}", flush=True)
@@ -409,7 +409,7 @@ class Reply:
                         delta, tone["buf"] = tone["buf"], ""
                         if final and not delta.strip():
                             delta = ""
-                await emit_visible(delta)
+                await emit_visible(delta, final=final)
 
             async def consume_delta(delta):
                 if control["head"]:
@@ -491,6 +491,8 @@ class Reply:
                 timeline.mark_interrupted()
             return
         context_reply = timeline.heard_text() if interrupted else reply
+        if context_reply and timeline.reply_tone:
+            owner["tone"] = timeline.reply_tone
         if interrupted and self.BARGE_DEBUG:
             print(f"[context] 打断于 {timeline.rendered_ms()}ms，保留回复 "
                   f"{context_reply!r}", flush=True)

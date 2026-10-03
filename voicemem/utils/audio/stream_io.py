@@ -109,5 +109,14 @@ def make_vad(model: str | None = None, threshold: float = 0.5,
         silero_vad=silero, sample_rate=16000), buffer_size_in_seconds=30)
 
     class _V:
-        def is_speech(self, frame): v.accept_waveform(frame); return v.is_speech_detected()
+        def is_speech(self, frame):
+            v.accept_waveform(frame)
+            speech = v.is_speech_detected()
+            while not v.empty():
+                v.pop()
+            return speech
+
+        def new_stream(self):
+            """Allocate independent recurrent state and segment buffers."""
+            return make_vad(str(path), threshold, min_silence_s)
     return _V()

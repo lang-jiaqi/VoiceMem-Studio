@@ -58,7 +58,7 @@ def configure(self, args):
     self._SPEAK_BASE = tts_prompts()['base']
     self._speak_base_env = ''
     self._LAST_TONE = {'tag': ''}
-    self._HISTORY_CHARS = 200
+    self._HISTORY_CHARS = 4000
     self._SESSION_CONTEXT = SessionBuffer(text_limit=self._HISTORY_CHARS)
     from studio.core.utils.llm.initialize import configuration, credential
     provider = args.llm if args.mode == "llm_tts" else "openai"
@@ -105,6 +105,7 @@ def configure(self, args):
     self._IDLE_MAX_WAIT_S = 8.0
     self._REMEMBER_LOCK = asyncio.Lock()
     self._REMEMBER_TASKS: set[asyncio.Task] = set()
+    self._MEMORY_WRITES: set[str] = set()
     self.ECHO_WINDOW = 300
     self.ECHO_RATIO = 0.6
     self.ECHO_FUZZY_MIN = 4

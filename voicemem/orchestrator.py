@@ -30,6 +30,7 @@ Search/Ingest 等完整 pipeline。
 """
 
 from __future__ import annotations
+from voicemem.lang import scoped_operation, contextualize
 
 from voicemem.utils.common import space as _space
 
@@ -779,6 +780,7 @@ class Orchestrator:
 
     # ── 查询分类（含动态 slot） ────────────────────────────────────────────────
 
+    @scoped_operation
     def Classify(self, *a, **k) -> QueryClassification:
         """LLM 分类 query → slots + entities，转发到 LeftBrain.Classify。"""
         return self._left.Classify(*a, **k)
@@ -814,6 +816,7 @@ class Orchestrator:
 
     # ── 完整 pipeline ──────────────────────────────────────────────────────────
 
+    @scoped_operation
     def Search(
         self,
         query: str,
@@ -899,7 +902,7 @@ class Orchestrator:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             rb_future = pool.submit(
-                self._right.search, query, activated_names, emotion, top_k, agent_reply,
+                contextualize(self._right.search), query, activated_names, emotion, top_k, agent_reply,
             )                                            # 右脑并发开跑
 
             hits = self._left.rank(query, final_ids, top_k, speaker_filter=speaker_filter)
@@ -1057,6 +1060,7 @@ class Orchestrator:
     def _bind_self_identity(self, *a, **k):
         return self._audio._bind_self_identity(*a, **k)
 
+    @scoped_operation
     def preprocess(self, *a, **k) -> "AudioPerception":
         """流式预处理（音频感知），转发到 AudioPerceiver.preprocess。"""
         return self._audio.preprocess(*a, **k)
@@ -1093,6 +1097,7 @@ class Orchestrator:
                 return reply
         return ""
 
+    @scoped_operation
     def Ingest(
         self,
         text: str,
@@ -1105,6 +1110,8 @@ class Orchestrator:
         async_facts: bool = False,
         agent_reply: str | None = None,
         on_complete=None,
+        *,
+        language: str | None = None,
     ) -> dict:
         """将一条语音输入存入记忆库。
 
@@ -1180,7 +1187,7 @@ class Orchestrator:
 
         if self._clap_memory_enabled() and audio_path is not None:
             threading.Thread(
-                target=self._finish_clap_environment,
+                target=contextualize(self._finish_clap_environment),
                 args=(audio_path, text, session_id, environment_hint),
                 daemon=True,
             ).start()
@@ -1211,7 +1218,7 @@ class Orchestrator:
                           f"{traceback.format_exc()}", flush=True)
                     _notify_complete({"error": str(e), "persistent_memory_created": False})
 
-            threading.Thread(target=_bg, daemon=True).start()
+            threading.Thread(target=contextualize(_bg), daemon=True).start()
             return {
                 "facts_count":         None,
                 "memory_ids":          [],
@@ -1428,9 +1435,9 @@ class Orchestrator:
         )
 
         # 异步清洁：每多 50 条 heartnote 触发一次
-        threading.Thread(target=self._check_and_cleanup, daemon=True).start()
+        threading.Thread(target=contextualize(self._check_and_cleanup), daemon=True).start()
         # 异步清洁：原声定期归档，每天最多跑一次，删除超过 30 天的 WAV 文件本体
-        threading.Thread(target=self._check_and_cleanup_audio, daemon=True).start()
+        threading.Thread(target=contextualize(self._check_and_cleanup_audio), daemon=True).start()
 
         # ── 短期/长期归因触发（攒够一批才跑 / session 边界）──────────────────
         turn_info = self._get_session_tracker().record_turn(self._user_id, session_id)
@@ -1538,6 +1545,7 @@ class Orchestrator:
         """给记忆数有变化的 slot 重写一句综合描述，转发到 LeftBrain。"""
         return self._left._refresh_schema_descriptions()
 
+    @scoped_operation
     def Flush(self) -> None:
         """对话/会话正式结束时调用一次，补跑最后一个 session 漏掉的批处理
         （子图判定 + 右脑长期归因，见 _run_session_boundary_batch 的说明）。

@@ -1,35 +1,85 @@
-"""存进记忆的文本用什么语言。
+"""Chinese/English memory defaults and isolated operation language.
 
-只有两个值：``en``（默认）和 ``zh``。
-
-左脑早就有 ``use_input_language``（``extract_facts_openai``），抽出来的事实跟着
-用户说话的语言走。右脑没有对应的东西：特质标签和情绪词的 prompt 里写死了"中文，
-5-15字"，于是英文用户的记忆库里事实是英文、画像是中文——这份画像每轮都会拼进
-system prompt 给回复模型，中文就这样漏进了英文对话。
-
-**为什么不做"跟随用户语言"**：一个记忆库应该只有一种语言。跟随输入意味着同一
-个库里中英混存，检索是按向量做的，中文问句和英文记忆在向量空间里离得很远，
-混存等于让一半记忆检索不到。语言是**库的属性**，不是单句的属性。
-
-**不受这个开关影响的两样东西**，它们是内部枚举、不是给人读的文本：
-
-  · slot 名（情绪 / 表达风格 / 思维模式 / 应对方式 / 喜好与厌恶）——检索、配额、
-    脑图聚类都按它做键，翻译了会全线对不上。
-  · 8 个规范情绪（焦虑/悲伤/委屈/孤独/纠结/平静/开心/疲惫）——``anchor_router``
-    里有中英两张关键词表往它们上归一，所以模型**输出**英文情绪词没问题，
-    归一之后落到的仍是这 8 个内部值。
+Stored Space language supplies a fallback, not a restriction on factual text.
+Studio follows each input for generated descriptions, while canonical slot and
+emotion keys retain their existing values. Request scopes and explicit context
+capture prevent concurrent Spaces or deferred workers from changing one another.
+The process setter remains available for legacy callers and startup defaults.
 """
 
 from __future__ import annotations
 
 import os
+import re
+from contextlib import contextmanager
+from contextvars import ContextVar, copy_context
+from functools import wraps
 
-#: 环境变量名。也可以 VoiceMem(memory_language="zh")、demo 的 --lang。
+# Default language for callers without an instance or request scope.
 ENV = "VOICEMEM_MEMORY_LANGUAGE"
 SUPPORTED = ("en", "zh")
 DEFAULT = "en"
 
 _override: str | None = None
+_request_language: ContextVar[str | None] = ContextVar("voicemem_language", default=None)
+
+
+def detect_language(text: str, fallback: str = DEFAULT, *, keep_short: bool = True) -> str:
+    """Infer the main Chinese/English prose language, retaining ambiguous short inputs."""
+    prose = re.sub(r"```[\s\S]*?(?:```|$)|`[^`]*`|https?://\S+", " ", text or "")
+    prose = re.sub(r"\$\$[\s\S]*?\$\$|\$[^$\n]*\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)", " ", prose)
+    han = len(re.findall(r"[\u3400-\u9fff]", prose))
+    words = re.findall(r"[a-z]+(?:'[a-z]+)?", prose.lower())
+    if not keep_short:
+        if han and not words:
+            return "zh"
+        if words and not han:
+            return "en"
+    signals = {"i", "you", "my", "your", "we", "he", "she", "they", "it", "the", "a", "an",
+               "is", "are", "was", "were", "do", "does", "can", "could", "would", "will",
+               "what", "how", "why", "when", "where", "which", "who", "please", "tell",
+               "explain", "remember", "about", "and", "but", "because", "have", "has"}
+    signals.update({"i'm", "you're", "it's", "that's", "i've", "we're", "don't"})
+    evidence = signals.intersection(words)
+    if han:
+        evidence -= {"a", "an", "and", "but", "because", "about"}
+    english = len(words) >= 2 and bool(evidence)
+    if han >= 2:
+        return "en" if english and len(words) >= han else "zh"
+    if english or (not han and len(words) >= 3) or (not han and prose.strip().lower().rstrip(".!?") in
+                   {"hello", "hi", "good morning", "good evening", "thank you"}):
+        return "en"
+    return _check(fallback)
+
+
+@contextmanager
+def language_scope(language: str):
+    """Bind memory prompt language to one task/thread and restore it on exit."""
+    token = _request_language.set(_check(language))
+    try:
+        yield
+    finally:
+        _request_language.reset(token)
+
+
+def contextualize(function):
+    """Capture the caller's context for one subsequent worker invocation."""
+    context = copy_context()
+    return lambda *args, **kwargs: context.run(function, *args, **kwargs)
+
+
+def scoped_operation(function):
+    """Use the originating memory instance and input language for an operation."""
+    @wraps(function)
+    def run(self, *args, **kwargs):
+        fallback = _request_language.get() or getattr(self, "memory_language", memory_language())
+        language = kwargs.get("language") or fallback
+        if not kwargs.get("language") and _request_language.get() is None and getattr(self, "follow_input_language", False):
+            text = args[0] if args else kwargs.get("text", kwargs.get("query", ""))
+            language = detect_language(text, fallback)
+        with language_scope(language):
+            return function(self, *args, **kwargs)
+    return run
 
 
 def _check(value: str) -> str:
@@ -51,6 +101,8 @@ def set_memory_language(value: str | None) -> None:
 
 
 def memory_language() -> str:
+    if scoped := _request_language.get():
+        return scoped
     if _override:
         return _override
     env = (os.environ.get(ENV, "") or "").strip()
@@ -58,29 +110,13 @@ def memory_language() -> str:
 
 
 def resolve_for_space(memory_root, explicit: str | None = None) -> str:
-    """把这个实例的语言定下来，并落到它对应的**空间**上。
-
-    ``VoiceMem(memory_language=...)`` 以前只写进程级 override，于是：先建一个
-    zh 实例、再建一个不传参数的实例，后者会继承 zh——文档写的默认 en 变成了
-    取决于构造顺序（issue #9）。根子是同一个概念存了两个地方：demo 那边从空间
-    json 读，库这边只改全局。
-
-    这里统一到空间上：
-
-        显式给了 → 写进这个空间的 json，并生效
-        没给     → 读这个空间自己的记录；空间没记录再回落 env / 默认，
-                   并把结果写回去（建的时候定一次，之后不再变）
-
-    两个实例各读各的空间，构造顺序不再影响任何东西。
-    """
+    """Persist an instance fallback without mutating process or request language."""
     import json as _json
     from voicemem.utils.common import space as _space
     try:
         path = _space.json_path(memory_root)
     except Exception:
-        # 拿不到空间目录（极少数纯内存用法）：退回原来的全局行为
-        set_memory_language(explicit)
-        return memory_language()
+        return _check(explicit) if explicit else memory_language()
 
     stored = ""
     try:
@@ -109,7 +145,6 @@ def resolve_for_space(memory_root, explicit: str | None = None) -> str:
         except Exception as e:
             print(f"[lang] 写空间语言失败（不影响使用）：{e}", flush=True)
 
-    _set(lang)
     return lang
 
 
@@ -118,7 +153,7 @@ def is_zh() -> bool:
 
 
 def label_rule() -> str:
-    """拼进 prompt 的一句语言要求。所有存进记忆的自由文本都该带上它。"""
+    """Select description language from the current operation's captured scope."""
     lang = "Chinese" if is_zh() else "English"
     return (f"Write every label in {lang}, whatever language the speaker used. "
             f"Do not mix in any other language.")

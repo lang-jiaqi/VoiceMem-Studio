@@ -66,9 +66,10 @@ def split(text: str) -> tuple[str, str]:
     tag = (m.group(2) or m.group(3) or "").strip()
     return (tag, text[m.end():]) if tag in TONES else ("", text)
 
-def instruction(tag: str, base: str = "") -> str:
+def instruction(tag: str, base: str = "", language: str = "zh") -> str:
     """Render a tone instruction, using the default tone for unknown tags."""
-    tone = TONES.get(tag) or TONES[DEFAULT]
+    tones = tts_prompts().get("tones_en", TONES) if language == "en" else TONES
+    tone = tones.get(tag) or tones[DEFAULT]
     return f"{base}{tone}" if base else tone
 
 def prompt_rule(lang: str = "zh") -> str:

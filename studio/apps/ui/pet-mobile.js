@@ -3,7 +3,7 @@
   const $ = id => document.getElementById(id);
   const label = { 'persona.interaction_style':'陪伴方式', 'speaking_style.speech_rate':'说话速度', 'speaking_style.tone':'语气', 'speaking_style.reply_length':'回答长短', 'reply_modes.reasoning_depth':'思考时间', 'turn_taking.backchannel':'附和频率', 'turn_taking.work_filler':'等待反馈' };
   const phaseLabel = {idle:'',listening:'正在聆听…','short-thinking':'正在思考…','long-thinking':'还在思考…',speaking:'正在回答…'};
-  let listening = false, resumeAfterSettings = false, replyMessage = null, memoryPoll = 0, known = new Set(), baselineReady = false;
+  let listening = false, resumeAfterSettings = false, replyMessage = null, memoryPoll = 0, memoryTurnId = '', known = new Set(), baselineReady = false;
   const messages = [];
   const memoryKey = (kind, item) => `${kind}:${item.id || item.raw || ''}:${item.text || ''}:${kind === 'right' ? (item.notes || []).length : ''}`;
   const memorySnapshotReady = fetch('/api/memories', {cache:'no-store'}).then(r => r.ok ? r.json() : Promise.reject()).then(data => {
@@ -15,23 +15,24 @@
     for (const value of values.slice(0, 6)) { const item = document.createElement('li'); item.textContent = value; host.append(item); }
     if (!values.length) { const item = document.createElement('li'); item.textContent = empty; host.append(item); }
   }
-  async function watchStored() {
+  async function showStored(event) {
     const generation = ++memoryPoll;
     await memorySnapshotReady;
-    list('storedMemories', [], '正在等待入库…');
-    for (let attempt = 0; attempt < 15 && generation === memoryPoll; attempt++) {
-      if (attempt) await new Promise(resolve => setTimeout(resolve, 2000));
-      try {
+    if (generation !== memoryPoll) return;
+    try {
         const response = await fetch('/api/memories', {cache:'no-store'});
-        if (!response.ok) break;
+        if (!response.ok) throw new Error('snapshot unavailable');
         const data = await response.json();
+        if (generation !== memoryPoll) return;
         const entries = [...(data.left || []).map(item => ['left', item]), ...(data.right || []).map(item => ['right', item])];
-        if (!baselineReady) { entries.forEach(([kind,item]) => known.add(memoryKey(kind,item))); baselineReady = true; continue; }
-        const fresh = entries.filter(([kind,item]) => !known.has(memoryKey(kind,item))).map(([kind,item]) => `${kind === 'left' ? '事实' : '感受'} · ${item.text || item.raw || ''}`);
-        if (fresh.length) { list('storedMemories', fresh, '本轮没有新记忆'); entries.forEach(([kind,item]) => known.add(memoryKey(kind,item))); return; }
-      } catch { break; }
+        const ids = new Set((event.memory_ids || []).map(String));
+        const fresh = entries.filter(([kind,item]) => kind === 'left' ? ids.has(String(item.id)) :
+          baselineReady && !known.has(memoryKey(kind,item))).map(([kind,item]) => `${kind === 'left' ? '事实' : '感受'} · ${item.text || item.raw || ''}`);
+        list('storedMemories', fresh, '记忆已入库。');
+        entries.forEach(([kind,item]) => known.add(memoryKey(kind,item))); baselineReady = true;
+    } catch {
+      if (generation === memoryPoll) list('storedMemories', [], '记忆已入库，暂时无法加载详情。');
     }
-    if (generation === memoryPoll) list('storedMemories', [], '本轮暂无新入库记忆');
   }
   function renderChat() {
     const host = $('chatMessages');
@@ -62,7 +63,9 @@
         if (messages.length > 100) messages.shift();
         renderChat();
         if (!$('chatDialog').open) $('chatCount').hidden = false;
-        list('retrievedMemories', [], '检索中…'); void watchStored();
+        memoryPoll++; memoryTurnId = event.input_turn_id || '';
+        list('retrievedMemories', [], '检索中…');
+        list('storedMemories', [], '对话结束后写入记忆…');
       }
       if (event.type === 'answer_start') {
         replyMessage = {role:'assistant', text:'', outputId:event.output_id}; addMessage(replyMessage);
@@ -85,6 +88,13 @@
       if (event.type === 'memory_hits') {
         const hits = [...(event.left_brain || []).map(item => item.text), ...(event.right_brain_hits || []).filter(item => !item.internal).map(item => item.content)];
         list('retrievedMemories', hits, '本轮没有召回相关记忆'); $('memoryCount').textContent = hits.length ? `· ${hits.length}` : '';
+      }
+      if (event.type === 'memory_store_status' && event.input_turn_id === memoryTurnId) {
+        if (event.status === 'stored') void showStored(event);
+        else {
+          memoryPoll++;
+          list('storedMemories', [], event.status === 'error' ? '本轮记忆入库失败。' : '本轮没有新入库记忆。');
+        }
       }
     },
   });

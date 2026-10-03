@@ -10,10 +10,10 @@ def open_memory(config):
     segment = config["reply"]["llm"]
     memory_config = {k: v for k, v in config.items() if k not in {"reply", "tts"}}
     kwargs = build_kwargs(memory_config)
-    language = config.get("memory_language", "zh")
     kwargs.update(reply=reply_model(segment["config"]["system"], segment["provider"],
                                    credential(segment["provider"], "reply")),
-                  tts=speech_model, asr=lambda: streaming(language), asr_final=final)
+                  tts=speech_model, asr=streaming, asr_final=final,
+                  follow_input_language=True)
     return VoiceMem(**kwargs)
 
 def open_stream(memory, **options):

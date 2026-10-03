@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import re
+import copy
 
 import numpy as np
 
@@ -65,50 +66,66 @@ def _normal_case(text: str) -> str:
 
 class StreamingASR:
     """sherpa-onnx 流式 zipformer，出实时 partial 文本。``VOICEMEM_ASR=sherpa`` 时启用。"""
+    FINAL_PAD_SAMPLES = round(SAMPLE_RATE * 0.3)
 
     @staticmethod
-    def _pick(asr_dir: str, part: str) -> str:
-        """在模型目录里找 encoder/decoder/joiner。
-
-        **不能写死文件名**：不同发布版后缀不一样（双语那个是
-        ``encoder-epoch-99-avg-1.onnx``，英文那个是
-        ``encoder-epoch-99-avg-1-chunk-16-left-128.onnx``），写死就只有一个能用，
-        而且报的是 "does not exist"，看不出是版本差异。
-        int8 量化版跳过：默认用全精度那份。
-        """
+    def _pick(asr_dir: str, part: str, prefer_int8: bool = False) -> str:
+        """Select a published component, optionally preferring its int8 weights."""
         from pathlib import Path as _P
-        cands = sorted(f for f in _P(asr_dir).glob(f"{part}-*.onnx")
-                       if ".int8." not in f.name)
+        candidates = list(_P(asr_dir).glob(f"{part}*.onnx"))
+        quantized = sorted(f for f in candidates if ".int8." in f.name)
+        full = sorted(f for f in candidates if ".int8." not in f.name)
+        cands = (quantized or full) if prefer_int8 else full
         if not cands:
             raise FileNotFoundError(
                 f"{asr_dir} 里找不到 {part}-*.onnx —— 模型没下全？"
                 "跑 scripts/download_models.sh")
         return str(cands[0])
 
-    def __init__(self, asr_dir: str) -> None:
+    def __init__(self, asr_dir: str, *, prefer_int8: bool = False) -> None:
         import sherpa_onnx          # 惰性：默认走 FunASR 时不拉 sherpa
         self.rec = sherpa_onnx.OnlineRecognizer.from_transducer(
             tokens=f"{asr_dir}/tokens.txt",
-            encoder=self._pick(asr_dir, "encoder"),
-            decoder=self._pick(asr_dir, "decoder"),
-            joiner=self._pick(asr_dir, "joiner"),
+            encoder=self._pick(asr_dir, "encoder", prefer_int8),
+            decoder=self._pick(asr_dir, "decoder", prefer_int8),
+            joiner=self._pick(asr_dir, "joiner", prefer_int8),
             num_threads=2, sample_rate=SAMPLE_RATE, feature_dim=80,
             decoding_method="greedy_search",
         )
-        self.stream = self.rec.create_stream()
+        self.reset()
 
     def feed(self, samples):
+        self._flushed = False
         self.stream.accept_waveform(SAMPLE_RATE, samples)
         while self.rec.is_ready(self.stream):
             self.rec.decode_stream(self.stream)
         return _normal_case(self.rec.get_result(self.stream))
 
     def flush(self) -> str:
-        """接口对齐 FunASRStreamingASR；sherpa 逐帧就把结果吐完了，没有尾巴要补。"""
+        """Release trailing tokens once without closing a resumable decoder stream."""
+        if not self._flushed:
+            result = self.feed(np.zeros(self.FINAL_PAD_SAMPLES, dtype=np.float32))
+            self._flushed = True
+            return result
         return _normal_case(self.rec.get_result(self.stream))
 
     def reset(self) -> None:
+        self._flushed = False
         self.stream = self.rec.create_stream()
+
+    def new_stream(self):
+        """Share recognizer weights while allocating an independent decoder stream."""
+        other = copy.copy(self)
+        other.reset()
+        return other
+
+    @classmethod
+    def from_recognizer(cls, recognizer):
+        """Own a fresh decoding stream while sharing immutable ONNX model weights."""
+        instance = cls.__new__(cls)
+        instance.rec = recognizer
+        instance.reset()
+        return instance
 
 
 # ── 默认流式 ASR：FunASR paraformer-zh-streaming ────────────────────────────────
@@ -261,6 +278,12 @@ class FunASRStreamingASR:
         self._text = ""
         self._final = False
 
+    def new_stream(self):
+        """Share model weights while keeping decoder cache, audio and text private."""
+        other = copy.copy(self)
+        other.reset()
+        return other
+
 
 class Transcriber:
     """SenseVoiceSmall 出最终文本（中英），比流式 ASR 更准，锁定一轮时用这个。"""
@@ -279,7 +302,7 @@ class Transcriber:
             return self._generate_locked(audio)
 
     def _generate_locked(self, audio) -> str:
-        res = self.model.generate(input=audio, cache={}, language="zh",
+        res = self.model.generate(input=audio, cache={}, language="auto",
                                   use_itn=True, ban_emo_unk=True)
         if not res:
             return ""
@@ -298,26 +321,22 @@ class Transcriber:
 
 
 class OfflineASR:
-    """说完那一刻把整轮音频**重转一遍**的离线 ASR（默认 SenseVoice）。
+    """Decode full utterances with SenseVoice's automatic language detection.
 
-    为什么要两个 ASR：流式模型为了低延迟牺牲了准确率，而这条链上两个需求是分开的——
-
-        partial  打断判定、EOT、闸门要它，**必须低延迟**，转得烂无所谓
-                 （它只用来判"有没有人在说连贯的话"）
-        final    进记忆、给回复模型的那份，**必须准**，晚 50ms 没人察觉
-
-    实测同一批真实录音（Whisper 转写当标准答案）：
-
-        真实                        流式 zipformer      SenseVoice
-        Everything is good.         Everything is going  一字不差
-        Why we are helping...       I                    Why there no reply
-        Wait, why are you on mute?  Why don't            Wait, why are you
-
-    差距不是调参能补的。SenseVoice 中英日韩粤多语、int8 量化后一轮 33~86ms，
-    比 whisper-base 快 4 倍还更准（后者在短句上爱瞎编："of breaking this"）。
+    An optional language allowlist returns an empty refinement for other or
+    unknown language tags, allowing VoiceStream to retain streaming text.
+    The default accepts every model language. No second decode is performed.
     """
 
-    def __init__(self, model_dir: str, num_threads: int = 4):
+    def __init__(self, model_dir: str, num_threads: int = 4, *, allowed_languages=None):
+        self.allowed_languages = (
+            None if allowed_languages is None else frozenset(allowed_languages)
+        )
+        if self.allowed_languages is not None and (
+            not self.allowed_languages
+            or not self.allowed_languages <= {"zh", "en", "ja", "ko", "yue"}
+        ):
+            raise ValueError("allowed_languages must contain SenseVoice language codes")
         import sherpa_onnx
         from pathlib import Path as _P
         d = _P(model_dir)
@@ -337,4 +356,15 @@ class OfflineASR:
         st = self.rec.create_stream()
         st.accept_waveform(SAMPLE_RATE, a)
         self.rec.decode_stream(st)
-        return (st.result.text or "").strip()
+        result = st.result
+        text = (result.text or "").strip()
+        if text and self.allowed_languages is not None:
+            language = str(getattr(result, "lang", "") or "").strip().lower()
+            tag = re.fullmatch(r"<\|([a-z]+)\|>", language)
+            if tag:
+                language = tag.group(1)
+            if language not in self.allowed_languages:
+                print(f"[asr-final] language={language or 'unknown'} rejected; "
+                      "using streaming transcript fallback", flush=True)
+                return ""
+        return text

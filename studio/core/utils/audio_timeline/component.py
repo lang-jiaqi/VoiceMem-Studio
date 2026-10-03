@@ -97,6 +97,7 @@ class AudioTimeline:
         self.sequence = 0
         self.generation_complete = False
         self.context_saved = False
+        self.reply_tone = ""
         self.context_managed = False
         self.track_delivery = track_delivery
         self.interrupted = False

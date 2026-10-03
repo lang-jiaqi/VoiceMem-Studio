@@ -14,6 +14,7 @@ from studio.core.utils.turn_taking.filler import generate_local_filler
 from studio.core.utils.audio_timeline.component import AudioTimeline, SpeechRateEstimator
 from studio.core.utils.tts.audio_timing import TimedAudioChunk
 from voicemem import gate
+from voicemem.lang import detect_language
 from voicemem.memory_api import build_memory_context
 from studio.core.utils.contracts.component import Pending, ReplySink
 from studio.core.voicemem import greeting_memories
@@ -233,6 +234,8 @@ class Conversation:
         timeline.freeze_playback()
         timeline.context_saved = True
         reply = timeline.heard_text()
+        if reply and not pending.opening and timeline.reply_tone:
+            self.owner['tone'] = timeline.reply_tone
         if timeline.interrupted and self.agent.BARGE_DEBUG:
             print(f'[context] 打断于 {timeline.rendered_ms()}ms，保留回复 {reply!r}', flush=True)
         if pending.opening:
@@ -244,8 +247,29 @@ class Conversation:
         history_turn_id = self.agent._push_history(
             self.context_session, context_space, pending.text, reply,
             interrupted=timeline.interrupted)
+        loop = asyncio.get_running_loop()
+
+        def stored(result):
+            result = result or {}
+            def publish():
+                if (self.prewarm['closed'] or self.agent.vm is not memory_vm
+                        or self.agent.ACTIVE_SPACE != context_space):
+                    return
+                status = ('error' if result.get('error') else 'stored'
+                          if result.get('persistent_memory_created') else 'empty')
+                event = {"type": "memory_store_status", "status": status,
+                         "input_turn_id": pending.input_turn_id,
+                         "output_id": timeline.output_id, "space": context_space,
+                         "memory_ids": list(result.get('memory_ids') or ())[:24]}
+                task = asyncio.create_task(self.sock.send_json(event))
+                task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+            try:
+                loop.call_soon_threadsafe(publish)
+            except RuntimeError:
+                pass
+
         self.agent.queue_remember_turn(pending, reply, self.owner, history_turn_id,
-                                      memory_vm=memory_vm)
+                                      memory_vm=memory_vm, on_complete=stored)
 
     async def wait_reply_playback(self, pending, timeline) -> None:
         """Wait after delivery; a missing completion report never implies heard audio."""
@@ -266,13 +290,13 @@ class Conversation:
         unfinished = needs_continuation(pending.text)
         if not pending.spoken or not unfinished:
             return None
-        voice = self.agent._backchannel_voice()
+        voice = self.agent._backchannel_voice(pending.language)
         if not voice or not voice.ready:
             return None
         from studio.core.utils.turn_taking.backchannel import emitting, pick_token
         if not emitting():
             return None
-        token = pick_token(pending.text, pending.emotion, self.agent.space_language(self.agent.ACTIVE_SPACE), bc.rng, bc._recent, voice.available)
+        token = pick_token(pending.text, pending.emotion, pending.language or self.agent.space_language(self.agent.ACTIVE_SPACE), bc.rng, bc._recent, voice.available)
         pcm = voice.get(token, self.turn_taking.backchannel.rng) if token else None
         return (token, pcm) if pcm else None
 
@@ -306,14 +330,15 @@ class Conversation:
         """Generate a bounded local bridge; speech uses the existing shared TTS."""
         from studio.core.utils.self_harness.component import speech_rate_instruction
         history = self.agent._SESSION_CONTEXT.messages(self.context_session, context_space, window=self.agent.HISTORY_TURNS)
-        text = await generate_local_filler(pending.text, history=history, lang=self.agent.space_language(context_space))
+        language = getattr(pending, 'language', '') or self.agent.space_language(context_space)
+        text = await generate_local_filler(pending.text, history=history, lang=language)
         if not text:
             return ('', b'')
         tts = memory_vm.utils.get('tts')
         state = getattr(self, 'self_harness', None)
         instruction = speech_rate_instruction(
-            self.agent._speak_instruction(pending.emotion),
-            state.snapshot() if state is not None else None)
+            self.agent._speak_instruction(pending.emotion, language),
+            state.snapshot() if state is not None else None, language=language)
         print(f'[tts-prompt] filler {json.dumps(instruction, ensure_ascii=False)}', flush=True)
         try:
             stream = tts.stream(text, instruction)
@@ -436,6 +461,8 @@ class Conversation:
             try:
                 committed_text = (await refined_text).strip() or text
                 pending = Pending(committed_text, build_memory_context(result), result, spoken=True, emotion=emotion, route=route, reply_mode=MEMORY if gate.needs_memory(route) else DIRECT, transcript_managed=True)
+                pending.language = detect_language(committed_text, getattr(self, 'languages', {}).get(
+                    context_space, self.agent.space_language(context_space)))
                 pending.self_harness_profile = self_harness.snapshot()
                 await self.agent.route_pending_thinking(pending, memory_vm, history=routing_history)
                 self.early['text'] = committed_text
@@ -609,15 +636,21 @@ class Conversation:
                 await asyncio.gather(wait_task, return_exceptions=True)
             if self.unfinished_wait.get('space') != self.agent.ACTIVE_SPACE or self.unfinished_wait.get('memory_vm') is not self.agent.vm:
                 return pending
-            joiner = '' if self.agent.space_language(self.agent.ACTIVE_SPACE) == 'zh' else ' '
+            joiner = '' if base.text and pending.text and all('\u3400' <= c <= '\u9fff' for c in (base.text[-1], pending.text[0])) else ' '
             pending = replace(pending, text=f'{base.text}{joiner}{pending.text}'.strip(), continuation_prompt=False, early_ok=False,
                               replace_input_turn_id=getattr(base, 'input_turn_id', ''),
                               transcript_managed=False)
+            pending.language = detect_language(pending.text, base.language or "zh")
             if self.agent.BARGE_DEBUG:
                 print(f'[unfinished] 用户续说，合并为 {pending.text!r}', flush=True)
         return pending
 
     async def route(self, pending):
+        self.languages = getattr(self, 'languages', {})
+        space = self.agent.ACTIVE_SPACE
+        pending.language = pending.language or detect_language(
+            pending.text, self.languages.get(space, self.agent.space_language(space)))
+        self.languages[space] = pending.language
         if pending.stranger and self.early['task'] is not None:
             await self.drop_early('声纹门禁不复用提前生成')
         if self.early['task'] is not None and (self.early.get('space') != self.agent.ACTIVE_SPACE or self.early.get('memory_vm') is not self.agent.vm):
@@ -633,7 +666,8 @@ class Conversation:
             if self.early['task'] is not None and pending.early_ok:
                 await thinking_task
                 early_pending = self.early.get('pending')
-                if (early_pending is None or early_pending.reply_mode != pending.reply_mode
+                if (early_pending is None or early_pending.language != pending.language
+                        or early_pending.reply_mode != pending.reply_mode
                         or early_pending.memory_query != pending.memory_query
                         or (pending.memory_query
                             and early_pending.memory_context != pending.memory_context)):
@@ -765,6 +799,7 @@ class Conversation:
         pending = Pending(opening_prompt(language), '', empty_result(),
                           spoken=False, route=gate.SHALLOW, reply_mode=DIRECT,
                           transcript_managed=True, opening=True)
+        pending.language = language
         reply_state = {'text': ''}
         timeline = AudioTimeline(prebuffer_seconds=0.16, rate_estimator=self.speech_rate,
                                  track_delivery=True)
@@ -807,4 +842,5 @@ class Conversation:
         task.add_done_callback(self.reply_done)
 
     def listen(self):
-        return self.agent._session_anticipate(self.context_session, self.sock, on_speech=self.stop_reply, owner=self.owner, is_busy=self.hearing, said=lambda : self.turn['reply']['text'] if self.hearing() or time.monotonic() < self.turn['echo_until'] else '', on_candidate=self.pause_candidate, on_candidate_reject=self.resume_candidate, on_playback_checkpoint=self.playback_checkpoint, on_filler_done=self.filler_done, on_self_harness_get=self.publish_self_harness, on_self_harness_update=self.update_self_harness, on_harness_prompt_update=self.update_harness_prompt, on_backchannel_curve_update=self.update_backchannel_curve, on_conversation_start=self.start_opening, on_close=self.close_session, on_early=self.start_early, on_early_cancel=self.drop_early, on_speech_start=self.prewarm_local, textless_confirm_s=0.2, turn_taking=self.turn_taking)
+        self.languages = getattr(self, 'languages', {})
+        return self.agent._session_anticipate(self.context_session, self.sock, on_speech=self.stop_reply, owner=self.owner, is_busy=self.hearing, said=lambda : self.turn['reply']['text'] if self.hearing() or time.monotonic() < self.turn['echo_until'] else '', on_candidate=self.pause_candidate, on_candidate_reject=self.resume_candidate, on_playback_checkpoint=self.playback_checkpoint, on_filler_done=self.filler_done, on_self_harness_get=self.publish_self_harness, on_self_harness_update=self.update_self_harness, on_harness_prompt_update=self.update_harness_prompt, on_backchannel_curve_update=self.update_backchannel_curve, on_conversation_start=self.start_opening, on_close=self.close_session, on_early=self.start_early, on_early_cancel=self.drop_early, on_speech_start=self.prewarm_local, textless_confirm_s=0.2, turn_taking=self.turn_taking, language_state=self.languages)

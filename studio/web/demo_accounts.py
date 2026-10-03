@@ -33,7 +33,9 @@ class DemoAccounts:
         self.args = args
         self.agent_factory = agent_factory
         self._agents = {}
-        self._agent_lock = threading.Lock()
+        self._agent_lock = threading.RLock()
+        self._active_agents = {}
+        self._agent_used_at = {}
         self._attempts = {}
         self._attempt_lock = threading.Lock()
         with self._connect() as conn:
@@ -161,7 +163,6 @@ class DemoAccounts:
             if user_id not in self._agents:
                 args = copy.copy(self.args)
                 args.space = "default"
-                args.lang = "zh"
                 args.memory_root = ""
                 space_root = self.root / "users" / user_id / "spaces"
                 space_root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -176,4 +177,42 @@ class DemoAccounts:
                 agent._DEMO_HARNESS_PREFS = self.load_harness(user_id)
                 agent._DEMO_HARNESS_SAVE = lambda value, uid=user_id: self.save_harness(uid, "default", value)
                 self._agents[user_id] = agent
+            self._agent_used_at[user_id] = time.monotonic()
             return self._agents[user_id]
+
+    def acquire_agent(self, user_id: str):
+        """Pin an account agent for the complete HTTP or WebSocket lifetime."""
+        with self._agent_lock:
+            agent = self.agent(user_id)
+            self._active_agents[user_id] = self._active_agents.get(user_id, 0) + 1
+            return agent
+
+    def release_agent(self, user_id: str, agent) -> None:
+        """Release one lease without replacing state used by another request."""
+        with self._agent_lock:
+            if self._agents.get(user_id) is not agent:
+                return
+            self._active_agents[user_id] = max(0, self._active_agents.get(user_id, 0) - 1)
+            self._agent_used_at[user_id] = time.monotonic()
+            self.prune_idle()
+
+    def prune_idle(self, *, idle_seconds=900, max_idle_agents=8, now=None) -> int:
+        """Evict idle agents while retaining active leases and pending memory writes."""
+        now = time.monotonic() if now is None else now
+        removed = 0
+        with self._agent_lock:
+            candidates = sorted(
+                (self._agent_used_at.get(uid, now), uid)
+                for uid, agent in self._agents.items()
+                if not self._active_agents.get(uid, 0)
+                and not getattr(agent, '_MEMORY_WRITES', ())
+                and not any(not task.done() for task in tuple(getattr(agent, '_REMEMBER_TASKS', ())))
+                and not getattr(agent, '_HOT', {}).get('n', 0))
+            for position, (last_used, uid) in enumerate(candidates):
+                if now - last_used < idle_seconds and position >= len(candidates) - max_idle_agents:
+                    continue
+                self._agents.pop(uid, None)
+                self._active_agents.pop(uid, None)
+                self._agent_used_at.pop(uid, None)
+                removed += 1
+        return removed

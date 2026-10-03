@@ -3,6 +3,7 @@
   'use strict';
   const pending = new WeakMap();
   const mathCache = new Map();
+  const tupleBody = /^\s*(?:-?\d+(?:\.\d+)?|[A-Za-z][A-Za-z0-9_]{0,15})(?:\s*,\s*(?:-?\d+(?:\.\d+)?|[A-Za-z][A-Za-z0-9_]{0,15})){1,7}\s*$/;
   const element = (tag, text) => {
     const node = document.createElement(tag);
     if (text !== undefined) node.textContent = text;
@@ -26,9 +27,11 @@
     }
     const closed = end < text.length;
     const content = text.slice(opener.length, closed ? end : text.length);
+    const tuple = ['()', '[]'].includes(content[0] + content.slice(-1)) &&
+      tupleBody.test(content.slice(1, -1));
     // Single dollars also occur in prices; require a compact math-like body.
     if (opener === '$' && (!content || /^\s|\s$/.test(content) || content.includes('\n') ||
-        !/[\\_^=+\-*/{}|]|^[\p{L}\p{N}.]+$/u.test(content) ||
+        (!tuple && !/[\\_^=+\-*/{}|]|^[\p{L}\p{N}.]+$/u.test(content)) ||
         (/^\d/.test(content) && /[A-Za-z\p{Script=Han}]/u.test(content) && !/[\\_^=+\-*/{}]/.test(content)))) return null;
     if (!closed && !streaming) return { raw: text, content, closed, display: opener === '$$' || opener === '\\[', end: text.length };
     if (!closed && opener === '$' && /^\d/.test(content) && !/[\\_^=+*/{}]/.test(content)) return null;

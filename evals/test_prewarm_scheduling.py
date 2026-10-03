@@ -17,6 +17,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from evals.studio_helpers import studio_tree, studio_source, execute
+from voicemem.lang import detect_language
 
 
 def session_namespace():
@@ -28,7 +29,8 @@ def session_namespace():
         return pending
 
     ns = dict(
-        asyncio=asyncio, threading=threading, time=time,
+        asyncio=asyncio, threading=threading, time=time, detect_language=detect_language,
+        space_language=lambda _: "zh",
         prewarm={"task": None, "cancelled": None, "closed": False},
         turn={"task": None, "timeline": None, "until": 0.0},
         early={"task": None}, candidate_paused=False,

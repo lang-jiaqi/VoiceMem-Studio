@@ -1180,7 +1180,7 @@ if($('spaceMask')) $('spaceMask').addEventListener('click',e=>{
 async function createSpace(name, language){
   const r=await fetch('/api/spaces',{method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name, language:language||LANG})});
+    body:JSON.stringify({name, ...(language ? {language} : {})})});
   if(!r.ok){
     const msg=r.status===409?i18n('nameTaken'):(r.status===400?i18n('nameBad'):i18n('createFailed'));
     toast(msg); return '';
@@ -2576,15 +2576,11 @@ if($('langSel')){
     fillSpaceSel();
     buildGraph(activeSpace);           // 脑图上那十个分区标签只在重建时才会换语言
     loadMemories();
-    // 助手也跟着换语言：告诉后端，之后的回复和抽取都用这个语言
+    // The setting changes UI copy; conversation language follows user input.
     try{
       const r=await fetch('/api/lang',{method:'POST',
         headers:{'Content-Type':'application/json'},body:JSON.stringify({lang:LANG})});
-      const d=await r.json();
-      // 空库会跟着一起切；非空库切不了——那就说出来，别让它默默不一致。
-      if(d && d.reply_lang && d.reply_lang!==LANG)
-        toast(i18n('langKept', activeSpace,
-                   i18n(d.reply_lang==='zh'?'langZh':'langEn')));
+      if(!r.ok) throw new Error('UI language update failed');
     }
     catch(err){ console.warn('[lang] 后端没接上', err); }
   });

@@ -5,6 +5,7 @@ import re
 import random
 import string
 from dataclasses import dataclass
+from typing import Callable
 
 
 _PREFIX = re.compile(r"^ {0,3}(?:#{1,6}[ \t]+|>[ \t]?|[-+*][ \t]+|\d{1,9}[.)][ \t]+)")
@@ -13,6 +14,8 @@ _RULE = re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*(?:\n|$)")
 _LINK = re.compile(r"^!?\[([^\]\n]{0,256})\]\(")
 _TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
 _NUMBER = r"-?\d+(?:\.\d+)?"
+_MATH_ATOM = rf"(?:{_NUMBER}|[A-Za-z][A-Za-z0-9_]{{0,15}})"
+_MATH_TUPLE = re.compile(rf"^\s*{_MATH_ATOM}(?:\s*,\s*{_MATH_ATOM}){{1,7}}\s*$")
 _SIMPLE_MATH = re.compile(rf"^({_NUMBER})(?:\s*([+\-*/×÷=])\s*({_NUMBER})){{1,3}}$")
 _MATH_SYNTAX = re.compile(r"\\[A-Za-z]|[=+*/^_{}<>∑∫√×÷]|[A-Za-z]\s*-")
 _COMPLEX_MATH = re.compile(r"\\[A-Za-z]|[{}^∑∫]|[A-Za-z]\w*\(")
@@ -33,8 +36,12 @@ _CUES = {
 
 
 def _simple_math(text: str, language: str) -> str | None:
-    """Speak only a bounded numeric expression, never evaluate model output."""
+    """Speak bounded numbers, identifiers and tuples without evaluating output."""
     text = text.strip()
+    if (text[:1] + text[-1:] in ("()", "[]")
+            and _MATH_TUPLE.fullmatch(text[1:-1])):
+        return ("，" if language == "zh" else ", ").join(
+            item.strip() for item in text[1:-1].split(","))
     if re.fullmatch(_NUMBER, text) or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,15}", text):
         return text
     if not _SIMPLE_MATH.fullmatch(text):
@@ -96,8 +103,10 @@ class MarkdownSpeech:
     Normal EOF flushes pending syntax; cancellation must discard the parser.
     """
 
-    def __init__(self, language: str = "zh", *, cue_offset: int | None = None):
-        self.language = "en" if language == "en" else "zh"
+    def __init__(self, language: str = "zh", *, cue_offset: int | None = None,
+                 language_resolver: Callable[[], str] | None = None):
+        self._language = "en" if language == "en" else "zh"
+        self._language_resolver = language_resolver
         self.cue_offset = random.randrange(5) if cue_offset is None else cue_offset
         self.cue_counts: dict[str, int] = {}
         self.prose_since_cue = 64
@@ -120,6 +129,16 @@ class MarkdownSpeech:
         self.link_depth = 0
         self.table_rows = False
         self.heading = False
+
+    @property
+    def language(self) -> str:
+        """Resolve prose language only when structured speech or TTS needs it."""
+        value = self._language_resolver() if self._language_resolver else self._language
+        return "en" if value == "en" else "zh"
+
+    @language.setter
+    def language(self, value: str) -> None:
+        self._language = "en" if value == "en" else "zh"
 
     def _cue(self, kind: str, *, inline: bool = False) -> str:
         """Rotate per-reply wording and avoid narrating every adjacent block."""

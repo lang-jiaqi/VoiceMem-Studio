@@ -403,7 +403,7 @@
     document.addEventListener('display-settings-change', () => {
       const next = window.VMSettings?.language || 'zh-CN';
       if (next === language) return;
-      language = next; end();
+      language = next;
       fetch('/api/lang', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lang: next === 'en' ? 'en' : 'zh' }) })
         .then(response => { if (!response.ok) throw new Error('语言切换失败'); })
         .catch(error => VMUI.notify(error.message));

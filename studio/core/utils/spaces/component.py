@@ -2,13 +2,12 @@
 import time
 from pathlib import Path
 from studio.core.utils.dialogue.component import CONTEXT
-from voicemem.lang import set_memory_language as _set_lang
 from studio.core.voicemem import open_memory
 from studio.paths import ROOT as _ROOT
 
 class Spaces:
     def space_language(self, name: str) -> str:
-        """Read the language assigned to a Memory Space, defaulting to English."""
+        """Read the Space's initial language fallback, defaulting to English."""
         import json as _json
         d, safe = self.space_dir(name)
         f = d / f"{safe}.json"
@@ -51,31 +50,9 @@ class Spaces:
             return False
 
     def set_lang(self, lang: str) -> str:
-        """Set UI language and resolve the active space language for replies."""
-        if getattr(self, "PUBLIC_DEMO", False):
-            self.UI_LANG = "zh"
-            return "zh"
+        """Change UI language without reopening memory or changing conversation language."""
         self.UI_LANG = "en" if str(lang).lower().startswith("en") else "zh"
-        if self.UI_LANG == self.SPACE_LANG:
-            return self.SPACE_LANG
-        if self._space_is_empty(self.ACTIVE_SPACE):
-            self._write_space_language(self.ACTIVE_SPACE, self.UI_LANG)
-            self.SPACE_LANG = self.UI_LANG
-            _set_lang(self.SPACE_LANG)
-            spaces = self._SPACES
-            if self.ACTIVE_SPACE in spaces:
-                spaces.pop(self.ACTIVE_SPACE)
-                self.vm = self.get_space(self.ACTIVE_SPACE)
-            voice_cache = self._BC_VOICE
-            if isinstance(voice_cache, dict):
-                voice_cache["obj"] = None
-            print(f"[lang] 空间「{self.ACTIVE_SPACE}」还是空的 → 记忆和回复一起切到 {self.UI_LANG}",
-                  flush=True)
-        else:
-            print(f"[lang] 界面切到 {self.UI_LANG}，但空间「{self.ACTIVE_SPACE}」已有记忆、"
-                  f"仍是 {self.SPACE_LANG}——混语存会让一半记忆检索不到。"
-                  f"要换语言请新建一个空间。", flush=True)
-        return self.SPACE_LANG
+        return self.UI_LANG
 
     def space_dir(self, name: str):
         """Return a sanitized space directory and name; reject an empty name."""
@@ -118,11 +95,10 @@ class Spaces:
         return self._SPACES[safe]
 
     def use_space(self, name: str) -> str:
-        """Select the active memory instance and update its reply language."""
+        """Select the active memory instance and its ambiguous-input fallback."""
         self.vm = self.get_space(name)
         _, self.ACTIVE_SPACE = self.space_dir(name)
         self.SPACE_LANG = self.space_language(self.ACTIVE_SPACE)
-        _set_lang(self.SPACE_LANG)
         if self._LOCAL_LLM is not None:
             self._LOCAL_LLM.system = self._rt_persona(self.SPACE_LANG)
         return self.ACTIVE_SPACE

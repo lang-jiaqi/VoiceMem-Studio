@@ -4,24 +4,23 @@ from voicemem import gate
 from studio.core.utils.speaking_style.component import content_emotion_note
 
 class Context:
-    def _tone_note(self, emotion: str) -> str:
-        return self._by_lang(self._TONE).get((emotion or "").strip(), "")
+    def _tone_note(self, emotion: str, lang: str = "") -> str:
+        return self._by_lang(self._TONE, lang).get((emotion or "").strip(), "")
 
-    def _speak_instruction(self, emotion: str) -> str:
-        base = self._speak_base_env or self._by_lang(self._SPEAK_BASE)
-        tone = self._tone_note(emotion)
+    def _speak_instruction(self, emotion: str, lang: str = "") -> str:
+        base = self._speak_base_env or self._by_lang(self._SPEAK_BASE, lang)
+        tone = self._tone_note(emotion, lang)
         return f"{base}{tone}" if tone else base
 
     def _by_lang(self, d: dict, lang: str = "") -> str:
-        return d if isinstance(d, str) else d.get("zh", d)
+        return d if isinstance(d, str) else d.get(lang or self.SPACE_LANG, d)
 
     def _rt_persona(self, lang: str = "") -> str:
         lang = lang or self.SPACE_LANG
         return system_prompt(lang, tagged=self.MODE != "realtime", reply=getattr(self, "REPLY", None))
 
-    def _history_block(self, session_id: str, space: str) -> str:
-        from voicemem.lang import is_zh
-        return self._SESSION_CONTEXT.render(session_id, space, "zh" if is_zh() else "en")
+    def _history_block(self, session_id: str, space: str, language: str = "") -> str:
+        return self._SESSION_CONTEXT.render(session_id, space, language or self.space_language(space))
 
     def _push_history(self, session_id: str, space: str, user_text: str, reply_text: str,
                       interrupted: bool = False) -> str:
@@ -38,45 +37,46 @@ class Context:
     def _realtime_instructions(self, memory_context: str, stranger: bool = False,
                                replay: bool = False, emotion: str = "",
                                text: str = "", context_session: str = "",
-                               context_space: str = "") -> str:
+                               context_space: str = "", language: str = "") -> str:
         if stranger:
             return self._rt_persona()
         parts = [self._rt_persona()]
         if memory_context:
             parts.append(memory_context)
         else:
-            parts.append(self._by_lang(CONTEXT["no_memory"]))
+            parts.append(self._by_lang(CONTEXT["no_memory"], language))
         session_context = self._history_block(
-            context_session, context_space or self.ACTIVE_SPACE)
+            context_session, context_space or self.ACTIVE_SPACE, language)
         if session_context:
             parts.append(session_context)
-        tone = self._tone_note(emotion)
+        tone = self._tone_note(emotion, language)
         if tone:
             parts.append(self._by_lang(self._STATE_LABEL) + tone)
-        content_emotion = content_emotion_note(emotion, self.SPACE_LANG)
+        content_emotion = content_emotion_note(emotion, language or self.SPACE_LANG)
         if content_emotion:
             parts.append(content_emotion)
         if replay:
-            parts.append(self._by_lang(self._REPLAY_NOTE))
+            parts.append(self._by_lang(self._REPLAY_NOTE, language))
         elif self._wants_sound(text):
-            parts.append(self._by_lang(self._NO_REPLAY_NOTE))
+            parts.append(self._by_lang(self._NO_REPLAY_NOTE, language))
         return "\n\n".join(parts)
 
     def build_reply_context(self, memory_context: str, *, stranger: bool = False,
                             route=None, replay: str = "", text: str = "",
-                            emotion: str = "", continuation: bool = False) -> str:
+                            emotion: str = "", continuation: bool = False,
+                            language: str = "") -> str:
         """Compose history, eligible memory, and dialogue directives for a reply."""
         ctx = "" if stranger else (memory_context or "")
         if not stranger and gate.needs_memory(route) and not ctx.strip():
-            ctx = self._by_lang(CONTEXT["no_memory"])
-        note = (self._by_lang(self._REPLAY_NOTE) if replay
-                else (self._by_lang(self._NO_REPLAY_NOTE) if self._wants_sound(text) else ""))
+            ctx = self._by_lang(CONTEXT["no_memory"], language)
+        note = (self._by_lang(self._REPLAY_NOTE, language) if replay
+                else (self._by_lang(self._NO_REPLAY_NOTE, language) if self._wants_sound(text) else ""))
         if note:
             ctx = f"{ctx}\n\n{note}" if ctx else note
-        emotion_note = content_emotion_note(emotion, self.SPACE_LANG)
+        emotion_note = content_emotion_note(emotion, language or self.SPACE_LANG)
         if emotion_note:
             ctx = f"{ctx}\n\n{emotion_note}" if ctx else emotion_note
         if continuation:
-            followup_note = self._by_lang(CONTEXT["unfinished_followup"])
+            followup_note = self._by_lang(CONTEXT["unfinished_followup"], language)
             ctx = f"{ctx}\n\n{followup_note}" if ctx else followup_note
         return ctx

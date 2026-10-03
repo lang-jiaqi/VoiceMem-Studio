@@ -161,8 +161,8 @@ class DisplayTests(unittest.IsolatedAsyncioTestCase):
                 displayed.set()
         ns.update(
             fill_tags=slow_tags, _SESSION_CONTEXT=types.SimpleNamespace(messages=lambda *a, **k: []),
-            HISTORY_TURNS=6, _speak_instruction=lambda _: "", _speak_base_env="soft",
-            _SPEAK_BASE={}, _by_lang=lambda _: "", _LAST_TONE={"tag": ""},
+            HISTORY_TURNS=6, _speak_instruction=lambda _, lang='': "", _speak_base_env="soft",
+            _SPEAK_BASE={}, _by_lang=lambda _, lang='': "", _LAST_TONE={"tag": ""},
             tts_control=types.SimpleNamespace(split=lambda s: ("平静", s),
                                              smooth=lambda a, b: b, instruction=lambda *a: ""),
             build_reply_context=lambda *a, **kw: "original-memory", BARGE_DEBUG=False,

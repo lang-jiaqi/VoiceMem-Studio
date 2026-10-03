@@ -21,10 +21,10 @@ class ShortReplyTextTests(unittest.IsolatedAsyncioTestCase):
         self.agent.ACTIVE_SPACE = 'fixture'
         self.agent._SESSION_CONTEXT = types.SimpleNamespace(messages=lambda *a, **k: [])
         self.agent.HISTORY_TURNS = 4
-        self.agent._speak_instruction = lambda _: ''
+        self.agent._speak_instruction = lambda _, lang='': ''
         self.agent._speak_base_env = ''
         self.agent._SPEAK_BASE = {}
-        self.agent._by_lang = lambda _: ''
+        self.agent._by_lang = lambda _, lang='': ''
         self.agent._LAST_TONE = {'tag': ''}
         self.agent.build_reply_context = lambda *a, **k: ''
         self.agent.BARGE_DEBUG = False
@@ -147,6 +147,66 @@ class ShortReplyTextTests(unittest.IsolatedAsyncioTestCase):
         ], self_harness_profile={}, on_self_harness_update=updates.update)
         self.assert_body('这部分仍然正常回答。')
         self.assertEqual(updates, {})
+
+    async def test_misplaced_private_header_never_reaches_any_reply_consumer(self):
+        raw = '温和|<self_harness>{}</self_harness>合成测试回答。'
+        for split in range(1, len(raw)):
+            with self.subTest(split=split):
+                self.setUp()
+                await self.complete([raw[:split], raw[split:]], self_harness_profile={})
+                self.assert_body('合成测试回答。')
+        self.setUp()
+        await self.complete(list(raw), self_harness_profile={})
+        self.assert_body('合成测试回答。')
+
+    async def test_private_headers_stay_private_when_harness_is_disabled(self):
+        updates = {}
+        await self.complete(list(
+            '<self_harness>{"speaking_style":{"tone":"认真"}}'
+            '</self_harness>温和|合成测试回答。'), on_self_harness_update=updates.update)
+        self.assert_body('合成测试回答。')
+        self.assertEqual(updates, {})
+
+    async def test_body_control_is_removed_without_applying_a_second_update(self):
+        updates = {}
+        await self.complete(list(
+            '<self_harness>{}</self_harness>温和|前半句。'
+            '<self_harness>{"speaking_style":{"tone":"认真"}}'
+            '</self_harness>后半句。</self_harness>'),
+            self_harness_profile={}, on_self_harness_update=updates.update)
+        self.assert_body('前半句。后半句。')
+        self.assertEqual(updates, {})
+
+    async def test_unfinished_misplaced_control_stays_private_at_eof(self):
+        await self.complete(list('温和|合成测试回答。<self_harness>{"unfinished":'),
+                            self_harness_profile={})
+        self.assert_body('合成测试回答。')
+
+    async def test_misplaced_private_control_is_not_flushed_on_cancel_or_error(self):
+        for fail in (False, True):
+            with self.subTest(provider_error=fail):
+                self.setUp()
+                entered = asyncio.Event()
+
+                async def model(*_):
+                    yield '温和|<self_harness>{"unfinished":'
+                    entered.set()
+                    if fail:
+                        raise RuntimeError('synthetic provider failure')
+                    await asyncio.Event().wait()
+
+                task = asyncio.create_task(self.pipeline(model, self_harness_profile={}))
+                await asyncio.wait_for(entered.wait(), 1)
+                if fail:
+                    with self.assertRaisesRegex(RuntimeError, 'synthetic provider'):
+                        await asyncio.wait_for(task, 1)
+                else:
+                    task.cancel()
+                    await asyncio.wait_for(task, 1)
+                    self.assertEqual(self.agent._push_history.call_args.args[3], '')
+                self.assertFalse(self.audio)
+                self.assertFalse(self.tts_text)
+                self.assertEqual([m['type'] for m in self.messages], ['answer_start'])
 
     async def test_unconfirmed_conflict_does_not_change_this_reply_tts(self):
         state = SelfHarnessState()

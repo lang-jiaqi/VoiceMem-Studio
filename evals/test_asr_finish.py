@@ -1,5 +1,7 @@
 """CPU-only regression: final ASR must not wait behind obsolete streaming audio."""
 import asyncio
+import contextlib
+import io
 from pathlib import Path
 import sys
 import threading
@@ -15,7 +17,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from voicemem.stream import VoiceStream, _AsrWorker
-from voicemem.utils.audio.asr import FunASRStreamingASR
+from voicemem.utils.audio.asr import FunASRStreamingASR, OfflineASR
 
 
 class FunASRFlushPaddingTests(unittest.TestCase):
@@ -100,6 +102,17 @@ class FunASRLocalCacheTests(unittest.TestCase):
 
 
 class FinishTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def misclassified_final_asr():
+        asr = object.__new__(OfflineASR)
+        asr.allowed_languages = frozenset(("zh", "en", "yue"))
+        decoded = types.SimpleNamespace(
+            result=types.SimpleNamespace(text="これは誤認識です", lang="<|ja|>"),
+            accept_waveform=lambda *_: None)
+        asr.rec = types.SimpleNamespace(create_stream=lambda: decoded,
+                                        decode_stream=lambda _: None)
+        return asr
+
     def make_stream(self, transcribe):
         stream = VoiceStream(types.SimpleNamespace(), gate=lambda _: "shallow")
         stream._text = "partial"
@@ -110,6 +123,29 @@ class FinishTests(unittest.IsolatedAsyncioTestCase):
             self.resets += 1
         stream._asr_w = types.SimpleNamespace(flush=lambda: self.flushed, reset=reset)
         return stream
+
+    async def test_rejected_language_uses_stream_flush_partial_or_empty_fallback(self):
+        for flushed, partial, expected in (("完整中文问题", "partial", "完整中文问题"),
+                                           ("", "English partial", "English partial"),
+                                           ("", "", "")):
+            with self.subTest(flushed=flushed, partial=partial):
+                stream = self.make_stream(self.misclassified_final_asr().transcribe)
+                stream._text = partial
+                self.flushed.set_result(flushed)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    await asyncio.wait_for(stream._finish_asr(np.ones(160)), .5)
+                self.assertEqual(stream._text, expected)
+                self.assertNotIn("誤認識", stream._text)
+
+    async def test_rejected_snapshot_keeps_frozen_streaming_text(self):
+        stream = self.make_stream(self.misclassified_final_asr().transcribe)
+        stream._text = "frozen English partial"
+        stream._pcm = [np.ones(160)]
+        with contextlib.redirect_stdout(io.StringIO()):
+            snapshot = stream.refine_current_snapshot()
+            stream._text = "new turn"
+            self.assertEqual(await snapshot, "frozen English partial")
+        self.assertEqual(stream._text, "new turn")
 
     async def test_full_audio_result_bypasses_unfinished_stream_and_uses_full_coverage(self):
         pcm = np.arange(3200, dtype=np.float32)

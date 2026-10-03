@@ -13,6 +13,7 @@ import sys
 import time
 import types
 import unittest
+from contextlib import aclosing
 from unittest.mock import patch
 
 import numpy as np
@@ -94,9 +95,9 @@ class ShortSpeechTests(unittest.IsolatedAsyncioTestCase):
 
 def anticipate_namespace():
     tree = studio_tree()
-    names = {"anticipate", "Pending", "_is_echo", "_is_backchannel", "_barge_text",
+    names = {"anticipate", "_capture_turns", "Pending", "_is_echo", "_is_backchannel", "_barge_text",
              "_is_explicit_interrupt", "_has_barge_content", "_has_strong_final_barge"}
-    ns = dict(asyncio=asyncio, base64=base64, json=json, time=time,
+    ns = dict(asyncio=asyncio, base64=base64, json=json, time=time, aclosing=aclosing,
               open_stream=lambda memory, **kw: memory.stream(**kw), PauseGate=PauseGate, backchannel_policy=backchannel_policy, is_unfinished=is_unfinished,
               Backchannel=Backchannel, TurnTakingStateMachine=TurnTakingStateMachine,
               DIRECT=DIRECT, MEMORY=MEMORY,
@@ -170,7 +171,7 @@ class CaptureBackchannelTests(unittest.IsolatedAsyncioTestCase):
         current = None
         clock = types.SimpleNamespace(now=100.0)
         ns["time"] = types.SimpleNamespace(monotonic=lambda: clock.now)
-        ns["_backchannel_voice"] = lambda: types.SimpleNamespace(
+        ns["_backchannel_voice"] = lambda language='': types.SimpleNamespace(
             available={"嗯"}, get=lambda *args: bytes(4800))
         taking = TurnTakingStateMachine(backchannel=Backchannel(policy=backchannel_policy()))
 

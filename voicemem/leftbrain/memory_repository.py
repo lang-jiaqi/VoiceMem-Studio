@@ -381,8 +381,9 @@ class LeftBrainMemoryRepository:
             return self._experience_repo.retrieve(plan)
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            fut_left  = pool.submit(_left)
-            fut_right = pool.submit(_right)
+            from voicemem.lang import contextualize
+            fut_left  = pool.submit(contextualize(_left))
+            fut_right = pool.submit(contextualize(_right))
             left_hits, trace = fut_left.result()
             right_context    = fut_right.result()
 

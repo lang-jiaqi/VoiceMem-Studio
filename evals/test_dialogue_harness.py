@@ -320,6 +320,8 @@ class BackchannelTests(unittest.TestCase):
         self.assertIn("温和|", system_prompt("zh", tagged=True))
         self.assertIn("<self_harness>{}</self_harness>",
                       system_prompt("zh", tagged=True))
+        self.assertIn("私有 Self Harness 控制头结束后", system_prompt("zh", tagged=True))
+        self.assertNotIn("每条回复以一个语气标签和竖线开头", system_prompt("zh", tagged=True))
         self.assertEqual(system_prompt("en"), system_prompt("zh"))
 
 
@@ -429,6 +431,8 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_web_requires_sustained_speech_before_emitting_and_keeps_cooldown_next_turn(self):
         stream = self.make_stream(text="我就是觉得")
+        stream._asr_w.close = lambda: None
+        stream._asr_w.t = types.SimpleNamespace(join=lambda timeout: None)
         stream.src_rate = 24000
         ns = anticipate_namespace()
         sent, turns = [], []
@@ -441,7 +445,7 @@ class PauseStreamTests(unittest.IsolatedAsyncioTestCase):
             stream.turn_end_guard = kwargs['turn_end_guard']
             return stream
         ns['vm'] = types.SimpleNamespace(stream=stream_factory)
-        ns['_backchannel_voice'] = lambda: types.SimpleNamespace(
+        ns['_backchannel_voice'] = lambda language='': types.SimpleNamespace(
             available={'嗯', '嗯嗯'}, get=lambda *a: bytes(9600))
         test = self
         class Sock:
@@ -526,6 +530,32 @@ class SelfHarnessTests(unittest.TestCase):
         incomplete = split_control_prefix("<self_", final=True)
         self.assertEqual(incomplete.rest, "")
         self.assertIn("unterminated", incomplete.error)
+
+    def test_private_control_filter_handles_split_body_tags_with_bounded_state(self):
+        from studio.core.utils.self_harness.component import PrivateControlFilter
+
+        cases = {
+            '前文。<self_harness>{}</self_harness>后文。': '前文。后文。',
+            '</self_harness>正常正文。': '正常正文。',
+            '前文。<self_harness>{"unfinished":': '前文。',
+            '前文。<self_': '前文。',
+            'x < y; y > z; 最后 <': 'x < y; y > z; 最后 <',
+            '<selfish>普通标记</selfish>': '<selfish>普通标记</selfish>',
+        }
+        for raw, expected in cases.items():
+            chunks = [[raw], list(raw)] + [[raw[:split], raw[split:]]
+                                          for split in range(1, len(raw))]
+            for stream in chunks:
+                with self.subTest(raw=raw, chunks=stream):
+                    parser = PrivateControlFilter()
+                    actual = ''.join(parser.feed(chunk) for chunk in stream)
+                    self.assertEqual(actual + parser.feed('', final=True), expected)
+        parser = PrivateControlFilter()
+        self.assertEqual(parser.feed('<self_harness>'), '')
+        for _ in range(200):
+            self.assertEqual(parser.feed('private_body' * 20 + '</self_'), '')
+            self.assertLess(len(parser.pending), len('</self_harness>'))
+        self.assertEqual(parser.feed('harness>正常正文。', final=True), '正常正文。')
 
     def test_profile_renders_all_modules_and_request_scoped_tts_instruction(self):
         profile = default_profile()

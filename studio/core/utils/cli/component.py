@@ -37,7 +37,8 @@ def parse_args(argv=None):
                         help="Studio ASR/Router 设备，如 cuda:0；与 Breeze GPU 分开配置")
     parser.add_argument("--mode", choices=("llm_tts", "realtime"), default="llm_tts")
     parser.add_argument("--space", default="studio-zh")
-    parser.add_argument("--lang", choices=("zh", "en"), default="zh")
+    parser.add_argument("--lang", choices=("zh", "en"), default="zh",
+                        help="Initial UI and new-Space language fallback; speech follows Chinese/English input")
     parser.add_argument("--confirm_ms", type=int, default=200)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--host", default="127.0.0.1")

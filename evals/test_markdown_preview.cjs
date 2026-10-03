@@ -177,6 +177,16 @@ test('code and prices stay literal while table math may contain unescaped pipes'
   assert(e.mathCalls.some(call => call.text === 'a|b'));
 });
 
+test('coordinate tuples render as math without changing prices or code', () => {
+  const e = environment({ math: true });
+  e.render(e.host, '坐标 $(x, y)$，向量 $[a, b, c]$，数值 $(-1, 2.5)$；价格 $5 和 $10。代码 `$(x, y)$`。');
+  assert.deepEqual(e.mathCalls.map(call => call.text), ['(x, y)', '[a, b, c]', '(-1, 2.5)']);
+  assert(e.host.textContent.includes('价格 $5 和 $10'));
+  assert.equal(tags(e.host, 'code')[0].textContent, '$(x, y)$');
+  e.render(e.host, '坐标 $(x, y)$', { streaming: true }); e.flush();
+  assert(!e.host.textContent.includes('$'));
+});
+
 test('incomplete streaming formulas wait for closure and completed formulas are cached', () => {
   const e = environment({ math: true });
   e.render(e.host, String.raw`先看 $$\frac{a`, { streaming: true }); e.flush();

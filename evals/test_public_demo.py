@@ -30,6 +30,8 @@ class FakeAgent:
         self.root = root
         self.ACTIVE_SPACE = "default"
         self.SPEAKER_GATE = True
+        self.UI_LANG = args.lang
+        self.initial_language = args.lang
         self.vm = SimpleNamespace(classify=lambda query: SimpleNamespace(slots=[], entities=[]))
 
     def memory_snapshot(self):
@@ -49,7 +51,8 @@ class FakeAgent:
         return None
 
     def set_lang(self, lang):
-        return "zh"
+        self.UI_LANG = "en" if lang == "en" else "zh"
+        return self.UI_LANG
 
 
 class PageResources(HTMLParser):
@@ -121,6 +124,52 @@ class PublicDemoTest(unittest.TestCase):
         _, token = self.accounts.register("alice", "long-secret-123")
         agent = self.accounts.agent(self.accounts.user(token)[0])
         self.assertTrue(agent.SPEAKER_GATE)
+
+    def test_same_account_websocket_leases_survive_one_connection_closing(self):
+        client = self.client()
+        self.register(client, 'fixture-user')
+        token = client.cookies['vm_demo_session']
+        user_id = self.accounts.user(token)[0]
+        headers = {'origin':'https://demo.ts.net', 'host':'demo.ts.net',
+                   'cookie':f'vm_demo_session={token}'}
+        with client.websocket_connect('/ws', headers=headers) as first:
+            first.receive_json()
+            agent = self.accounts._agents[user_id]
+            with client.websocket_connect('/ws', headers=headers) as second:
+                second.receive_json()
+                self.assertEqual(self.accounts._active_agents[user_id], 2)
+                self.assertEqual(self.accounts.prune_idle(idle_seconds=0, max_idle_agents=0), 0)
+            self.assertEqual(self.accounts._active_agents[user_id], 1)
+            self.assertIs(self.accounts._agents[user_id], agent)
+        self.assertEqual(self.accounts._active_agents[user_id], 0)
+
+    def test_failed_http_request_releases_account_lease(self):
+        client = self.client()
+        self.register(client, 'fixture-user')
+        user_id = self.accounts.user(client.cookies['vm_demo_session'])[0]
+        agent = self.accounts.agent(user_id)
+        with patch.object(agent, 'memory_snapshot', side_effect=RuntimeError('synthetic failure')):
+            with self.assertRaisesRegex(RuntimeError, 'synthetic failure'):
+                client.get('/api/memories')
+        self.assertEqual(self.accounts._active_agents[user_id], 0)
+
+    def test_ui_language_update_keeps_other_accounts_and_space_state(self):
+        alice, bob = self.client(), self.client()
+        self.assertEqual(alice.post('/api/lang', json={'lang': 'zh'},
+                                   headers={'origin': 'https://demo.ts.net'}).status_code, 401)
+        self.register(alice, 'alice')
+        self.register(bob, 'bob')
+        agent = self.accounts.agent(self.accounts.user(alice.cookies['vm_demo_session'])[0])
+        other = self.accounts.agent(self.accounts.user(bob.cookies['vm_demo_session'])[0])
+        original_memory = agent.vm
+        response = alice.post('/api/lang', json={'lang': 'zh'},
+                              headers={'origin': 'https://demo.ts.net'})
+        self.assertEqual(response.json(), {'lang': 'zh', 'reply_lang': 'auto'})
+        self.assertEqual(agent.UI_LANG, 'zh')
+        self.assertEqual(other.UI_LANG, 'en')
+        self.assertEqual(agent.initial_language, 'en')
+        self.assertIs(agent.vm, original_memory)
+        self.assertEqual(agent.ACTIVE_SPACE, 'default')
 
     def test_origin_and_websocket_auth(self):
         client = self.client()

@@ -24,29 +24,35 @@ class Speech:
             return None
         return tts
 
-    def _backchannel_voice(self):
+    def _backchannel_voice(self, language=""):
         from studio.core.utils.turn_taking.initialize import BackchannelVoice
-        if self._BC_VOICE["obj"] is None:
+        language = language or self.space_language(self.ACTIVE_SPACE)
+        original = self._BC_VOICE.get("obj")
+        banks = self._BC_VOICE.setdefault("banks", {})
+        cache = banks.setdefault(language, {
+            "obj": original if original and getattr(original, "lang", "") == language else None,
+            "task": None})
+        if cache["obj"] is None:
             try:
                 tts = self._backchannel_tts()
                 if tts is None:
-                    self._BC_VOICE["obj"] = False
+                    cache["obj"] = False
                     return None
-                self._BC_VOICE["obj"] = BackchannelVoice(
-                    tts, lang=self.space_language(self.ACTIVE_SPACE),
+                cache["obj"] = BackchannelVoice(
+                    tts, lang=language,
 
                     voice_id=str(getattr(tts, "voice", "") or type(tts).__name__))
             except Exception as e:
                 print(f"[backchannel] 拿不到 TTS，附和关闭：{type(e).__name__}: {e}", flush=True)
-                self._BC_VOICE["obj"] = False
+                cache["obj"] = False
                 return None
-        v = self._BC_VOICE["obj"]
+        v = cache["obj"]
         if v is False:
             return None
-        if self._BC_VOICE["task"] is None and not v.primed:
+        if cache["task"] is None and not v.primed:
 
             def _done(t):
-                self._BC_VOICE["task"] = None
+                cache["task"] = None
                 try:
                     t.result()
                 except asyncio.CancelledError:
@@ -56,8 +62,8 @@ class Speech:
             # The demo ships the reviewed bank in voice/backchannel/. Never turn a
             # colleague's first launch into a synthesis job: missing clips simply
             # mean that opportunity is silent.
-            self._BC_VOICE["task"] = asyncio.create_task(v.prime(cache_only=True))
-            self._BC_VOICE["task"].add_done_callback(_done)
+            cache["task"] = asyncio.create_task(v.prime(cache_only=True))
+            cache["task"].add_done_callback(_done)
         return v if v.ready else None
 
     def _print_backchannel_status(self) -> None:

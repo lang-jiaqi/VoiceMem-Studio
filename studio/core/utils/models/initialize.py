@@ -1,4 +1,4 @@
-"""Required model artifacts for the unchanged Studio inference profile."""
+"""Required model artifacts for the Studio inference profile."""
 from .component import Model
 
 BUNDLE = 'zhifeixie/VoiceMem_Default_Models_Env'
@@ -28,15 +28,10 @@ def models(args, stage="all"):
               ('config.yaml', 'configuration.json', 'model.pt', 'tokens.txt'),
               ('*.json', '*.yaml', '*.pt', '*.txt', '*.npy')),
     ]
-    if args.lang == 'zh':
-        shared.append(Model('流式 ASR', 'asr/funasr-paraformer-zh-streaming',
-                            'funasr/paraformer-zh-streaming',
-                            ('config.yaml', 'model.pt', 'tokens.json', 'am.mvn', 'seg_dict')))
-    else:
-        shared.append(Model('流式 ASR', 'asr/sherpa-onnx-streaming-zipformer-en-2023-06-26',
-                            'csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26',
-                            ('encoder*.onnx', 'decoder*.onnx', 'joiner*.onnx', 'tokens.txt'),
-                            ('*.onnx', 'tokens.txt', 'bpe.model')))
+    shared.append(Model('中英双语流式 ASR',
+                        'asr/funasr-paraformer-zh-streaming',
+                        'funasr/paraformer-zh-streaming',
+                        ('config.yaml', 'model.pt', 'tokens.json', 'am.mvn', 'seg_dict')))
     if args.eot:
         shared.append(Model('Smart Turn EOT', 'eot', 'pipecat-ai/smart-turn-v3',
                             ('smart-turn-v3.2-cpu.onnx',), ('smart-turn-v3.2-cpu.onnx',)))

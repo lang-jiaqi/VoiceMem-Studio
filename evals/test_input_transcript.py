@@ -156,8 +156,9 @@ class PipelineDisplayTests(unittest.IsolatedAsyncioTestCase):
         def keep(session, space, user, answer, **kwargs):
             self.saved.append((user, answer, kwargs.get('interrupted')))
             return self.history.add(session, space, user, answer, **kwargs)
-        ns.update(_SESSION_CONTEXT=self.history, HISTORY_TURNS=6, _speak_instruction=lambda _: '',
-            _speak_base_env='', _SPEAK_BASE={}, _by_lang=lambda _: '', _LAST_TONE={'tag':''},
+        ns.update(_SESSION_CONTEXT=self.history, HISTORY_TURNS=6, _speak_instruction=lambda _, lang='': '',
+            _speak_base_env='', _SPEAK_BASE={}, _by_lang=lambda _, lang='': '', _LAST_TONE={'tag':''},
+            space_language=lambda _: 'zh',
             tts_control=types.SimpleNamespace(split=lambda text: ('',text), smooth=lambda a,b:b, instruction=lambda *a:''),
             build_reply_context=lambda *a,**k:'', BARGE_DEBUG=False, _lat_note=lambda _: '', _mem_line=lambda:'',
             TimedAudioChunk=type('TimedAudioChunk',(),{}), hot_path_enter=lambda:None, hot_path_exit=lambda _:None,
@@ -226,7 +227,7 @@ class PipelineDisplayTests(unittest.IsolatedAsyncioTestCase):
     async def test_early_snapshot_never_emits_final_user_transcript(self):
         ns, memory, send, audio = self.setup_pipeline()
         agent = types.SimpleNamespace(BC_ECHO_WINDOW_S=3, ACTIVE_SPACE='fixture', vm=memory,
-            HISTORY_TURNS=6, _SESSION_CONTEXT=self.history, BARGE_DEBUG=False,
+            HISTORY_TURNS=6, _SESSION_CONTEXT=self.history, BARGE_DEBUG=False, space_language=lambda _: 'zh',
             route_pending_thinking=AsyncMock(side_effect=lambda p,*a,**k:p),
             voicemem_llm_tts=ns['_voicemem_llm_tts'])
         session = Conversation(agent, types.SimpleNamespace(send_json=send, send_bytes=audio))
@@ -247,7 +248,7 @@ class PipelineDisplayTests(unittest.IsolatedAsyncioTestCase):
     async def test_accepting_early_reply_cannot_republish_its_snapshot(self):
         ns, memory, send, audio = self.setup_pipeline()
         agent = types.SimpleNamespace(BC_ECHO_WINDOW_S=3, ACTIVE_SPACE='fixture', vm=memory,
-            HISTORY_TURNS=6, _SESSION_CONTEXT=self.history, BARGE_DEBUG=False, MIC_RATE=24000,
+            HISTORY_TURNS=6, _SESSION_CONTEXT=self.history, BARGE_DEBUG=False, MIC_RATE=24000, space_language=lambda _: 'zh',
             route_pending_thinking=AsyncMock(side_effect=lambda p,*a,**k:p),
             _push_history=ns['_push_history'], queue_remember_turn=ns['queue_remember_turn'],
             _kick_acoustic=ns['_kick_acoustic'],

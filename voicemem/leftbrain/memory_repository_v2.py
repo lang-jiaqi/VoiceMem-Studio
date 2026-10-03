@@ -316,13 +316,14 @@ class LeftBrainMemoryRepositoryV2(LeftBrainMemoryRepository):
     ) -> None:
         """Trigger async summary update if enough new memories accumulated."""
         import threading
+        from voicemem.lang import contextualize
 
         try:
             current_count = self._cognitive_store.count_memories_in_slot(user_id, slot)  # type: ignore[union-attr]
             last_count = self._cognitive_store.get_slot_summary_mem_count(user_id, slot)  # type: ignore[union-attr]
             if current_count - last_count >= update_every:
                 threading.Thread(
-                    target=self._update_slot_summary,
+                    target=contextualize(self._update_slot_summary),
                     args=(user_id, slot, current_count),
                     daemon=True,
                 ).start()

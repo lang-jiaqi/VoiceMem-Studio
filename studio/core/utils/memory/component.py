@@ -21,7 +21,7 @@ class Memory:
             return ""
 
     def remember_turn(self, pending, reply: str, owner: dict, history_turn_id: str = "",
-                      memory_vm=None) -> None:
+                      memory_vm=None, on_complete=None) -> None:
         """Persist the captured turn and heard reply to the originating memory instance."""
 
         text = pending.text
@@ -31,14 +31,30 @@ class Memory:
             from voicemem.stream import SOUND_ONLY_TEXT
             text = SOUND_ONLY_TEXT
 
+        writes = getattr(self, '_MEMORY_WRITES', None)
+        if writes is None:
+            writes = self._MEMORY_WRITES = set()
+        write_id = uuid.uuid4().hex
+        writes.add(write_id)
+
+        def complete(result):
+            if write_id not in writes:
+                return
+            writes.discard(write_id)
+            self._finish_history_turn(history_turn_id, result)
+            if on_complete is not None:
+                on_complete(result)
+
         try:
             target_vm = memory_vm or self.vm
             r = target_vm.ingest(
                 text, agent_reply=reply, async_facts=True,
                 audio=pending.audio_path,
-                on_complete=lambda result: self._finish_history_turn(history_turn_id, result),
+                language=pending.language or getattr(target_vm, "memory_language", "en"),
+                on_complete=complete,
             ) or {}
         except Exception as e:
+            complete({"error": True, "persistent_memory_created": False})
             print(f"[web] 存这一轮失败：{type(e).__name__}: {e}", flush=True)
             return
 
@@ -96,7 +112,7 @@ class Memory:
                   f"（热路径计数 {self._HOT['n']}）", flush=True)
 
     async def _remember_background(self, pending, reply: str, owner: dict,
-                                   history_turn_id: str, memory_vm) -> None:
+                                   history_turn_id: str, memory_vm, on_complete=None) -> None:
         queued_at = time.monotonic()
         async with self._REMEMBER_LOCK:
             waited = time.monotonic() - queued_at
@@ -105,15 +121,16 @@ class Memory:
             await self.wait_idle("入库")
             started = time.monotonic()
             await asyncio.to_thread(
-                self.remember_turn, pending, reply, owner, history_turn_id, memory_vm)
+                self.remember_turn, pending, reply, owner, history_turn_id, memory_vm,
+                **({"on_complete": on_complete} if on_complete is not None else {}))
             if self.BARGE_DEBUG:
                 print(f"[memory] 入库主流程 {time.monotonic()-started:.2f}s", flush=True)
 
     def queue_remember_turn(self, pending, reply: str, owner: dict,
-                            history_turn_id: str = "", memory_vm=None) -> None:
+                            history_turn_id: str = "", memory_vm=None, on_complete=None) -> None:
         memory_vm = memory_vm or self.vm
         task = asyncio.create_task(
-            self._remember_background(pending, reply, owner, history_turn_id, memory_vm))
+            self._remember_background(pending, reply, owner, history_turn_id, memory_vm, on_complete))
         self._REMEMBER_TASKS.add(task)
 
         def done(t: asyncio.Task) -> None:
