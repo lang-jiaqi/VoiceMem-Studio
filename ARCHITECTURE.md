@@ -171,11 +171,8 @@ model classes and factories live in `core/utils/<component>/`.
 Native Apple Silicon setup installs the Studio extra with
 `studio/constraints-macos-py312.txt`, a Python 3.12 profile pinning direct and
 transitive dependencies, then runs `pip check`. It does not apply these Mac
-constraints to the independent CUDA profile. The model-free GitHub Actions
-workflow installs `evals/requirements-ci.txt` and checks decoder ownership,
-connection/account cleanup, memory completion, text projection and browser
-behavior without model downloads or API credentials. It also rejects tracked
-files under `prompt/logs/`; local runtime logs remain ignored.
+constraints to the independent CUDA profile. Local runtime logs under
+`prompt/logs/` remain ignored.
 
 Linux/NVIDIA deployment uses the root compatibility `compose.yaml` and
 `studio/deploy/Dockerfile.cuda` to run
