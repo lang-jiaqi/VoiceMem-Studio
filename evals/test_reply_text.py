@@ -88,6 +88,19 @@ class ShortReplyTextTests(unittest.IsolatedAsyncioTestCase):
         self.assert_body('二加二等于四。')
         self.assertEqual(sum(m['type'] == 'answer_delta' for m in self.messages), 1)
 
+    async def test_injected_session_speech_bypasses_shared_tts(self):
+        spoken = []
+
+        async def speech(text, instruction=None):
+            spoken.append(text)
+            yield bytes(480)
+
+        self.agent.vm.utils.get = Mock(side_effect=AssertionError('shared TTS must not be used'))
+        await self.complete(['认真|会话独立语音。'],
+                            speech_provider=types.SimpleNamespace(stream=speech))
+        self.assertEqual(''.join(spoken), '会话独立语音。')
+        self.assertTrue(self.audio)
+
     async def test_stranger_reply_excludes_owner_session_history(self):
         self.pending.stranger = True
         self.agent._SESSION_CONTEXT.messages = Mock(return_value=[

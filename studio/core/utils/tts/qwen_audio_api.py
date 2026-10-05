@@ -6,6 +6,7 @@ import json
 import os
 import re
 import uuid
+from contextlib import asynccontextmanager
 
 MODEL = "qwen-audio-3.0-tts-flash"
 DEFAULT_VOICE = "longanlingxi"
@@ -16,6 +17,25 @@ SYSTEM_VOICES = frozenset({
     "loongeva_v3.6", "loongjohn",
 })
 _WORKSPACE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def demo_session_limit() -> int:
+    """Return the deployment's positive limit on active demo TTS sessions."""
+    try:
+        limit = int(os.environ.get("STUDIO_DEMO_MAX_TTS_SESSIONS", "4"))
+    except ValueError:
+        raise ValueError("STUDIO_DEMO_MAX_TTS_SESSIONS 必须是正整数") from None
+    if limit < 1:
+        raise ValueError("STUDIO_DEMO_MAX_TTS_SESSIONS 必须是正整数")
+    return limit
+
+
+class DemoSpeechBusy(RuntimeError):
+    """The demo has no free conversation speech slot."""
+
+
+class DemoSpeechUnavailable(RuntimeError):
+    """A conversation could not establish its private speech connection."""
 
 
 def selected() -> bool:
@@ -146,3 +166,61 @@ class QwenAudioAPI:
         """Close the reusable vendor connection."""
         async with self._lock:
             await self._discard()
+
+
+class QwenDemoTTS(QwenAudioAPI):
+    """Own bounded private connections for public-demo conversations only."""
+
+    def __init__(self, *, max_sessions=None):
+        super().__init__()
+        self.max_sessions = demo_session_limit() if max_sessions is None else max_sessions
+        if (not isinstance(self.max_sessions, int) or isinstance(self.max_sessions, bool)
+                or self.max_sessions < 1):
+            raise ValueError("max_sessions must be a positive integer")
+        self._sessions = set()
+        self._closing = False
+
+    @asynccontextmanager
+    async def session(self):
+        """Lease a private provider until the caller has reaped its speech tasks.
+
+        Admission is immediate; connection setup and active leases count toward
+        the limit. Failed or cancelled setup releases its slot without affecting
+        other conversations. The startup connection warms the first lease.
+        """
+        if self._closing:
+            raise DemoSpeechUnavailable("Demo speech is shutting down")
+        if len(self._sessions) >= self.max_sessions:
+            raise DemoSpeechBusy("Demo speech sessions are full")
+        speech = QwenAudioAPI()
+        speech.api_key, speech.workspace, speech.voice = self.api_key, self.workspace, self.voice
+        self._sessions.add(speech)
+        try:
+            async with self._lock:
+                speech._ws, self._ws = self._ws, None
+            try:
+                if self._closing:
+                    raise DemoSpeechUnavailable("Demo speech is shutting down")
+                await speech.preconnect()
+                if self._closing:
+                    raise DemoSpeechUnavailable("Demo speech is shutting down")
+            except Exception as exc:
+                raise DemoSpeechUnavailable("Demo speech connection failed") from exc
+            yield speech
+        finally:
+            try:
+                await speech.aclose()
+            finally:
+                self._sessions.discard(speech)
+
+    async def aclose(self):
+        """Stop admission and close active and unused startup connections."""
+        self._closing = True
+        try:
+            results = await asyncio.gather(
+                *(speech.aclose() for speech in tuple(self._sessions)), return_exceptions=True)
+        finally:
+            await super().aclose()
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result

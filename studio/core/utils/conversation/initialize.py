@@ -11,6 +11,7 @@ from studio.core.utils.self_harness.component import (
 def initialize(self, agent, sock):
     self.agent = agent
     self.sock = sock
+    self.speech_provider = None
     self.turn_taking = TurnTakingStateMachine(backchannel=Backchannel(policy=backchannel_policy()), echo_window_s=self.agent.BC_ECHO_WINDOW_S)
     self.turn = {'task': None, 'continuation_task': None, 't0': 0.0, 'until': 0.0, 'echo_until': 0.0, 'speech_end': 0.0, 'play_started': False, 'reply': {'text': ''}, 'timeline': None, 'measure_started': 0.0, 'measure_recorded': False}
     self.turn['finalize'] = None

@@ -248,8 +248,9 @@ Idle agents are released after 15 minutes or when more than eight idle agents
 are cached. Active leases, pending ingest tasks and native memory completion
 callbacks prevent eviction. A background sweep reclaims idle entries even if
 no further requests arrive; eviction leaves the account's files, credentials
-and explicit Harness preferences intact. Shared inference providers remain
-process owned.
+and explicit Harness preferences intact. Shared local inference providers remain
+process owned. Public-demo Qwen TTS leases one private vendor connection per
+conversation, including multiple connections belonging to the same account.
 Demo Spaces accept Chinese and English in the same memory pool. Each conversation owns
 its recent-language fallback; accounts do not change a process language override.
 The account owns its turn recordings. Browser chat lists remain page-local;
@@ -1062,6 +1063,21 @@ voice by default and can select another system voice through configuration.
 A cancelled segment closes the connection so stale audio cannot enter the next
 reply. The serving loop opens the Qwen WebSocket before accepting sessions;
 local model warmup does not issue a billable synthesis request.
+Only public-demo Qwen deployments use `QwenDemoTTS`: a process-owned manager
+limits active conversation leases with `STUDIO_DEMO_MAX_TTS_SESSIONS` (default
+four). Admission includes connection setup and rejects excess conversations
+immediately with a `demo_speech_busy` browser error and WebSocket close code
+1013; failed connection setup uses `demo_speech_unavailable`. The client releases
+its microphone/audio resources and retains the specific retry message. This is a
+resource limit, not a measured hardware or provider capacity guarantee. The
+first lease adopts the preconnected startup socket; other leases preconnect
+their own sockets. Each conversation passes its provider explicitly to normal,
+opening, speculative and unfinished-follow-up replies and work fillers. Segments
+remain ordered within that connection but do not block other conversations.
+Conversation cleanup reaps reply/filler tasks before releasing its connection;
+failure or interruption discards only that connection. Leases use the same
+configured API credentials and voice. Ordinary App Qwen connections and all
+local-model factories retain their existing reuse and scheduling contracts.
 
 `studio/core/utils/tts/segmentation.py` owns sentence-first text boundaries and
 the pending text buffer. A reply-local segmenter consumes plain text after tone
@@ -1345,6 +1361,7 @@ details.
 | Factual and affective memory | Memory Space stores | Persistent |
 | Streaming ASR/VAD/EOT/gate state | `VoiceStream` | Input turn/session |
 | Turn-taking phase, latency estimate, and backchannel policy | `TurnTakingStateMachine` | WebSocket session |
+| Public-demo Qwen speech connection | `Conversation` / `QwenDemoTTS` lease | WebSocket session |
 | Self Harness profile, Persona supplement, and confirmation state | `SelfHarnessState` | WebSocket session |
 | Reply router model | `studio/core/utils/reply_modes` | Process |
 | Reply mode | Confirmed `Pending` turn | Turn |

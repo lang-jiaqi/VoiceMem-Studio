@@ -1,5 +1,6 @@
 """Inspect all startup requirements before importing models or opening memory."""
 from importlib import metadata
+import os
 import platform
 import sys
 from studio.paths import ROOT, MODELS, STUDIO, VOICE
@@ -40,6 +41,9 @@ def inspect(args, stage="all"):
         try:
             _, _, voice = settings()
             print(f'[startup] Qwen TTS: 新加坡 Workspace / 系统音色 {voice} 已配置', flush=True)
+            if os.environ.get('STUDIO_PUBLIC_DEMO') == '1':
+                from studio.core.utils.tts.qwen_audio_api import demo_session_limit
+                print(f'[startup] Qwen TTS: 独立会话连接，上限 {demo_session_limit()}', flush=True)
         except ValueError as exc:
             errors.append(str(exc))
     packages = {name: None for name in (

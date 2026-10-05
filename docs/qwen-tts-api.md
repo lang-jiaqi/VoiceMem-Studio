@@ -22,7 +22,7 @@ STUDIO_TTS_PROVIDER=qwen_audio_api
 npm --prefix studio/apps start
 ```
 
-公开体验站按 [体验站说明](public-demo.md) 启动。`--check` 只验证配置和本地依赖；实际音色、情绪表现和延迟需要启动后试听。服务使用新加坡 Workspace 专属 WebSocket，并复用连接发送后续语音段。
+公开体验站按 [体验站说明](public-demo.md) 启动。`--check` 只验证配置和本地依赖；实际音色、情绪表现和延迟需要启动后试听。服务使用新加坡 Workspace 专属 WebSocket，并复用连接发送后续语音段。体验站每个对话会话有独立连接，共用同一套 Key、Workspace 和音色；默认同时最多 4 个会话，可通过 `STUDIO_DEMO_MAX_TTS_SESSIONS` 调整。桌面 App 继续复用原有连接。
 
 若服务返回 `AllocationQuota.FreeTierOnly`，说明账号的免费额度不可用或尚未完成开通，且当前不允许按量付费。希望继续使用付费 API 时，到阿里云 Model Studio 控制台检查账号开通与“免费额度耗尽即停”设置。
 

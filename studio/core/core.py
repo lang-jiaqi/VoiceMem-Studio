@@ -9,34 +9,54 @@ async def converse(agent, socket):
     """Listen, wait, interrupt, route, then release or generate one reply."""
     from .utils.conversation.component import Conversation
     from .utils.turn_taking.pause import needs_continuation
+    from .utils.tts.initialize import conversation_speech
+    from .utils.tts.qwen_audio_api import DemoSpeechBusy, DemoSpeechUnavailable
     session = Conversation(agent, socket)
     try:
-        async with aclosing(session.listen()) as turns:
-            async for pending in turns:
-                if session.ignore(pending):
-                    continue
-                pending = await session.merge_continuation(pending)
-                session.stop_prewarm()
-                await session.publish_user_input(pending)
-                if pending.spoken and needs_continuation(pending.text):
-                    await session.drop_early('等待用户补完半句')
-                    await session.defer_unfinished_reply(pending)
-                    continue
-                ack = session.cached_ack(pending)
-                if ack:
-                    await session.emit_filler(*ack)
-                routing = await session.route(pending)
-                try:
-                    if await session.commit_early(pending, routing):
-                        continue
-                    await session.stop_reply(force=True)
-                    await session.start_reply(pending, routing)
-                finally:
-                    if not routing.done():
-                        routing.cancel()
-                    await asyncio.gather(routing, return_exceptions=True)
-    finally:
-        await session.close_session()
+        async with conversation_speech(agent) as speech:
+            session.speech_provider = speech
+            try:
+                async with aclosing(session.listen()) as turns:
+                    async for pending in turns:
+                        if session.ignore(pending):
+                            continue
+                        pending = await session.merge_continuation(pending)
+                        session.stop_prewarm()
+                        await session.publish_user_input(pending)
+                        if pending.spoken and needs_continuation(pending.text):
+                            await session.drop_early('等待用户补完半句')
+                            await session.defer_unfinished_reply(pending)
+                            continue
+                        ack = session.cached_ack(pending)
+                        if ack:
+                            await session.emit_filler(*ack)
+                        routing = await session.route(pending)
+                        try:
+                            if await session.commit_early(pending, routing):
+                                continue
+                            await session.stop_reply(force=True)
+                            await session.start_reply(pending, routing)
+                        finally:
+                            if not routing.done():
+                                routing.cancel()
+                            await asyncio.gather(routing, return_exceptions=True)
+            finally:
+                await session.close_session()
+    except (DemoSpeechBusy, DemoSpeechUnavailable) as exc:
+        english = getattr(agent, 'UI_LANG', 'zh') == 'en'
+        if isinstance(exc, DemoSpeechBusy):
+            code = 'demo_speech_busy'
+            message = ('The demo is full. Please try again shortly.' if english else
+                       '体验站当前对话人数已满，请稍后再试。')
+        else:
+            code = 'demo_speech_unavailable'
+            message = ('The speech service is unavailable. Please try again.' if english else
+                       '语音服务暂时连接失败，请稍后重试。')
+            print(f'[tts] demo connection unavailable: {type(exc.__cause__).__name__}', flush=True)
+        try:
+            await socket.send_json({'type': 'error', 'code': code, 'message': message})
+        finally:
+            await socket.close(code=1013)
 
 
 def build_app(agent, demo_accounts=None):

@@ -524,6 +524,20 @@ class FillerHandoffTests(unittest.IsolatedAsyncioTestCase):
                 await task
         self.assertTrue(closed.is_set())
 
+    async def test_filler_uses_session_speech_without_touching_shared_provider(self):
+        async def tts(*_):
+            yield bytes(480)
+
+        self.session.speech_provider = types.SimpleNamespace(stream=tts)
+        memory = types.SimpleNamespace(utils=types.SimpleNamespace(
+            get=Mock(side_effect=AssertionError('shared TTS must not be used'))))
+        with patch('studio.core.utils.conversation.component.generate_local_filler',
+                   new=AsyncMock(return_value='嗯，让我想想。')):
+            text, pcm = await self.session.synthesize_work_filler(self.value, memory, 'fixture')
+        self.assertEqual(text, '嗯，让我想想。')
+        self.assertEqual(len(pcm), 480)
+        memory.utils.get.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

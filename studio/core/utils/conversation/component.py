@@ -327,14 +327,16 @@ class Conversation:
             self.filler_waiters.pop(filler_id, None)
 
     async def synthesize_work_filler(self, pending, memory_vm, context_space):
-        """Generate a bounded local bridge; speech uses the existing shared TTS."""
+        """Generate a bounded local bridge using this conversation's speech provider."""
         from studio.core.utils.self_harness.component import speech_rate_instruction
         history = self.agent._SESSION_CONTEXT.messages(self.context_session, context_space, window=self.agent.HISTORY_TURNS)
         language = getattr(pending, 'language', '') or self.agent.space_language(context_space)
         text = await generate_local_filler(pending.text, history=history, lang=language)
         if not text:
             return ('', b'')
-        tts = memory_vm.utils.get('tts')
+        tts = getattr(self, 'speech_provider', None)
+        if tts is None:
+            tts = memory_vm.utils.get('tts')
         state = getattr(self, 'self_harness', None)
         instruction = speech_rate_instruction(
             self.agent._speak_instruction(pending.emotion, language),
@@ -475,7 +477,8 @@ class Conversation:
                     said=said_state, context_session=self.context_session,
                     context_space=context_space, memory_vm=memory_vm,
                     self_harness_profile=pending.self_harness_profile,
-                    on_self_harness_update=self_harness_update.stage)
+                    on_self_harness_update=self_harness_update.stage,
+                    speech_provider=getattr(self, 'speech_provider', None))
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -590,7 +593,8 @@ class Conversation:
                 context_space=context_space, memory_vm=memory_vm,
                 self_harness_profile=self_harness_profile,
                 on_self_harness_update=(
-                    self_harness.apply if self_harness is not None else None))
+                    self_harness.apply if self_harness is not None else None),
+                speech_provider=getattr(self, 'speech_provider', None))
             await self.wait_reply_playback(pending, timeline)
         except asyncio.CancelledError:
             if started_reply:
@@ -749,7 +753,8 @@ class Conversation:
                 context_space=context_space, memory_vm=memory_vm,
                 self_harness_profile=self_harness_profile,
                 on_self_harness_update=(
-                    self_harness.apply if self_harness is not None else None))
+                    self_harness.apply if self_harness is not None else None),
+                speech_provider=getattr(self, 'speech_provider', None))
         ack = self.cached_ack(pending)
         decision = self.turn_taking.decide_handoff(main_audio_ready=False, reply_mode=pending.reply_mode, cached_ack_available=bool(ack), spoken=pending.spoken)
 
@@ -828,7 +833,8 @@ class Conversation:
                     lambda pcm: self.send_audio(pcm, timeline), self.owner, timeline,
                     said=reply_state, context_session=self.context_session,
                     context_space=context_space, memory_vm=memory_vm,
-                    self_harness_profile=self_harness_profile)
+                    self_harness_profile=self_harness_profile,
+                    speech_provider=getattr(self, 'speech_provider', None))
                 await self.wait_reply_playback(pending, timeline)
             except asyncio.CancelledError:
                 timeline.mark_interrupted()

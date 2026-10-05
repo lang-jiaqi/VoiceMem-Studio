@@ -107,6 +107,27 @@ test('cancelled connection rejects pending text and ignores old socket events', 
   const count = f.events.length; f.sockets[0].receive({type:'answer_start',output_id:'stale'});
   assert.equal(f.events.length, count); assert.equal(f.contexts[0].closed, true);
 });
+test('demo admission errors release the client and keep the specific retry message', async () => {
+  for (const code of ['demo_speech_busy', 'demo_speech_unavailable']) {
+    const f = fixture(); await f.connected();
+    const message = '体验站暂不可用，请稍后重试。';
+    f.sockets[0].receive({type:'error',code,message});
+    f.sockets[0].onclose?.({code:1013});
+    assert.deepEqual(f.notices, [message]);
+    assert.equal(f.sockets[0].readyState, 3);
+    assert.equal(f.contexts[0].closed, true);
+    assert.equal(f.events.filter(event => event.type === 'disconnected').length, 1);
+  }
+});
+test('demo admission failure before readiness rejects pending text without a stale send', async () => {
+  const f = fixture(); const sending = f.client.send('fixture'); await tick();
+  const rejected = assert.rejects(sending, /结束/);
+  f.sockets[0].receive({type:'error',code:'demo_speech_busy',message:'体验站当前对话人数已满。'});
+  await rejected;
+  f.sockets[0].receive({type:'session_ready'});
+  assert.equal(f.sockets[0].sent.length, 0);
+  assert.deepEqual(f.notices, ['体验站当前对话人数已满。']);
+});
 test('cancelling a microphone permission request disposes its late stream', async () => {
   const f = fixture(); const starting = f.client.start(); await tick();
   f.sockets[0].receive({type:'session_ready'}); await tick(); f.client.cancel();

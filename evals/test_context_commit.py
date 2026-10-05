@@ -455,6 +455,38 @@ class ContextCommitTests(unittest.IsolatedAsyncioTestCase):
         await self.session.close_session()
         self.assert_once(value)
 
+    async def test_session_speech_reaches_normal_opening_early_and_followup_replies(self):
+        for path in ('normal', 'opening', 'early', 'followup'):
+            with self.subTest(path=path):
+                self.setUp()
+                spoken = []
+
+                async def speech(text, instruction=None):
+                    spoken.append(text)
+                    yield bytes(48000)
+
+                self.session.speech_provider = types.SimpleNamespace(stream=speech)
+                self.memory.utils.get = Mock(side_effect=AssertionError('shared TTS must not be used'))
+                try:
+                    if path == 'normal':
+                        await asyncio.wait_for(await self.start(), 1)
+                    elif path == 'opening':
+                        with patch('studio.core.utils.conversation.component.greeting_memories', return_value=[]):
+                            self.session.start_opening()
+                            await asyncio.wait_for(self.session.turn['task'], 1)
+                    elif path == 'early':
+                        _, _, generation = await self.early()
+                        await asyncio.wait_for(generation, 1)
+                    else:
+                        value = self.pending('因为', speech_end=time.monotonic() - 10)
+                        task = asyncio.create_task(self.session.run_unfinished_followup(value, self.memory, 'fixture'))
+                        self.session.unfinished_wait['task'] = task
+                        await asyncio.wait_for(task, 1)
+                    self.assertTrue(spoken)
+                    self.memory.utils.get.assert_not_called()
+                finally:
+                    await self.session.close_session()
+
     async def test_fast_deep_reply_keeps_generation_concurrent_without_filler(self):
         self.session.turn_taking.work_filler_enabled = True
         self.session.turn_taking.long_filler_after_s = 10

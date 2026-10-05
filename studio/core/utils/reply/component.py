@@ -71,7 +71,8 @@ class Reply:
     async def voicemem_llm_tts(self, pending, send, send_audio, owner, timeline,
                                said=None, context_session="", context_space="",
                                memory_vm=None, self_harness_profile=None,
-                               on_self_harness_update=None):
+                               on_self_harness_update=None, speech_provider=None):
+        """Stream with an optional conversation-owned TTS instead of the shared factory."""
         memory_vm = memory_vm or self.vm
         context_space = context_space or self.ACTIVE_SPACE
         ready = asyncio.Event()
@@ -86,7 +87,8 @@ class Reply:
                     context_session=context_session, context_space=context_space,
                     memory_vm=memory_vm, first_audio_ready=ready,
                     self_harness_profile=self_harness_profile,
-                    on_self_harness_update=on_self_harness_update)
+                    on_self_harness_update=on_self_harness_update,
+                    speech_provider=speech_provider)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -105,7 +107,7 @@ class Reply:
                                said=None, context_session="", context_space="",
                                memory_vm=None, first_audio_ready=None,
                                self_harness_profile=None,
-                               on_self_harness_update=None):
+                               on_self_harness_update=None, speech_provider=None):
         memory_vm = memory_vm or self.vm
         context_space = context_space or self.ACTIVE_SPACE
         _entry = time.monotonic()
@@ -135,7 +137,7 @@ class Reply:
         queue: asyncio.Queue = asyncio.Queue()
         text_queue: asyncio.Queue = asyncio.Queue()
 
-        tts = memory_vm.utils.get("tts")
+        tts = speech_provider if speech_provider is not None else memory_vm.utils.get("tts")
         from voicemem.lang import detect_language
         language = getattr(pending, "language", "") or getattr(self, "SPACE_LANG", "zh")
         control = {"head": True, "buf": ""}

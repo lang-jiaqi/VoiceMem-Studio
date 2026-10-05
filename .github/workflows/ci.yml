@@ -43,9 +43,10 @@ jobs:
           evals.test_memory_delivery evals.test_asr_finish evals.test_short_turns
           evals.test_input_transcript evals.test_public_demo evals.test_reply_text
           evals.test_context_commit evals.test_markdown_speech evals.test_dialogue_harness
+          evals.test_qwen_audio_api
           tests.test_session_context
       - name: Run browser regressions
         run: |
-          node --test evals/test_markdown_preview.cjs evals/test_mobile_memory_status.cjs
+          node --test evals/test_markdown_preview.cjs evals/test_mobile_memory_status.cjs studio/apps/evals/ui-client.test.cjs
           node evals/test_transcript_ui.cjs
           node evals/test_mobile_avatar_loading.cjs
