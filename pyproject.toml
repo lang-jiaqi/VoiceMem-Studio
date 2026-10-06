@@ -19,36 +19,33 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 
-# `pip install voicemem` 一条命令装齐所有内置组件：ASR、VAD、声纹、场景、情绪、
-# 本地 embedding，外加 web demo 和 examples/ 的运行依赖。
-#
-# 之前把这些拆在 [slm] extra 里，用户按 README 装完基础包仍然
-# ModuleNotFoundError: funasr —— 名字叫 slm，没人想得到 ASR 在里面。
+# Base dependencies cover memory, audio perception, transport and SDK examples.
+# Platform-specific Studio inference dependencies are declared in extras below.
 dependencies = [
     "python-dotenv>=1,<2",
     "numpy",
     "openai",
-    "httpx>=0.27,<1",     # DeepSeek SSE / 可取消的流式回复，独立于 OpenAI SDK
+    "httpx>=0.27,<1",     # Cancellable SSE replies without an OpenAI SDK transport.
     "mem0ai",
-    # ── 音频链路 ──
+    # Audio perception and local embeddings.
     "torch",
-    "torchaudio",         # funasr 内部 import 它，但自己没声明
+    "torchaudio",         # Required by FunASR's audio imports.
     "torchvision",
     "transformers>=4.52.3,<6",
     "accelerate",
-    "funasr",             # 流式 ASR（默认）
-    "modelscope",         # funasr 取模型用
-    "sherpa-onnx",        # VAD + 声纹 + 回退 ASR（纯 onnx）
-    "sentence-transformers",   # 本地 E5（记忆向量 / slot 分类）
-    "soundfile",          # 读 mp3/m4a/flac；缺了会退回标准库 wave，只认 PCM wav
+    "funasr",             # Default streaming ASR.
+    "modelscope",         # FunASR model acquisition.
+    "sherpa-onnx",        # ONNX VAD, speaker verification and fallback ASR.
+    "sentence-transformers",   # Local memory and slot embeddings.
+    "soundfile",          # Audio-file decoding beyond PCM WAV.
     "scipy",
-    # ── web demo（web/run.py）和 examples/ ──
+    # Web transport and SDK audio examples.
     "fastapi",
     "uvicorn",
-    "pydantic",           # web/utils.py 顶层就 import 了（fastapi 带得进来，但别靠它）
-    "websockets>=14",     # uvicorn 跑 WebSocket；examples/05 接 realtime 也用
-    "sounddevice",        # examples 里的语音 agent：麦克风 + 扬声器
-    "pywebrtc-audio",     # 回声消除（外放时能打断）
+    "pydantic",           # HTTP request schemas.
+    "websockets>=14",     # Uvicorn WebSockets and Realtime examples.
+    "sounddevice",        # Example microphone and speaker I/O.
+    "pywebrtc-audio",     # Acoustic echo cancellation in audio examples.
 ]
 
 [project.optional-dependencies]
@@ -81,16 +78,14 @@ rtc = [
     "av>=14",
 ]
 
-# 跑我们微调的 Qwen 回复模型（Qwen3.6-35B-A3B + QLoRA adapter）。
-# 权重不在 wheel 里，用 `bash scripts/download_models.sh --reply-adapter` 拉。
+# Optional QLoRA reply adapter support. Weights are downloaded separately with
+# scripts/download_models.sh --reply-adapter.
 slm = [
-    "peft",               # 加载 QLoRA adapter
+    "peft",               # QLoRA adapter loading.
 ]
 
-# 只有这两条命令。其余场景各自 pip，不再单开 extra——名字对不上内容的 extra
-# 正是之前那个坑的成因（[slm] 里装着 ASR，谁也想不到）：
-#   本地 TTS（TTS_BACKEND=local）  pip install piper-tts   或   pip install voxcpm
-#   跑 finetune/ 的训练脚本         pip install ms-swift==4.5.2 bitsandbytes
+# Other optional SDK TTS providers require their own packages, such as piper-tts
+# or voxcpm. Training dependencies are documented in finetune/README.md.
 
 [project.urls]
 Homepage = "https://github.com/lang-jiaqi/VoiceMem-Studio"

@@ -28,7 +28,7 @@ npm start -- --model=assets/live2d/rattan/rattan.model3.json
 `assets/live2d/vendor/`。模型包格式及许可注意事项见
 [`assets/live2d/README.md`](assets/live2d/README.md)。
 
-正常与 VoiceMem 一起运行时不需要单独启动：打开 `http://127.0.0.1:8787/?pet=1`，后端会启动桌宠并连接 `/ws-pet`。
+原生 Mac 后端在启动时自动创建桌宠并连接 `/ws-pet`，无需通过网页参数开启。设置 `STUDIO_DESKTOP_PET=0` 可禁用这一行为。
 
 正式模型可通过环境变量交给 Studio 自动启动：
 

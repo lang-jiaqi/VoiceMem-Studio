@@ -233,9 +233,6 @@
   #btn-try:hover{background:none;border:none;color:#ffd884;opacity:1}
   #btn-try .d{width:4px;height:4px;opacity:.9}
   /* demo 跑在一台自托管的机器上，它关着的时候别把访客送去一个打不开的链接。 */
-  #btn-try.down{color:var(--bartx);opacity:.38;cursor:not-allowed;pointer-events:none}
-  #btn-try.down::after{content:""}
-  #btn-try.down .d{background:#8b90a0;box-shadow:none}
   .glass .d.y{background:#ffc44a;box-shadow:0 0 9px #ffc44a}
   /* ---------- memory card ---------- */
   #card{
@@ -914,7 +911,7 @@
     <button type="button" id="btn-explore"><span class="d b"></span>Explore</button>
     <a href="https://github.com/xzf-thu/VoiceMem" id="btn-code" target="_blank" rel="noopener noreferrer"><span class="d p"></span>Code</a>
     <a href="https://arxiv.org/pdf/2608.26005" id="btn-paper" target="_blank" rel="noopener noreferrer"><span class="d g"></span>Paper</a>
-    <a href="https://shuichengmac-mini.tailebef1c.ts.net" id="btn-try" target="_blank" rel="noopener noreferrer"><span class="d y"></span>Try it now</a>
+    <a href="https://github.com/lang-jiaqi/VoiceMem-Studio/blob/main/studio/README.md" id="btn-try" target="_blank" rel="noopener noreferrer"><span class="d y"></span>Studio App</a>
   </div>
   <div id="cue">Scroll<i></i></div>
   <div id="veil"></div>
@@ -949,7 +946,7 @@
     <nav class="tabs" aria-label="VoiceMem examples">
       <button class="tab active" data-tab="offline" data-i18n="quick.sdk">Offline Engine</button>
       <button class="tab" data-tab="online" data-i18n="quick.runtime">Streaming</button>
-      <button class="tab" data-tab="chat" data-i18n="quick.agent">Web Demo</button>
+      <button class="tab" data-tab="chat" data-i18n="quick.agent">Studio App</button>
     </nav>
     <section class="window">
       <div class="titlebar">
@@ -971,7 +968,7 @@
       <div class="panel" id="chat">
         <div class="code-wrap">
           <button class="copy" aria-label="Copy code" title="Copy">⧉</button>
-          <pre><code><span class="line"><span class="comment"># 1. Clone the repo — the demo lives here, pip ships the library only</span></span><span class="line">git clone https://github.com/xzf-thu/VoiceMem.git</span><span class="line">cd VoiceMem</span><span class="line"></span><span class="line"><span class="comment"># 2. Pull the default models</span></span><span class="line">pip install -U huggingface_hub</span><span class="line">hf download zhifeixie/VoiceMem_Default_Models_Env --local-dir ./models</span><span class="line"></span><span class="line"><span class="comment"># 3. Start the interactive web demo</span></span><span class="line">export OPENAI_API_KEY=sk-...</span><span class="line">python web/run.py</span><span class="line"></span><span class="line"><span class="comment"># 4. Then open the local UI</span></span><span class="line">http://localhost:8787</span></code></pre>
+          <pre><code><span class="line"><span class="comment"># 1. Apple Silicon Mac: native Python 3.12 and Node.js 22.12+</span></span><span class="line">git clone https://github.com/lang-jiaqi/VoiceMem-Studio.git</span><span class="line">cd VoiceMem-Studio</span><span class="line"></span><span class="line"><span class="comment"># 2. Start the Studio App</span></span><span class="line">npm --prefix studio/apps start</span><span class="line"></span><span class="line"><span class="comment"># 3. Follow the API setup; dependencies and models prepare automatically</span></span><span class="line"></span><span class="line"><span class="comment"># 4. Choose a conversation style; the desktop pet is included</span></span></code></pre>
         </div>
       </div>
     </section>
@@ -2891,7 +2888,7 @@ else brain.addEventListener('load', plateLoaded);
 
 <script id="voicemem-i18n-v1">
 (function(){
-  const I18N = {"en": {"demo.title": "Demo", "demo.say": "Talk to it once. It knows you next time.", "demo.watch": "Watch on YouTube", "quick.title": "Quick Start", "quick.say": "Memory for your voice AI, in a few lines.", "quick.sdk": "Offline Engine", "quick.runtime": "Streaming", "quick.agent": "Web Demo", "intro.title": "Introduction", "intro.say": "Two brains. One voice. Nothing to wait for.", "intro.archTitle": "Streaming dual-brain architecture", "intro.archBody": "The left brain organizes factual memory through schemas and entities, while the right brain models personality and emotion with independent and cross-entity nodes. The entire pipeline is streaming: while the user is still speaking, audio is segmented, transcribed, extracted, and written into the graph. At query time, VoiceMem routes first, ranks second, and injects only the Top-K memories into context.", "intro.opdTitle": "Datasets and voice-model family built with OPD", "intro.opdBody": "ChatMem-400K is produced by a three-stage pipeline of memory-world construction, SLM-validated online on-policy distillation, and human refinement; the same pipeline also produces the ChatMem-Bench evaluation set. After OPD distillation, Qwen3-Omni, and Step-Audio2-Mini learn to proactively invoke memory without sacrificing their original speech capabilities.", "intro.dataset": "Dataset", "intro.model": "Model", "bench.title": "Benchmarking", "bench.say": "More accurate. Fewer tokens. Near-zero latency inside the voice turn.", "bench.locomoLabel": "Long-horizon factual memory", "bench.locomoBody": "Five memories. 430 tokens. Best score on the board.", "bench.personaLabel": "Personalized memory", "bench.personaBody": "It remembers who you are, not just what you said.", "bench.deploy": "deployment point", "bench.tokens": "mean memory tokens on LoCoMo", "bench.accuracy": "Accuracy", "bench.higher": "HIGHER ↑", "bench.lower": "LOWER ↓", "bench.memoryTokens": "Memory tokens", "bench.latency": "Latency", "apps.title": "Applications", "apps.say": "Build it with VoiceMem.", "closing.title": "Start building voice intelligence with soul", "closing.button": "Start Building", "closing.contact": "Contact us"}, "zh-CN": {"demo.title": "演示", "demo.say": "只需聊一次，下次它就记得你。", "demo.watch": "在 YouTube 观看", "quick.title": "快速开始", "quick.say": "只需几行代码，为你的语音 AI 加上记忆。", "quick.sdk": "离线引擎", "quick.runtime": "流式接入", "quick.agent": "Web Demo", "intro.title": "介绍", "intro.say": "双脑协同，一个声音，无需等待。", "intro.archTitle": "流式 dual-brain 架构", "intro.archBody": "左脑以 schema 和实体组织事实记忆，右脑以独立与跨实体节点建模人格与情绪。整条链路全流式——用户还在说话时就已完成切分、转写、抽取并入图，查询时先路由后排序，只取 Top-K 拼进上下文。", "intro.opdTitle": "基于 OPD 构建的数据集与语音模型系列", "intro.opdBody": "ChatMem-400K 由记忆世界构建、SLM 验证的在线同策略蒸馏与人工精修三段流水线产出，并同时生成 ChatMem-Bench 评测集。Qwen3-Omni 与 Step-Audio2-Mini 经 OPD 蒸馏后学会主动调用记忆，且不损失原有语音能力。", "intro.dataset": "数据集", "intro.model": "模型", "bench.title": "基准测试", "bench.say": "更准确，更少 token，并且几乎无延迟地在 voice turn 内完成。", "bench.locomoLabel": "长时程事实记忆", "bench.locomoBody": "仅五条记忆、430 tokens，取得全榜最佳成绩。", "bench.personaLabel": "个性化记忆", "bench.personaBody": "它记住的是你是谁，而不只是你说过什么。", "bench.deploy": "部署点", "bench.tokens": "LoCoMo 平均记忆 tokens", "bench.accuracy": "准确率", "bench.higher": "越高越好 ↑", "bench.lower": "越低越好 ↓", "bench.memoryTokens": "记忆 tokens", "bench.latency": "延迟", "apps.title": "应用", "apps.say": "和 VoiceMem 一起构建。", "closing.title": "开始构建有灵魂的 voice intelligence", "closing.button": "开始构建", "closing.contact": "联系我们"}, "zh-TW": {"demo.title": "示範", "demo.say": "只要聊一次，下次它就記得你。", "demo.watch": "在 YouTube 觀看", "quick.title": "快速開始", "quick.say": "只需幾行程式碼，為你的語音 AI 加上記憶。", "quick.sdk": "離線引擎", "quick.runtime": "串流接入", "quick.agent": "Web Demo", "intro.title": "介紹", "intro.say": "雙腦協同，一個聲音，無需等待。", "intro.archTitle": "串流 dual-brain 架構", "intro.archBody": "左腦以 schema 與實體組織事實記憶，右腦以獨立與跨實體節點建模人格與情緒。整條鏈路皆為串流——使用者仍在說話時，就已完成切分、轉寫、抽取並寫入圖譜；查詢時先路由、再排序，只將 Top-K 記憶放入上下文。", "intro.opdTitle": "以 OPD 建構的資料集與語音模型系列", "intro.opdBody": "ChatMem-400K 由記憶世界建構、SLM 驗證的線上同策略蒸餾與人工精修三階段流程產出，並同步生成 ChatMem-Bench 評測集。Qwen3-Omni 與 Step-Audio2-Mini 經 OPD 蒸餾後學會主動調用記憶，且不犧牲原有語音能力。", "intro.dataset": "資料集", "intro.model": "模型", "bench.title": "基準測試", "bench.say": "更準確、更少 token，並且幾乎零延遲地在 voice turn 內完成。", "bench.locomoLabel": "長期事實記憶", "bench.locomoBody": "只需五條記憶、430 tokens，拿下全榜最佳成績。", "bench.personaLabel": "個人化記憶", "bench.personaBody": "它記得你是誰，而不只是你說過什麼。", "bench.deploy": "部署點", "bench.tokens": "LoCoMo 平均記憶 tokens", "bench.accuracy": "準確率", "bench.higher": "越高越好 ↑", "bench.lower": "越低越好 ↓", "bench.memoryTokens": "記憶 tokens", "bench.latency": "延遲", "apps.title": "應用", "apps.say": "和 VoiceMem 一起打造。", "closing.title": "開始構建有靈魂的 voice intelligence", "closing.button": "開始建置", "closing.contact": "聯絡我們"}, "ja": {"demo.title": "デモ", "demo.say": "一度話すだけ。次からは、あなたを覚えています。", "demo.watch": "YouTube で見る", "quick.title": "クイックスタート", "quick.say": "数行のコードで、音声 AI に記憶を。", "quick.sdk": "オフラインエンジン", "quick.runtime": "ストリーミング", "quick.agent": "Web デモ", "intro.title": "イントロダクション", "intro.say": "二つの脳、一つの声。待ち時間はありません。", "intro.archTitle": "ストリーミング dual-brain アーキテクチャ", "intro.archBody": "左脳は schema とエンティティで事実記憶を整理し、右脳は独立ノードとエンティティ横断ノードで人格と感情をモデル化します。パイプライン全体はストリーミングで、ユーザーが話している間に分割・文字起こし・抽出・グラフへの書き込みまで進みます。検索時はルーティングしてから順位付けし、Top-K の記憶だけをコンテキストに入れます。", "intro.opdTitle": "OPD で構築したデータセットと音声モデル群", "intro.opdBody": "ChatMem-400K は、記憶世界の構築、SLM 検証付きオンライン on-policy 蒸留、人手による精修という 3 段階のパイプラインで生成され、同時に ChatMem-Bench 評価セットも作られます。OPD 蒸留後の Qwen3-Omni、Step-Audio2-Mini は、元の音声能力を損なうことなく、必要に応じて能動的に記憶を呼び出せるようになります。", "intro.dataset": "データセット", "intro.model": "モデル", "bench.title": "ベンチマーク", "bench.say": "より正確に。より少ないトークンで。音声ターン内でほぼ遅延なく完結。", "bench.locomoLabel": "長期的な事実記憶", "bench.locomoBody": "記憶は 5 件、430 トークン。ボード上で最高スコア。", "bench.personaLabel": "パーソナライズ記憶", "bench.personaBody": "覚えるのは、発言だけではなく、あなた自身です。", "bench.deploy": "デプロイ地点", "bench.tokens": "LoCoMo の平均記憶トークン", "bench.accuracy": "精度", "bench.higher": "高いほど良い ↑", "bench.lower": "低いほど良い ↓", "bench.memoryTokens": "記憶トークン", "bench.latency": "レイテンシ", "apps.title": "アプリケーション", "apps.say": "VoiceMem と一緒に作る。", "closing.title": "魂のある voice intelligence を構築しよう", "closing.button": "構築を始める", "closing.contact": "お問い合わせ"}, "ko": {"demo.title": "데모", "demo.say": "한 번 이야기하면, 다음에는 당신을 기억합니다.", "demo.watch": "YouTube에서 보기", "quick.title": "빠른 시작", "quick.say": "몇 줄의 코드로 음성 AI에 기억을 더하세요.", "quick.sdk": "오프라인 엔진", "quick.runtime": "스트리밍", "quick.agent": "웹 데모", "intro.title": "소개", "intro.say": "두 개의 뇌, 하나의 목소리. 기다릴 필요가 없습니다.", "intro.archTitle": "스트리밍 dual-brain 아키텍처", "intro.archBody": "왼쪽 뇌는 schema와 엔터티로 사실 기억을 구조화하고, 오른쪽 뇌는 독립 노드와 엔터티 간 노드로 성격과 감정을 모델링합니다. 전체 파이프라인은 스트리밍 방식으로 동작해 사용자가 말하는 동안 분할, 전사, 추출, 그래프 기록까지 진행합니다. 질의 시에는 먼저 라우팅하고 그다음 순위를 매겨 Top-K 기억만 컨텍스트에 주입합니다.", "intro.opdTitle": "OPD로 구축한 데이터셋과 음성 모델군", "intro.opdBody": "ChatMem-400K는 기억 세계 구성, SLM 검증 온라인 on-policy 증류, 인간 정제의 3단계 파이프라인으로 만들어지며, 같은 과정에서 ChatMem-Bench 평가 세트도 생성됩니다. OPD 증류를 거친 Qwen3-Omni, Step-Audio2-Mini는 기존 음성 능력을 유지하면서 필요할 때 능동적으로 기억을 호출하는 법을 학습합니다.", "intro.dataset": "데이터셋", "intro.model": "모델", "bench.title": "벤치마킹", "bench.say": "더 정확하게, 더 적은 토큰으로, voice turn 안에서 거의 지연 없이.", "bench.locomoLabel": "장기 사실 기억", "bench.locomoBody": "기억 5개, 430토큰. 전체 보드 최고 점수.", "bench.personaLabel": "개인화 기억", "bench.personaBody": "무엇을 말했는지만이 아니라, 당신이 누구인지 기억합니다.", "bench.deploy": "배포 지점", "bench.tokens": "LoCoMo 평균 기억 토큰", "bench.accuracy": "정확도", "bench.higher": "높을수록 좋음 ↑", "bench.lower": "낮을수록 좋음 ↓", "bench.memoryTokens": "기억 토큰", "bench.latency": "지연 시간", "apps.title": "활용 사례", "apps.say": "VoiceMem과 함께 만들다.", "closing.title": "영혼이 있는 voice intelligence를 구축하세요", "closing.button": "빌드 시작", "closing.contact": "문의하기"}};
+  const I18N = {"en": {"demo.title": "Demo", "demo.say": "Talk to it once. It knows you next time.", "demo.watch": "Watch on YouTube", "quick.title": "Quick Start", "quick.say": "Memory for your voice AI, in a few lines.", "quick.sdk": "Offline Engine", "quick.runtime": "Streaming", "quick.agent": "Studio App", "intro.title": "Introduction", "intro.say": "Two brains. One voice. Nothing to wait for.", "intro.archTitle": "Streaming dual-brain architecture", "intro.archBody": "The left brain organizes factual memory through schemas and entities, while the right brain models personality and emotion with independent and cross-entity nodes. The entire pipeline is streaming: while the user is still speaking, audio is segmented, transcribed, extracted, and written into the graph. At query time, VoiceMem routes first, ranks second, and injects only the Top-K memories into context.", "intro.opdTitle": "Datasets and voice-model family built with OPD", "intro.opdBody": "ChatMem-400K is produced by a three-stage pipeline of memory-world construction, SLM-validated online on-policy distillation, and human refinement; the same pipeline also produces the ChatMem-Bench evaluation set. After OPD distillation, Qwen3-Omni, and Step-Audio2-Mini learn to proactively invoke memory without sacrificing their original speech capabilities.", "intro.dataset": "Dataset", "intro.model": "Model", "bench.title": "Benchmarking", "bench.say": "More accurate. Fewer tokens. Near-zero latency inside the voice turn.", "bench.locomoLabel": "Long-horizon factual memory", "bench.locomoBody": "Five memories. 430 tokens. Best score on the board.", "bench.personaLabel": "Personalized memory", "bench.personaBody": "It remembers who you are, not just what you said.", "bench.deploy": "deployment point", "bench.tokens": "mean memory tokens on LoCoMo", "bench.accuracy": "Accuracy", "bench.higher": "HIGHER ↑", "bench.lower": "LOWER ↓", "bench.memoryTokens": "Memory tokens", "bench.latency": "Latency", "apps.title": "Applications", "apps.say": "Build it with VoiceMem.", "closing.title": "Start building voice intelligence with soul", "closing.button": "Start Building", "closing.contact": "Contact us"}, "zh-CN": {"demo.title": "演示", "demo.say": "只需聊一次，下次它就记得你。", "demo.watch": "在 YouTube 观看", "quick.title": "快速开始", "quick.say": "只需几行代码，为你的语音 AI 加上记忆。", "quick.sdk": "离线引擎", "quick.runtime": "流式接入", "quick.agent": "Studio App", "intro.title": "介绍", "intro.say": "双脑协同，一个声音，无需等待。", "intro.archTitle": "流式 dual-brain 架构", "intro.archBody": "左脑以 schema 和实体组织事实记忆，右脑以独立与跨实体节点建模人格与情绪。整条链路全流式——用户还在说话时就已完成切分、转写、抽取并入图，查询时先路由后排序，只取 Top-K 拼进上下文。", "intro.opdTitle": "基于 OPD 构建的数据集与语音模型系列", "intro.opdBody": "ChatMem-400K 由记忆世界构建、SLM 验证的在线同策略蒸馏与人工精修三段流水线产出，并同时生成 ChatMem-Bench 评测集。Qwen3-Omni 与 Step-Audio2-Mini 经 OPD 蒸馏后学会主动调用记忆，且不损失原有语音能力。", "intro.dataset": "数据集", "intro.model": "模型", "bench.title": "基准测试", "bench.say": "更准确，更少 token，并且几乎无延迟地在 voice turn 内完成。", "bench.locomoLabel": "长时程事实记忆", "bench.locomoBody": "仅五条记忆、430 tokens，取得全榜最佳成绩。", "bench.personaLabel": "个性化记忆", "bench.personaBody": "它记住的是你是谁，而不只是你说过什么。", "bench.deploy": "部署点", "bench.tokens": "LoCoMo 平均记忆 tokens", "bench.accuracy": "准确率", "bench.higher": "越高越好 ↑", "bench.lower": "越低越好 ↓", "bench.memoryTokens": "记忆 tokens", "bench.latency": "延迟", "apps.title": "应用", "apps.say": "和 VoiceMem 一起构建。", "closing.title": "开始构建有灵魂的 voice intelligence", "closing.button": "开始构建", "closing.contact": "联系我们"}, "zh-TW": {"demo.title": "示範", "demo.say": "只要聊一次，下次它就記得你。", "demo.watch": "在 YouTube 觀看", "quick.title": "快速開始", "quick.say": "只需幾行程式碼，為你的語音 AI 加上記憶。", "quick.sdk": "離線引擎", "quick.runtime": "串流接入", "quick.agent": "Studio App", "intro.title": "介紹", "intro.say": "雙腦協同，一個聲音，無需等待。", "intro.archTitle": "串流 dual-brain 架構", "intro.archBody": "左腦以 schema 與實體組織事實記憶，右腦以獨立與跨實體節點建模人格與情緒。整條鏈路皆為串流——使用者仍在說話時，就已完成切分、轉寫、抽取並寫入圖譜；查詢時先路由、再排序，只將 Top-K 記憶放入上下文。", "intro.opdTitle": "以 OPD 建構的資料集與語音模型系列", "intro.opdBody": "ChatMem-400K 由記憶世界建構、SLM 驗證的線上同策略蒸餾與人工精修三階段流程產出，並同步生成 ChatMem-Bench 評測集。Qwen3-Omni 與 Step-Audio2-Mini 經 OPD 蒸餾後學會主動調用記憶，且不犧牲原有語音能力。", "intro.dataset": "資料集", "intro.model": "模型", "bench.title": "基準測試", "bench.say": "更準確、更少 token，並且幾乎零延遲地在 voice turn 內完成。", "bench.locomoLabel": "長期事實記憶", "bench.locomoBody": "只需五條記憶、430 tokens，拿下全榜最佳成績。", "bench.personaLabel": "個人化記憶", "bench.personaBody": "它記得你是誰，而不只是你說過什麼。", "bench.deploy": "部署點", "bench.tokens": "LoCoMo 平均記憶 tokens", "bench.accuracy": "準確率", "bench.higher": "越高越好 ↑", "bench.lower": "越低越好 ↓", "bench.memoryTokens": "記憶 tokens", "bench.latency": "延遲", "apps.title": "應用", "apps.say": "和 VoiceMem 一起打造。", "closing.title": "開始構建有靈魂的 voice intelligence", "closing.button": "開始建置", "closing.contact": "聯絡我們"}, "ja": {"demo.title": "デモ", "demo.say": "一度話すだけ。次からは、あなたを覚えています。", "demo.watch": "YouTube で見る", "quick.title": "クイックスタート", "quick.say": "数行のコードで、音声 AI に記憶を。", "quick.sdk": "オフラインエンジン", "quick.runtime": "ストリーミング", "quick.agent": "Studio App", "intro.title": "イントロダクション", "intro.say": "二つの脳、一つの声。待ち時間はありません。", "intro.archTitle": "ストリーミング dual-brain アーキテクチャ", "intro.archBody": "左脳は schema とエンティティで事実記憶を整理し、右脳は独立ノードとエンティティ横断ノードで人格と感情をモデル化します。パイプライン全体はストリーミングで、ユーザーが話している間に分割・文字起こし・抽出・グラフへの書き込みまで進みます。検索時はルーティングしてから順位付けし、Top-K の記憶だけをコンテキストに入れます。", "intro.opdTitle": "OPD で構築したデータセットと音声モデル群", "intro.opdBody": "ChatMem-400K は、記憶世界の構築、SLM 検証付きオンライン on-policy 蒸留、人手による精修という 3 段階のパイプラインで生成され、同時に ChatMem-Bench 評価セットも作られます。OPD 蒸留後の Qwen3-Omni、Step-Audio2-Mini は、元の音声能力を損なうことなく、必要に応じて能動的に記憶を呼び出せるようになります。", "intro.dataset": "データセット", "intro.model": "モデル", "bench.title": "ベンチマーク", "bench.say": "より正確に。より少ないトークンで。音声ターン内でほぼ遅延なく完結。", "bench.locomoLabel": "長期的な事実記憶", "bench.locomoBody": "記憶は 5 件、430 トークン。ボード上で最高スコア。", "bench.personaLabel": "パーソナライズ記憶", "bench.personaBody": "覚えるのは、発言だけではなく、あなた自身です。", "bench.deploy": "デプロイ地点", "bench.tokens": "LoCoMo の平均記憶トークン", "bench.accuracy": "精度", "bench.higher": "高いほど良い ↑", "bench.lower": "低いほど良い ↓", "bench.memoryTokens": "記憶トークン", "bench.latency": "レイテンシ", "apps.title": "アプリケーション", "apps.say": "VoiceMem と一緒に作る。", "closing.title": "魂のある voice intelligence を構築しよう", "closing.button": "構築を始める", "closing.contact": "お問い合わせ"}, "ko": {"demo.title": "데모", "demo.say": "한 번 이야기하면, 다음에는 당신을 기억합니다.", "demo.watch": "YouTube에서 보기", "quick.title": "빠른 시작", "quick.say": "몇 줄의 코드로 음성 AI에 기억을 더하세요.", "quick.sdk": "오프라인 엔진", "quick.runtime": "스트리밍", "quick.agent": "Studio App", "intro.title": "소개", "intro.say": "두 개의 뇌, 하나의 목소리. 기다릴 필요가 없습니다.", "intro.archTitle": "스트리밍 dual-brain 아키텍처", "intro.archBody": "왼쪽 뇌는 schema와 엔터티로 사실 기억을 구조화하고, 오른쪽 뇌는 독립 노드와 엔터티 간 노드로 성격과 감정을 모델링합니다. 전체 파이프라인은 스트리밍 방식으로 동작해 사용자가 말하는 동안 분할, 전사, 추출, 그래프 기록까지 진행합니다. 질의 시에는 먼저 라우팅하고 그다음 순위를 매겨 Top-K 기억만 컨텍스트에 주입합니다.", "intro.opdTitle": "OPD로 구축한 데이터셋과 음성 모델군", "intro.opdBody": "ChatMem-400K는 기억 세계 구성, SLM 검증 온라인 on-policy 증류, 인간 정제의 3단계 파이프라인으로 만들어지며, 같은 과정에서 ChatMem-Bench 평가 세트도 생성됩니다. OPD 증류를 거친 Qwen3-Omni, Step-Audio2-Mini는 기존 음성 능력을 유지하면서 필요할 때 능동적으로 기억을 호출하는 법을 학습합니다.", "intro.dataset": "데이터셋", "intro.model": "모델", "bench.title": "벤치마킹", "bench.say": "더 정확하게, 더 적은 토큰으로, voice turn 안에서 거의 지연 없이.", "bench.locomoLabel": "장기 사실 기억", "bench.locomoBody": "기억 5개, 430토큰. 전체 보드 최고 점수.", "bench.personaLabel": "개인화 기억", "bench.personaBody": "무엇을 말했는지만이 아니라, 당신이 누구인지 기억합니다.", "bench.deploy": "배포 지점", "bench.tokens": "LoCoMo 평균 기억 토큰", "bench.accuracy": "정확도", "bench.higher": "높을수록 좋음 ↑", "bench.lower": "낮을수록 좋음 ↓", "bench.memoryTokens": "기억 토큰", "bench.latency": "지연 시간", "apps.title": "활용 사례", "apps.say": "VoiceMem과 함께 만들다.", "closing.title": "영혼이 있는 voice intelligence를 구축하세요", "closing.button": "빌드 시작", "closing.contact": "문의하기"}};
   const links = document.querySelectorAll('#nav-lang [data-lang]');
 
   function applyLanguage(lang){
@@ -2938,7 +2935,7 @@ else brain.addEventListener('load', plateLoaded);
       hint:'MOVE CURSOR OVER THE CORTEX',accurate:'Accurate',accurateSub:'outperforms full-load Mem0',
       personal:'Personal',personalSub:'emotion + personality aware',realtime:'Realtime',realtimeSub:'streaming, near-zero overhead',
       efficient:'Efficient',efficientSub:'~300 tokens per turn',modular:'Modular',modularSub:'multimodal + fully customizable',
-      explore:'Explore',code:'Code',paper:'Paper',tryit:'Try it now',tryDown:'Demo offline',tryBusy:'Demo busy · {0} in line',scroll:'Scroll'
+      explore:'Explore',code:'Code',paper:'Paper',tryit:'Studio App',scroll:'Scroll'
     },
     'zh-CN':{
       language:'语言',contact:'联系',start:'开始使用',tag:'语音 AI 的灵魂',
@@ -2947,7 +2944,7 @@ else brain.addEventListener('load', plateLoaded);
       hint:'将光标移到脑区上',accurate:'准确',accurateSub:'优于完整加载的 Mem0',
       personal:'个性化',personalSub:'感知情绪与人格',realtime:'实时',realtimeSub:'流式处理，几乎零开销',
       efficient:'高效',efficientSub:'每轮约 300 tokens',modular:'模块化',modularSub:'多模态 + 完全可定制',
-      explore:'探索',code:'代码',paper:'论文',tryit:'立即体验',tryDown:'demo 暂时离线',tryBusy:'demo 忙碌 · 前面 {0} 人',scroll:'向下滚动'
+      explore:'探索',code:'代码',paper:'论文',tryit:'Studio App',scroll:'向下滚动'
     },
     'zh-TW':{
       language:'語言',contact:'聯絡',start:'開始使用',tag:'語音 AI 的靈魂',
@@ -2956,7 +2953,7 @@ else brain.addEventListener('load', plateLoaded);
       hint:'將游標移到腦區上',accurate:'準確',accurateSub:'優於完整載入的 Mem0',
       personal:'個人化',personalSub:'感知情緒與人格',realtime:'即時',realtimeSub:'串流處理，幾乎零額外負擔',
       efficient:'高效',efficientSub:'每回合約 300 tokens',modular:'模組化',modularSub:'多模態 + 完全可自訂',
-      explore:'探索',code:'程式碼',paper:'論文',tryit:'立即體驗',tryDown:'demo 暫時離線',tryBusy:'demo 忙碌 · 前面 {0} 人',scroll:'向下捲動'
+      explore:'探索',code:'程式碼',paper:'論文',tryit:'Studio App',scroll:'向下捲動'
     },
     ja:{
       language:'言語',contact:'お問い合わせ',start:'始める',tag:'音声 AI に、魂を。',
@@ -2965,7 +2962,7 @@ else brain.addEventListener('load', plateLoaded);
       hint:'カーソルを脳領域に合わせてください',accurate:'高精度',accurateSub:'フルロードの Mem0 を上回る',
       personal:'パーソナル',personalSub:'感情 + 人格を認識',realtime:'リアルタイム',realtimeSub:'ストリーミング、ほぼゼロの追加負荷',
       efficient:'高効率',efficientSub:'1 ターン約 300 トークン',modular:'モジュール式',modularSub:'マルチモーダル + 完全にカスタマイズ可能',
-      explore:'探索',code:'コード',paper:'論文',tryit:'今すぐ試す',tryDown:'デモは現在オフライン',tryBusy:'混雑中 · {0} 人待ち',scroll:'スクロール'
+      explore:'探索',code:'コード',paper:'論文',tryit:'Studio App',scroll:'スクロール'
     },
     ko:{
       language:'언어',contact:'문의',start:'시작하기',tag:'Voice AI의 영혼',
@@ -2974,7 +2971,7 @@ else brain.addEventListener('load', plateLoaded);
       hint:'커서를 뇌 영역 위로 이동하세요',accurate:'정확함',accurateSub:'전체 로드 Mem0보다 우수',
       personal:'개인화',personalSub:'감정 + 성격 인식',realtime:'실시간',realtimeSub:'스트리밍, 거의 제로 오버헤드',
       efficient:'효율적',efficientSub:'턴당 약 300 토큰',modular:'모듈식',modularSub:'멀티모달 + 완전 맞춤 설정',
-      explore:'탐색',code:'코드',paper:'논문',tryit:'지금 체험하기',tryDown:'데모 오프라인',tryBusy:'대기 중 · {0}명',scroll:'스크롤'
+      explore:'탐색',code:'코드',paper:'논문',tryit:'Studio App',scroll:'스크롤'
     }
   };
 
@@ -3064,10 +3061,10 @@ else brain.addEventListener('load', plateLoaded);
       '# 1. The streaming interface behaves like a VAD that keeps eating audio',
       '# 2. Memory was already retrieved while the user was still speaking',
       '# 3. Every turn goes through one ingestion decision',
-      '# 1. Clone the repo — the demo lives here, pip ships the library only',
-      '# 2. Pull the default models',
-      '# 3. Start the interactive web demo',
-      '# 4. Then open the local UI'
+      '# 1. Apple Silicon Mac: native Python 3.12 and Node.js 22.12+',
+      '# 2. Start the Studio App',
+      '# 3. Follow the API setup; dependencies and models prepare automatically',
+      '# 4. Choose a conversation style; the desktop pet is included'
     ],
     'zh-CN':[
       '# 1. 安装 VoiceMem（内置 ASR / 声纹 / 场景 / 情绪 / 本地 embedding）',
@@ -3078,10 +3075,10 @@ else brain.addEventListener('load', plateLoaded);
       '# 1. 流式接口可以看作一个持续处理音频的 VAD',
       '# 2. 人还没说完，后台就已经把记忆查好了',
       '# 3. 每一轮都要走一次入库判断',
-      '# 1. 克隆仓库 — 演示代码在仓库里，pip 装的只有库本身',
-      '# 2. 下载所需模型',
-      '# 3. 启动交互式 Web Demo',
-      '# 4. 然后访问本地页面'
+      '# 1. Apple Silicon Mac：原生 Python 3.12 和 Node.js 22.12+',
+      '# 2. 启动 Studio App',
+      '# 3. 按提示配置 API；自动准备依赖和模型',
+      '# 4. 选择对话界面；App 已内置桌宠'
     ],
     'zh-TW':[
       '# 1. 安裝 VoiceMem（內建 ASR / 聲紋 / 場景 / 情緒 / 本地 embedding）',
@@ -3092,10 +3089,10 @@ else brain.addEventListener('load', plateLoaded);
       '# 1. 串流介面可以看作一個持續處理音訊的 VAD',
       '# 2. 人還沒說完，背後已經把記憶查好了',
       '# 3. 每一輪都要走一次寫入判斷',
-      '# 1. 複製倉庫 — 範例在倉庫裡，pip 裝的只有函式庫本身',
-      '# 2. 下載所需模型',
-      '# 3. 啟動互動式 Web Demo',
-      '# 4. 然後開啟本機頁面'
+      '# 1. Apple Silicon Mac：原生 Python 3.12 和 Node.js 22.12+',
+      '# 2. 啟動 Studio App',
+      '# 3. 依提示設定 API；自動準備依賴與模型',
+      '# 4. 選擇對話介面；App 已內建桌寵'
     ],
     ja:[
       '# 1. VoiceMem をインストール（ASR / 話者 / シーン / 感情 / embedding 内蔵）',
@@ -3106,10 +3103,10 @@ else brain.addEventListener('load', plateLoaded);
       '# 1. ストリーミング API は音声を食べ続ける VAD のようなもの',
       '# 2. ユーザーが話している間に記憶の検索は完了済み',
       '# 3. ターンごとに保存すべきかを判定',
-      '# 1. リポジトリをクローン — デモはリポジトリ内、pip はライブラリのみ',
-      '# 2. デフォルトモデルをダウンロード',
-      '# 3. インタラクティブな Web デモを起動',
-      '# 4. ローカル UI を開く'
+      '# 1. Apple Silicon Mac: ネイティブ Python 3.12 と Node.js 22.12+',
+      '# 2. Studio App を起動',
+      '# 3. API を設定すると依存関係とモデルを自動準備',
+      '# 4. 会話スタイルを選択。デスクトップペットも付属'
     ],
     ko:[
       '# 1. VoiceMem 설치(ASR / 화자 / 장면 / 감정 / 로컬 embedding 내장)',
@@ -3120,10 +3117,10 @@ else brain.addEventListener('load', plateLoaded);
       '# 1. 스트리밍 인터페이스는 오디오를 계속 처리하는 VAD와 같습니다',
       '# 2. 사용자가 말하는 동안 이미 기억을 검색해 두었습니다',
       '# 3. 매 턴마다 저장 여부를 판단합니다',
-      '# 1. 저장소 클론 — 데모는 저장소에, pip은 라이브러리만 설치',
-      '# 2. 기본 모델 다운로드',
-      '# 3. 대화형 웹 데모 시작',
-      '# 4. 로컬 UI 열기'
+      '# 1. Apple Silicon Mac: 네이티브 Python 3.12 및 Node.js 22.12+',
+      '# 2. Studio App 시작',
+      '# 3. 안내에 따라 API 설정; 의존성과 모델 자동 준비',
+      '# 4. 대화 스타일 선택; 데스크톱 펫 포함'
     ]
   };
 
@@ -3145,7 +3142,7 @@ else brain.addEventListener('load', plateLoaded);
     setLastText(document.getElementById('btn-explore'),d.explore);
     setLastText(document.getElementById('btn-code'),d.code);
     setLastText(document.getElementById('btn-paper'),d.paper);
-    setLastText(document.getElementById('btn-try'),tryLabel(d));
+    setLastText(document.getElementById('btn-try'),d.tryit);
     setFirstText(document.getElementById('cue'),d.scroll);
     const demo=document.getElementById('demo-youtube'); if(demo) demo.title='VoiceMem '+(l==='en'?'demo':(l==='ja'?'デモ':l==='ko'?'데모':l==='zh-TW'?'示範':'演示'));
     const comments=CODE_COMMENTS[l]||CODE_COMMENTS.en;
@@ -3154,31 +3151,6 @@ else brain.addEventListener('load', plateLoaded);
     document.querySelectorAll('#page3 .copy').forEach(b=>{ const s=l==='zh-CN'?'复制代码':l==='zh-TW'?'複製程式碼':l==='ja'?'コードをコピー':l==='ko'?'코드 복사':'Copy code'; b.setAttribute('aria-label',s); b.title=s; });
     window.dispatchEvent(new Event('resize'));
   }
-
-  /* demo 后端是自托管的（一台 Mac mini 走 Tailscale Funnel），它可能关着。
-     开页面时探一下 /healthz：不通就把按钮置灰写「demo 暂时离线」，有人在用就
-     写「前面几人」。探不通不影响页面其余部分，静默失败即可。 */
-  const TRY_HEALTH='https://shuichengmac-mini.tailebef1c.ts.net/healthz';
-  let tryState={up:null,queue:0};
-  function tryLabel(d){
-    if(tryState.up===false) return d.tryDown||d.tryit;
-    if(tryState.up&&tryState.queue>0) return (d.tryBusy||d.tryit).replace('{0}',tryState.queue);
-    return d.tryit;
-  }
-  async function probeTry(){
-    const btn=document.getElementById('btn-try'); if(!btn) return;
-    const ac=new AbortController(); const t=setTimeout(()=>ac.abort(),4000);
-    try{
-      const r=await fetch(TRY_HEALTH,{signal:ac.signal,cache:'no-store'});
-      const j=await r.json();
-      tryState={up:true,queue:(j.queue||0)+(j.busy?1:0)};
-    }catch(e){ tryState={up:false,queue:0}; }
-    finally{ clearTimeout(t); }
-    btn.classList.toggle('down',tryState.up===false);
-    applyPage1(lang());
-  }
-  probeTry();
-  setInterval(probeTry,60000);
 
   window.addEventListener('voicemem-language-change',e=>applyPage1((e.detail&&e.detail.lang)||lang()));
   applyPage1(lang());

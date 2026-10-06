@@ -1,6 +1,6 @@
 # 使用 VoiceMem Studio
 
-VoiceMem Studio 是展示 VoiceMem 记忆能力的语音对话应用。Studio 负责语音输入、对话、语音合成和界面；VoiceMem 在 Studio 后端中处理记忆。它们不是两个需要分别启动的对话服务。
+VoiceMem Studio 是展示 VoiceMem 记忆能力的语音对话应用。主要入口是桌面 App，提供科技风、数字人两种对话界面和桌宠，并可管理本机后端或连接已有服务。Studio 负责语音输入、对话、语音合成和界面；VoiceMem 在 Studio 后端中处理记忆。
 
 以下启动方式需要完整的仓库源码。VoiceMem Python wheel 提供 SDK 及其依赖的 Python 辅助代码，不包含完整 Studio 界面、数字人资源或模型权重。
 
@@ -60,13 +60,12 @@ Windows 用户可在 WSL2/NVIDIA 环境中运行后端，再使用桌面 App；�
 
 ## 配置与常见问题
 
-- **体验站在哪里？** 账号登录、手机宠物页面及访客并发配置在独立的 `VoiceMem-Studio-Demo` 目录。本仓库只提供普通 Studio；旧体验站启动参数会提示使用独立目录。
 - **如何指定已有记忆库？** 用 `--memory_root /path/to/memory --space myspace` 指定一个具体库目录。Studio 保留该库的位置和数据，并固定使用启动时的 Space；界面不能新建或切换其他 Space。不指定 `--memory_root` 时仍可管理多个 Space。
 
 - **两个 API 要怎么选？** VoiceMem API 用于记忆处理，Studio API 用于对话生成；语音输入、语音合成和界面仍属于同一个 Studio 应用。两处可以选同一家服务，也可以分别选择。
 - **从哪里更换模型服务？** 本机 App 的“设置 → 组件”可修改记忆或回复模型服务，并由 App 重启它管理的本机后端。连接已有服务时这里是只读的，需要到服务器修改 `.env` 后重启。
 - **启动前想检查环境？** 已装好对应 Python 环境后，可在仓库根目录运行 `python -m studio --check`。它只做检查，不下载模型，也不打开记忆空间。
 - **默认配置文件在哪里？** 样例在 `studio/.env.example`，实际配置是仓库根目录的 `.env` 或进程环境变量。不要提交含真实 Key 的 `.env`。命令行参数优先于环境变量；已导出的变量优先于 `.env`。
-- **浏览器能用吗？** 后端就绪后，本机访问 `http://localhost:8787`。浏览器在远程地址使用麦克风时需要 HTTPS，或通过 SSH 转发后访问本机地址。
+- **浏览器能用吗？** 浏览器是补充访问方式。独立启动的后端默认可通过 `http://localhost:8787` 访问同一套对话界面；App 管理的后端使用其实际监听端口。浏览器在远程地址使用麦克风时需要 HTTPS，或通过 SSH 转发后访问本机地址。
 
 更多平台细节见[桌面 App 说明](apps/README.md)和[后端部署说明](deploy/README.md)。

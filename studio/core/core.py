@@ -96,7 +96,7 @@ def main(argv=None):
         from .utils.environment.component import load_environment, prepare
         load_environment()
         if os.environ.get('STUDIO_PUBLIC_DEMO') == '1':
-            raise ValueError('体验站已独立；请在 VoiceMem-Studio-Demo 目录使用 run_demo.sh 启动。')
+            raise ValueError('当前 Studio 不支持 STUDIO_PUBLIC_DEMO；请从环境变量和 .env 中移除该配置后重试。')
         args = parse_args(argv)
         prepare(args)
         from .utils.startup.initialize import inspect

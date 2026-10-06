@@ -29,7 +29,7 @@ fi
 
 .venv/bin/python -c 'import platform, sys; assert sys.version_info[:2] == (3, 12) and platform.machine() == "arm64", "现有 .venv 不是原生 ARM64 Python 3.12，请另行处理；脚本不会覆盖它"'
 if ! .venv/bin/python -c 'import pathlib, tomllib; config = tomllib.loads(pathlib.Path("pyproject.toml").read_text()); assert "studio" in config.get("project", {}).get("optional-dependencies", {})'; then
-  echo '[setup] 当前 VoiceMem pyproject.toml 缺少 Studio 的 [project.optional-dependencies].studio；请先完成最小包配置集成。' >&2
+  echo '[setup] pyproject.toml 缺少 Studio 的依赖声明；请使用完整仓库源码后重试。' >&2
   exit 1
 fi
 .venv/bin/python -m pip install -c studio/constraints-macos-py312.txt -e '.[studio]'

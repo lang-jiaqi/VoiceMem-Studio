@@ -1,6 +1,6 @@
 # Studio 的默认 Prompt 配置
 
-这个目录会随 `studio/` 一起迁移。其中 `llm_system_zh.md` 和 `llm_system_en.md`
+本目录提供默认提示词配置。其中 `llm_system_zh.md` 和 `llm_system_en.md`
 用于旧版 `voicemem.reply` 的默认回复人设，不会覆盖 Studio Web 的实际对话人设；
 后者及 Self Harness 的默认策略在 [`../harness/`](../harness/)。
 `llm_context.json` 提供旧版回复所需的陌生人、无记忆、语言及录音回放提示；
@@ -21,4 +21,4 @@ Studio 的主对话策略中英文共用一套，回复自然跟随用户表达�
 `VOICEMEM_SPEAK_BASE` 和 `VOICEMEM_BREEZE_INSTRUCTION` 仍可覆盖对应指令。
 
 请求跟踪日志不属于这套配置。目前它仍写入仓库根目录被忽略的 `prompt/logs/`。
-日志可能包含完整对话和记忆，请勿迁移、提交或公开。
+日志可能包含完整对话和记忆，请勿提交或公开。

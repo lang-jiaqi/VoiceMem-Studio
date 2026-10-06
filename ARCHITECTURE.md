@@ -246,12 +246,8 @@ entry point and root package metadata, while Docker startup separately requires
 Compose; local MLX/WSL startup is not coupled to a Studio Compose file.
 
 `studio/web/` owns browser assets, HTTP/WebSocket transport, and the desktop
-pet bridge. Public account registration, authenticated mobile pet pages,
-account preference storage, asset caching and per-conversation API connection
-limits belong to the independent `VoiceMem-Studio-Demo` project. This repository
-does not serve those account or mobile routes and does not import that project.
-The old public-demo environment flag is rejected with its new entry point,
-rather than accidentally exposing an ordinary Studio service as an account site.
+pet bridge. Startup rejects the unsupported `STUDIO_PUBLIC_DEMO` flag before
+loading dependencies, models or Memory Spaces.
 
 In Studio `llm_tts`, a stranger turn excludes retrieved memory and recent
 session messages from the reply request. The speaker gate's identity decision
@@ -1087,8 +1083,6 @@ Reply and filler generation accept a conversation-owned speech provider through 
 same `stream(text, instruction)` contract. Optional `preconnect` and `aclose` hooks
 remain at the server lifecycle boundary. New adapters can use these existing
 contracts without adding vendor-specific branches to routing or dialogue policy.
-The public-demo Qwen API adapter, its credentials and connection admission belong
-to the independent demo project and are not included in this repository.
 
 `studio/core/utils/tts/segmentation.py` owns sentence-first text boundaries and
 the pending text buffer. A reply-local segmenter consumes plain text after tone

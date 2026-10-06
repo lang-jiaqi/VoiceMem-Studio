@@ -81,7 +81,9 @@ https://github.com/user-attachments/assets/0d919f8c-e9ba-4fdb-8078-b049e4b99a28
 
 ## 🚀 快速开始
 
-### 运行 VoiceMem Studio
+### 启动 VoiceMem Studio App
+
+Studio App 提供科技风、数字人两种对话界面和桌宠，并管理本机后端。
 
 Apple Silicon Mac 需要原生 ARM64 Python 3.12，以及 Node.js 22.12 或更新版本：
 
@@ -123,7 +125,9 @@ python -m pip install -e .
 python -m pip install -e '.[slm]'
 ```
 
-### 下载所需模型
+### 下载 SDK 离线模型
+
+以下模型包用于 VoiceMem SDK 示例。Studio 会在启动时检查并下载自己的模型，无需先执行这一步。
 
 ```bash
 pip install -U huggingface_hub
@@ -243,12 +247,15 @@ async def main():
 asyncio.run(main())
 ```
 
-### VoiceMem 交互式演示
+### 补充：独立运行后端与浏览器访问
 
-演示代码在仓库里（pip 装的包只有库本身），先确认已经克隆并进入仓库目录。
+日常使用请从上面的 Studio App 入口启动。需要自行运行后端时，可使用以下方式；
+后端就绪后，也可以通过浏览器访问同一套对话界面。
+
+请先克隆完整仓库，按[部署说明](studio/deploy/README.md)准备对应的 Python 环境，然后在仓库根目录执行：
 
 ```bash
-python web/run.py --mode llm_tts --space demo-zh --lang zh --confirm_ms 200 --verbose
+python -m studio --mode llm_tts --space demo-zh --lang zh --confirm_ms 200 --verbose
 ```
 
 默认使用 DeepSeek 回复；启动检查和模型自动下载见 [Studio 说明](studio/README.md)。
@@ -260,7 +267,7 @@ Linux/NVIDIA Docker 与 macOS 原生 MLX 的安装和启动见 [部署说明](st
 http://localhost:8787
 ```
 
-Demo 默认把终端输出（含 Python logging 和 Uvicorn 的日志）保存一份到
+Studio 默认把终端输出（含 Python logging 和 Uvicorn 的日志）保存一份到
 `results/logs/voicemem-时间-PID.log`，每行带时间戳和 stdout/stderr 标记。
 启动时终端会打印实际路径。指定文件或临时关闭如下。
 
@@ -558,7 +565,10 @@ https://github.com/user-attachments/assets/0d919f8c-e9ba-4fdb-8078-b049e4b99a28
 
 ## 🚀 Quick Start
 
-### Run VoiceMem Studio
+### Start the VoiceMem Studio App
+
+The Studio App provides technical and digital-human conversation styles, a
+desktop pet, and management of its local backend.
 
 An Apple Silicon Mac needs native ARM64 Python 3.12 and Node.js 22.12 or newer:
 
@@ -609,7 +619,10 @@ python -m pip install -e .
 python -m pip install -e '.[slm]'
 ```
 
-### Required Model Download
+### Download SDK Models for Offline Use
+
+This bundle is for VoiceMem SDK examples. Studio checks and downloads its own
+models during startup; it does not require this separate download step.
 
 ```bash
 pip install -U huggingface_hub
@@ -729,10 +742,13 @@ async def main():
 asyncio.run(main())
 ```
 
-### Interactive Demo with VoiceMem
+### Optional: Run the Backend Independently and Access It in a Browser
 
-The demo lives in the repo (the pip package ships the library only) — make sure you have cloned it and are in the repo root.
-See the [deployment guide](studio/deploy/README.md) for Linux/NVIDIA Docker and native Apple Silicon MLX setup.
+Use the Studio App entry above for everyday use. The following commands run the
+backend independently; once it is ready, a browser can access the same conversation UI.
+
+Clone the complete repository and prepare the matching Python environment using
+the [deployment guide](studio/deploy/README.md), then run from the repository root:
 
 ```bash
 python -m studio
@@ -744,7 +760,7 @@ Then open:
 http://localhost:8787
 ```
 
-By default, the demo mirrors terminal output — including Python logging and
+By default, Studio mirrors terminal output — including Python logging and
 Uvicorn's own logs — to `results/logs/voicemem-TIME-PID.log`, one timestamped
 line per record, tagged stdout or stderr. The resolved path is printed at
 startup. To choose a path or disable file logging:

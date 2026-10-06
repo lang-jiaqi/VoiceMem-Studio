@@ -4,7 +4,7 @@
 
 ## input.wav
 
-README 第一个例子（`vm.ingest(audio="input.wav")`）用的就是它。
+README 第一个例子（`vm.ingest(audio="assets/input.wav")`）使用的音频。
 内容是「我是素食主义者，对坚果过敏。」，5.8 秒，16 kHz 单声道 PCM16，
 OpenAI TTS 合成。末尾留了 1 秒静音——流式那条路要连续 0.5 秒静音才判「说完了」，
 音频在说完那一刻就结束的话，`turn_over` 永远等不到。
@@ -25,7 +25,7 @@ README 流式那一节喂进 `vm.stream()` 的那段。内容是「我的饮食�
 
 ## cafe_song.wav
 
-「在咖啡馆听到的那首歌」—— web demo 里问起时会把这段原声放回来。
+用于音频入库与回放测试的咖啡馆背景音乐素材。需要先将音频入库，才能在检索结果中关联到这段录音。
 
 15 秒，16 kHz 单声道 PCM16。由两段素材混成：
 

@@ -1,10 +1,8 @@
-"""流式输入的音频小工具：重采样 + silero VAD。
+"""Shared audio decoding, resampling and Silero VAD construction.
 
-原样搬自 web/utils.py（脑图 html 发 24k、流式 ASR 要 16k；silero VAD 判说完），
-提升为核心能力，供 voicemem/stream.py 的 VoiceStream 与 web demo 共用（消除重复）。
-
-VAD 现在是可注入能力（``VoiceMem(vad=...)`` / config 的 ``vad`` 段），``make_vad`` 只是
-内置的那个 silero 实现；换成自己的只要给个有 ``is_speech(frame) -> bool`` 的对象。
+VoiceStream and audio-file ingestion use these helpers. Custom VAD capabilities
+can be injected as objects exposing ``is_speech(frame) -> bool``; ``make_vad``
+constructs the built-in adapter.
 """
 from __future__ import annotations
 
@@ -15,15 +13,12 @@ import numpy as np
 from voicemem.utils.common.paths import model_path, require
 
 
-def resample(f32, src=24000, dst=16000):        # 脑图 html 发 24k，流式 ASR 要 16k
-    """降采样**必须先低通**，否则高频镜像折回语音频段，ASR 拿到的是掺了噪声的信号。
+def resample(f32, src=24000, dst=16000):
+    """Convert audio sample rates and return a float32 array.
 
-    原来直接 ``np.interp`` 线性插值：那只是极弱的低通，24k→16k 时 8kHz 以上照样
-    混叠进来。听感上人不太察觉（语音主要能量在低频），但 ASR 是在频谱上做的，
-    这种噪声直接压准确率——一直以为是"模型不行"，其实是喂进去的东西就坏了。
-
-    有 scipy 就用 ``resample_poly``（多相滤波，自带抗混叠）；没有就退回线性插值，
-    并且**只在降采样时**打一次提醒——升采样没有混叠问题，不必吓人。
+    SciPy's polyphase filter prevents aliasing when downsampling. Without SciPy,
+    linear interpolation is used and downsampling emits a process-wide warning
+    once. Equal sample rates only normalize the array dtype.
     """
     if src == dst:
         return np.asarray(f32, np.float32)
