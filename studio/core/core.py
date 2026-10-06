@@ -1,6 +1,8 @@
 """Studio service lifecycle and chronological conversation controls."""
 import asyncio
 import os
+import signal
+import threading
 from contextlib import aclosing
 from .utils.cli.component import parse_args
 
@@ -89,9 +91,18 @@ def build_app(agent):
     )
 
 
+def _exit_on_sigterm(signum, frame):
+    """Allow Python finalizers to run after Uvicorn replays SIGTERM."""
+    raise SystemExit(0)
+
+
 def main(argv=None):
     """Check all prerequisites, acquire weights, warm providers, then serve."""
     tts = None
+    previous_sigterm = None
+    if (threading.current_thread() is threading.main_thread()
+            and signal.getsignal(signal.SIGTERM) == signal.SIG_DFL):
+        previous_sigterm = signal.signal(signal.SIGTERM, _exit_on_sigterm)
     try:
         from .utils.environment.component import load_environment, prepare
         load_environment()
@@ -137,5 +148,9 @@ def main(argv=None):
         print(f'[startup] 无法启动：{exc}', flush=True)
         raise SystemExit(1) from None
     finally:
-        if tts is not None and hasattr(tts, 'aclose'):
-            asyncio.run(tts.aclose())
+        try:
+            if tts is not None and hasattr(tts, 'aclose'):
+                asyncio.run(tts.aclose())
+        finally:
+            if previous_sigterm is not None:
+                signal.signal(signal.SIGTERM, previous_sigterm)

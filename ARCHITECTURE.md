@@ -420,6 +420,14 @@ owned process on exit. Missing Python, WSL, driver, or dependency prerequisites 
 error; model artifacts are checked and downloaded with resumable provider
 caches. The desktop entry does not install or modify system components.
 
+Studio's main-thread entry converts the default SIGTERM action into a normal
+Python exit. Uvicorn retains signal handling during serving and completes its
+graceful shutdown before replaying the signal; TTS cleanup and Python resource
+finalizers can then run. The same handler covers interruption during preparation
+or warmup, preserves caller-installed handlers, and restores the original handler
+when the entry returns. App restart keeps its existing timeout and forced-stop
+fallback.
+
 On Windows, an opt-in configuration setting can also start an existing local NVIDIA
 Compose service through a local Docker named pipe. Docker Desktop must already
 be running with its WSL2 backend; the app never starts or installs the Docker
