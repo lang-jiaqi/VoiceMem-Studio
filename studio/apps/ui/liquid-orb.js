@@ -17,6 +17,8 @@ seeds.listening[8]=1.08;seeds.speaking[3]=15;
 let state='idle',from=new Float32Array(idle),target=new Float32Array(idle),values=new Float32Array(idle);
 let transitionAt=0,duration=0,phase=0,previous=0,scale=1,audio=0,audioAt=-Infinity,listeningAt=0;
 let device,context,pipeline,buffer,group,format,raf=0,visible=true,failed=false;
+let generation=0,initializing=false,pageHidden=false,retryTimer=0,retries=0,retryable=true;
+const maxRetries=3;
 let demo=false,demoRAF=0,demoStarted=0;
 let floatPhase=0,floatAmplitude=0,floatSpeed=2.8,settingsOpen=false;
 function sample(now){
@@ -104,9 +106,25 @@ struct V {@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
  let q=(2.*fc-u.size)/u.size;let fit=1.-smoothstep(min((rad+1.)*.5,1.-2./minSize),1.,max(abs(q.x),abs(q.y)));
  return vec4<f32>(col*fit,alpha*fit);
 }`;
-function fallback(error){failed=true;cancelAnimationFrame(raf);raf=0;canvas.hidden=true;canvas.parentElement.classList.add('orb-fallback');document.getElementById('orbSupport').hidden=false;console.warn('Liquid Orb fallback:',error.message);}
+function active(){return !pageHidden&&!document.hidden&&visible&&!settingsOpen;}
+function cancelRetry(){clearTimeout(retryTimer);retryTimer=0;}
+function release(){
+ // Invalidate callbacks before destroying the device: destroy also resolves device.lost.
+ generation++;initializing=false;cancelAnimationFrame(raf);raf=0;previous=0;
+ context?.unconfigure();buffer?.destroy();device?.destroy();
+ device=context=pipeline=buffer=group=undefined;
+}
+function scheduleRecovery(){
+ if(!active()||!retryable||retryTimer||initializing||retries>=maxRetries)return;
+ retryTimer=setTimeout(()=>{retryTimer=0;if(active()){retries++;void init();}},250*2**retries);
+}
+function fallback(error){
+ release();failed=true;canvas.hidden=true;canvas.parentElement.classList.add('orb-fallback');
+ document.getElementById('orbSupport').hidden=false;
+ console.warn('Liquid Orb fallback:',error.message);scheduleRecovery();
+}
 function draw(now){
- raf=0;if(!device||failed||document.hidden||!visible||settingsOpen)return;
+ raf=0;if(!device||failed||initializing||!active())return;
  try{
  const dpr=Math.min(devicePixelRatio||1,2);const limit=device.limits.maxTextureDimension2D;
  const w=Math.min(limit,Math.max(1,Math.round(canvas.clientWidth*dpr))),h=Math.min(limit,Math.max(1,Math.round(canvas.clientHeight*dpr)));
@@ -129,25 +147,44 @@ function draw(now){
  if(!reduced.matches||now-transitionAt<duration)raf=requestAnimationFrame(draw);
  }catch(error){fallback(error);}
 }
-function sync(){if(document.hidden||!visible||settingsOpen){cancelAnimationFrame(raf);raf=0;previous=0;}else if(device&&!failed&&!raf)raf=requestAnimationFrame(draw);}
+function sync(){
+ if(!active()){cancelAnimationFrame(raf);raf=0;previous=0;cancelRetry();return;}
+ if(initializing)return;
+ if(failed){scheduleRecovery();return;}
+ if(!device){void init();return;}
+ if(!raf)raf=requestAnimationFrame(draw);
+}
 async function init(){
+ if(initializing||!active())return;
+ const current=++generation;initializing=true;
  try{
- if(!navigator.gpu)throw new Error('WebGPU unavailable');
+ if(!navigator.gpu){retryable=false;throw new Error('WebGPU unavailable');}
  const adapter=await navigator.gpu.requestAdapter();if(!adapter)throw new Error('WebGPU adapter unavailable');
- device=await adapter.requestDevice();context=canvas.getContext('webgpu');if(!context)throw new Error('WebGPU context unavailable');
+ if(current!==generation)return;
+ const acquired=await adapter.requestDevice();
+ if(current!==generation){acquired.destroy();return;}
+ device=acquired;
+ device.lost.then(info=>{if(current===generation)fallback(new Error(info.message||'Device lost'));});
+ device.addEventListener('uncapturederror',e=>{e.preventDefault();if(current===generation)fallback(e.error);});
+ context=canvas.getContext('webgpu');if(!context)throw new Error('WebGPU context unavailable');
  format=navigator.gpu.getPreferredCanvasFormat();context.configure({device,format,alphaMode:'premultiplied'});
- const module=device.createShaderModule({code:shader});const info=await module.getCompilationInfo();const errors=info.messages.filter(m=>m.type==='error');if(errors.length)throw new Error(errors.map(m=>m.message).join('\n'));
+ const module=device.createShaderModule({code:shader});const info=await module.getCompilationInfo();
+ if(current!==generation)return;
+ const errors=info.messages.filter(m=>m.type==='error');
+ if(errors.length){retryable=false;throw new Error(errors.map(m=>m.message).join('\n'));}
  pipeline=device.createRenderPipeline({layout:'auto',vertex:{module,entryPoint:'vs'},fragment:{module,entryPoint:'fs',targets:[{format,blend:{color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}}}]},primitive:{topology:'triangle-list'}});
  buffer=device.createBuffer({size:48,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});group=device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer}}]});
- device.lost.then(info=>fallback(new Error(info.message||'Device lost')));device.addEventListener('uncapturederror',e=>{e.preventDefault();fallback(e.error);});sync();
- }catch(error){fallback(error);}
+ initializing=false;failed=false;canvas.hidden=false;
+ canvas.parentElement.classList.remove('orb-fallback');document.getElementById('orbSupport').hidden=true;sync();
+ }catch(error){if(current===generation)fallback(error);}
 }
 if('IntersectionObserver'in window)new IntersectionObserver(es=>{visible=es[0].isIntersecting;sync();}).observe(canvas.parentElement);
 if('ResizeObserver'in window)new ResizeObserver(sync).observe(canvas);
-document.addEventListener('visibilitychange',()=>{if(document.hidden)stopDemo();sync();});
-window.addEventListener('pagehide',()=>{stopDemo();cancelAnimationFrame(raf);raf=0;previous=0;});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopDemo();else retries=0;sync();});
+window.addEventListener('pagehide',()=>{pageHidden=true;stopDemo();cancelRetry();release();});
 document.addEventListener('settings-open',()=>{settingsOpen=true;stopDemo();sync();});
 document.addEventListener('settings-close',()=>{settingsOpen=false;sync();});
-window.addEventListener('pageshow',sync);reduced.addEventListener('change',()=>{stopDemo();sync();});
-setState('idle');init();
+window.addEventListener('pageshow',()=>{pageHidden=false;retries=0;sync();});
+reduced.addEventListener('change',()=>{stopDemo();sync();});
+setState('idle');
 })();

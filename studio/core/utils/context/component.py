@@ -2,6 +2,7 @@
 from studio.core.utils.dialogue.component import CONTEXT, system_prompt
 from voicemem import gate
 from studio.core.utils.speaking_style.component import content_emotion_note
+from studio.harness.persona.policy import memory_reply_context
 
 class Context:
     def _tone_note(self, emotion: str, lang: str = "") -> str:
@@ -41,8 +42,8 @@ class Context:
         if stranger:
             return self._rt_persona()
         parts = [self._rt_persona()]
-        if memory_context:
-            parts.append(memory_context)
+        if memory_context and memory_context.strip():
+            parts.append(memory_reply_context(memory_context))
         else:
             parts.append(self._by_lang(CONTEXT["no_memory"], language))
         session_context = self._history_block(
@@ -66,7 +67,7 @@ class Context:
                             emotion: str = "", continuation: bool = False,
                             language: str = "") -> str:
         """Compose history, eligible memory, and dialogue directives for a reply."""
-        ctx = "" if stranger else (memory_context or "")
+        ctx = "" if stranger else memory_reply_context(memory_context or "")
         if not stranger and gate.needs_memory(route) and not ctx.strip():
             ctx = self._by_lang(CONTEXT["no_memory"], language)
         note = (self._by_lang(self._REPLAY_NOTE, language) if replay

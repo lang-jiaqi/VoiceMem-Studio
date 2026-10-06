@@ -360,6 +360,17 @@ each resize. Hovering or selecting a node shows
 a compact card beside it, following the Web brain's interaction pattern. The page checks for asynchronous
 ingest changes after a turn and redraws only when memory content changes. Its
 background canvas is redrawn on resize or view changes rather than every frame.
+
+The technical page's liquid orb owns its WebGPU device and animation loop.
+Transient adapter, device or rendering failures show the existing static preview
+and allow at most three delayed recovery attempts per foreground visit. Recovery
+retains the current voice state and motion parameters. Unsupported WebGPU and
+shader compilation errors do not retry. Hidden, offscreen and settings views
+pause frames and pending retries. Page departure releases the device and uniform
+buffer, invalidates asynchronous initialization callbacks, and a restored page
+reinitializes on demand. Healthy rendering keeps its existing shader, resolution
+and animation cadence.
+
 The panels show real per-turn recall results without demo records or rule replies. A local
 configuration page owns connection IPC. The Studio renderer has only the model-service
 bridge described above and no Node integration. Both renderers use context isolation and
@@ -506,6 +517,17 @@ and summaries; it is an implementation, not a second independent memory engine.
 The extension selects its graph-store type before construction so base schema
 initialization and migration run once. Existing tables and query algorithms remain
 unchanged. See `voicemem/README.md` for the owner inventory and historical opt-in APIs.
+
+`leftbrain/mem0_backend_store.py` caches one Mem0 client per resolved local
+Qdrant directory. Before sharing it, the adapter serializes native Qdrant SDK
+operations with one client-owned reentrant lock, also used when Mem0's entity
+store reuses that client. Searches cannot observe vector and payload arrays
+halfway through a write. Embedding, extraction, BM25 encoding, Mem0 history,
+and result reranking stay outside this boundary. Each native operation releases
+the lock; a multi-fact background ingestion does not hold it across the batch.
+Different directories have independent locks. A contending query can wait for
+an in-progress native operation; this does not guarantee zero additional latency
+or make embedded storage safe for access from multiple processes.
 
 The repository's historical `search_with_graph()` and `search_combined()` are
 deprecated and unsupported. Direct calls immediately raise `NotImplementedError`
@@ -1018,6 +1040,20 @@ persona remains a reusable prefix; changing backend context precedes history.
 OpenAI, DeepSeek, Qwen and local MLX replies share the message composer; local
 prewarming uses the same ordering. Direct VoiceMem provider callers retain the
 default context-in-user format and existing custom callable signatures.
+
+The Studio persona treats relevant facts retrieved for the current turn as
+available evidence even when absent from recent session history. Earlier
+assistant denials of recall are not user facts and cannot override that evidence;
+the reply should briefly correct its earlier mistake. Explicit user corrections
+take precedence over older memory. Unrelated results, missing details, and
+unresolved factual conflicts still require uncertainty rather than invented
+answers. This is a reply policy within the existing generation call; it adds no
+retrieval, verification request, or rewrite of stored history or memory.
+`persona.memory_reply_context` places a short handling rule adjacent to each
+nonempty retrieved-memory block in both text/TTS and realtime replies. The rule
+distinguishes factual evidence from internal affective notes and applies to
+Chinese and English facts without forcing the answer language. Empty-memory and
+stranger paths receive no retrieved-memory block or handling rule.
 
 ### Prompt ownership
 

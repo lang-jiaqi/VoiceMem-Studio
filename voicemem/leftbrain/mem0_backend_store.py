@@ -37,34 +37,18 @@ tuned against real accuracy runs) is NOT something mem0 provides -- it's
 re-applied here on top of whatever candidates mem0's own cosine search
 returns, so migrating storage backends doesn't quietly regress that tuning.
 
-Concurrency note (real regression found + fixed): the old ``LocalMemoryStore``
-was hand-rolled SQLite in WAL mode, which natively supports many concurrent
-readers. mem0's local/embedded Qdrant mode does NOT -- a second
-``mem0.Memory`` client pointed at the same on-disk path raises "Storage
-folder ... is already accessed by another instance of Qdrant client" the
-moment it's constructed, and it's not a transient error: every subsequent
-call on the FIRST client also starts failing. Real repro: a 16-worker
-``ThreadPoolExecutor`` QA eval that constructs a fresh ``VoiceMem`` per
-question (same ``memory_root``, common pattern -- e.g. this exact codebase's
-own ``research/eval_locomo_baseline_voicemem.py``) failed 137/152 questions
-this way, not occasionally -- essentially every question after the first
-thread grabbed the lock. Fixed by caching one ``Memory`` client per resolved
-``memory_root`` path (``_MEM0_CLIENT_CACHE`` below) -- this makes concurrent
-``VoiceMem`` construction against the same path safe *within one process*
-(all threads share the one real connection). It does NOT make it safe
-*across processes* -- two separate Python processes pointed at the same
-memory_root will still collide, because Qdrant's local mode fundamentally
-has no multi-process story (its own error message says so: "use Qdrant
-server instead"). Real deployments that need multi-process access to the
-same memory_root need an actual Qdrant server, not local/embedded mode --
-out of scope for this fix, called out here so it isn't rediscovered the
-expensive way again.
+Local Qdrant has one process-local client per resolved storage directory.
+Its native data operations are serialized on that client; reusing a connection
+alone does not make concurrent vector-array reads and writes safe. Embedding,
+extraction, BM25 encoding and Mem0 history work remain outside this lock.
+Multiple processes accessing the same directory still require Qdrant server.
 """
 
 from __future__ import annotations
 
 import os
 import threading
+from functools import wraps
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -144,19 +128,38 @@ class _Mem0EmbedderAdapter:
         return self._embedder.embed_texts(list(texts))
 
 
-# 同一个 memory_root 对应的 qdrant 本地/嵌入式存储只能被一个 mem0.Memory 客户端
-# 连接持有——这跟 LocalMemoryStore 时代（自建 SQLite，WAL 模式原生支持多连接
-# 并发读）完全不同，是真实复现过的问题：任何调用方只要在多线程/多进程里对
-# 同一个 memory_root 各自 new 一个 VoiceMem（比如线程池并发跑 QA，每次调用
-# 都建一个新 VoiceMem 实例），第二个连接一建立，前一个连接后续所有操作直接
-# 报 "Storage folder ... is already accessed by another instance of Qdrant
-# client"——不是偶发，是必现（真实复现：LoCoMo 152 题、16 个 worker 线程的
-# 评测跑下来，137 题因为这个直接失败，只有 15 题侥幸抢到了锁）。
-# 用 (qdrant_path 的绝对路径) 做 key 缓存已经建好的 Memory 客户端，之后任何
-# 指向同一个 memory_root 的 Mem0BackendStore 构造都复用同一个连接，不再各自
-# 抢锁——同一个真实存储目录只有一个真实连接，天然线程/进程内安全。
+# The cache lock protects construction only. Each cached client's native
+# operations have their own lock, shared by Mem0's factual and entity stores.
 _MEM0_CLIENT_CACHE: dict[str, Any] = {}
 _MEM0_CLIENT_CACHE_LOCK = threading.Lock()
+
+
+def _synchronize_local_qdrant(client) -> None:
+    """Serialize owned local-client operations without locking model inference.
+
+    Install once before caching the client. Keep the original SDK object so
+    Mem0's entity store reuses the same connection and synchronization boundary.
+    RLock permits SDK methods to call another protected method on this client.
+    """
+    lock = threading.RLock()
+
+    def protect(operation):
+        @wraps(operation)
+        def synchronized(*args, **kwargs):
+            with lock:
+                return operation(*args, **kwargs)
+        return synchronized
+
+    for name in (
+        'query_points', 'query_batch_points', 'search', 'search_batch',
+        'retrieve', 'scroll', 'count', 'upsert', 'delete', 'update_vectors',
+        'set_payload', 'overwrite_payload', 'delete_payload', 'clear_payload',
+        'get_collection', 'get_collections', 'create_collection',
+        'delete_collection', 'create_payload_index', 'close',
+    ):
+        operation = getattr(client, name, None)
+        if callable(operation):
+            setattr(client, name, protect(operation))
 
 
 #: mem0 那几个可选依赖没装时会打 warning，但它们缺了照样能跑（spaCy 只影响
@@ -246,6 +249,7 @@ class Mem0BackendStore:
                 history_db_path=str(history_db),
             )
             self._mem0 = Memory(config)
+            _synchronize_local_qdrant(self._mem0.vector_store.client)
             _close_on_exit(self._mem0)
             # The real hook: Memory.add()/.search() call
             # self.embedding_model.embed(text, "add"|"search") directly (see
