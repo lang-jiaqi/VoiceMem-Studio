@@ -1,28 +1,8 @@
-"""回复层：核心交出 ``Turn`` 之后的那一步——两条路，一个口子。
+"""Normalize injected reply callables and stream API-generated text.
 
-``voicemem/stream.py`` 是输入侧（音频 → 记忆），这里是输出侧（记忆 → 回复）。两条路：
-
-    # 路 A：用内置的（OpenAI 兼容 api，流式）
-    vm = VoiceMem.from_config({"reply": {"provider": "openai",
-                                         "config": {"model": "gpt-4o-mini"}}})
-
-    # 路 B：用自己的模型/函数
-    vm = VoiceMem(reply=my_fn)
-
-两条路拿到的调用口完全一样::
-
-    answer = await vm.reply(turn)                      # 收全，返回整串
-    async for delta in vm.reply_stream(turn):  ...     # 流式，逐字吐
-
-``my_fn`` 写成下面任意一种都行，``normalize()`` 会把它们统一成异步生成器::
-
-    def       my_fn(text, memory_context) -> str          # 同步：自动丢线程，不阻塞事件循环
-    async def my_fn(text, memory_context) -> str          # 协程
-    async def my_fn(text, memory_context): yield delta    # 异步生成器（流式）
-
-**TTS 不在这里。** 回复层只产出文本；要出声用 ``voicemem/tts.py``——
-``speak_stream(vm.reply_stream(turn))`` 边生成边合成，见 examples/03_simple_agent_with_voicemem_memory.py。
-"""
+Providers receive user text, memory context and optional dialogue history.
+Request-local options control provider behavior without changing memory state.
+This layer produces text; Studio speech adapters synthesize and play audio."""
 from __future__ import annotations
 
 import asyncio
@@ -35,7 +15,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 
 from voicemem.llm_config import resolve_api_key, resolve_base_url, resolve_model
-from voicemem.prompt_trace import record_request
+from voicemem.utils.common.prompt_trace import record_request
 
 
 @dataclass(frozen=True)
@@ -64,22 +44,22 @@ def reply_request_options(*, reasoning_effort: str = "none"):
 async def apply_reply_request_options(stream, *, reasoning_effort: str = "none"):
     """Iterate a normalized reply stream with task-local provider options."""
     with reply_request_options(reasoning_effort=reasoning_effort):
-        async for item in stream:
-            yield item
+        try:
+            async for item in stream:
+                yield item
+        finally:
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                await close()
 
-# memory_context 只是「记得关于用户的哪些事」，本身不含人设/风格要求，所以内置
-# provider 把它接在人设后面，而不是拿它整个当 system prompt。
-#
-# 人设在 voicemem/persona.py，**按这个空间的语言选**（建空间时定一次）。以前这里
-# 写死一句中文，英文库拿到的也是中文人设；而人设是 system 里唯一稳定的前缀，
-# 写死意味着它跟记忆语言可以不一致，模型每轮都要自己调和这个矛盾。
 def default_system() -> str:
-    from voicemem import persona
+    """Load the existing Studio default lazily when no reply system prompt is supplied."""
+    from studio.core.utils.prompts import legacy_persona as persona
     return persona.system_prompt()
 
 
 def compose_system(memory_context: str, system: str | None = None) -> str:
-    """人设 + 记忆 → system prompt。两边都可能为空。"""
+    """Combine the existing persona and memory blocks, allowing either to be empty."""
     parts = [system or default_system()]
     if memory_context:
         parts.append(memory_context)
@@ -307,12 +287,7 @@ def deepseek_reply(model: str | None = None, api_key: str | None = None,
 
 
 def normalize(fn: Callable) -> Callable:
-    """把任意形状的回复函数规格化成「异步生成器函数」这一种。
-
-    同步函数走 ``asyncio.to_thread``——回复生成是秒级的，直接在事件循环里跑会卡住
-    读麦克风那条线。返回值若本身是异步可迭代对象（例如一个包装别人生成器的
-    lambda），照样按流式展开。
-    """
+    """Normalize synchronous, asynchronous or streaming reply callables to async delta iteration."""
     # 可调用**对象**（``VoiceMem(reply=LocalLLM())`` 这种）要看它的 __call__：
     # inspect 的那几个判断只认函数，对实例一律返回 False，于是一个流式的
     # provider 会被当成普通同步函数走到最后那条分支——history 被丢掉、还白跑
@@ -369,22 +344,23 @@ def normalize(fn: Callable) -> Callable:
 
 
 async def capture(deltas: AsyncIterator[str], on_done: Callable[[str], None]) -> AsyncIterator[str]:
-    """原样透传每个 delta，说完时把整句交给 ``on_done``。
-
-    agent 说的那半也该进记忆，但不该让调用方多写一行、也不能等收全再吐。
-    被打断时 ``finally`` 交出已吐出去的那部分——用户听到多少就记多少。
-    """
+    """Forward deltas and notify with emitted text on completion or closure."""
     parts: list[str] = []
     try:
         async for delta in deltas:
             parts.append(delta)
             yield delta
     finally:
-        on_done("".join(parts))
+        try:
+            close = getattr(deltas, "aclose", None)
+            if close is not None:
+                await close()
+        finally:
+            on_done("".join(parts))
 
 
 def unpack(turn_or_text, memory_context: str = "") -> tuple[str, str]:
-    """``vm.reply(turn)`` 的便利：Turn / StreamState 直接拆成 (text, memory_context)。"""
+    """Resolve text and memory context from raw input, Turn or StreamState."""
     text = getattr(turn_or_text, "text", None)
     if text is not None and hasattr(turn_or_text, "memory_context"):
         return text, (memory_context or turn_or_text.memory_context)

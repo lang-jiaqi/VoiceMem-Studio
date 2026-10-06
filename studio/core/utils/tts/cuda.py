@@ -155,7 +155,7 @@ class BreezeCUDATTS:
             return
         if self._closed:
             raise RuntimeError('Breeze CUDA provider is closed')
-        from studio.core.utils.logging_utils.prompt_trace import record_request
+        from voicemem.utils.common.prompt_trace import record_request
         record_request('tts', 'breeze_cuda', {
             'model': self.model_name, 'text': text,
             'instruct': instruction or self.instruction,

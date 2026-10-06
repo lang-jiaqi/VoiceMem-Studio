@@ -16,9 +16,9 @@ from voicemem.leftbrain.local_memory_store import (
 )
 from voicemem.leftbrain.memory_repository import (
     LeftBrainMemoryRepository,
+    LeftBrainMemoryRepositoryConfig,
     create_openai_memory_repository,
 )
-from voicemem.leftbrain.memory_repository_v2 import LeftBrainMemoryRepositoryConfig
 
 __all__ = [
     "ExtractedAdditiveMemory",

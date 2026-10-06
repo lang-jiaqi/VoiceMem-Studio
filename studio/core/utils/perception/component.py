@@ -55,25 +55,32 @@ class Perception:
             self._SV["t"] = shared_transcriber()
         return self._SV["t"]
 
-    def _kick_acoustic(self, send, audio_path: str) -> None:
+    def _kick_acoustic(self, send, audio_path: str, *, output_id: str,
+                       is_current):
+        """Return an owner-managed task; obsolete results never reach the browser."""
         if not audio_path:
             return
 
         async def run():
             try:
+                if not is_current():
+                    return
                 await self.wait_idle("声学情绪")
+                if not is_current():
+                    return
                 t0 = time.monotonic()
                 emo, score = await asyncio.to_thread(self._acoustic_emotion, audio_path)
                 take = bool(emo) and score >= self.ACOUSTIC_MIN_SCORE and emo in self.ACOUSTIC_TRUST
                 if self.BARGE_DEBUG:
                     print(f"  [emotion] 声学(后台) {(time.monotonic()-t0)*1000:.0f}ms "
                           f"-> {emo or '-'} {score:.2f}（{'采纳' if take else '不采纳'}）", flush=True)
-                if take:
-                    await send({"type": "tag_update", "emotion": emo, "emotion_from": "acoustic"})
+                if take and is_current():
+                    await send({"type": "tag_update", "output_id": output_id,
+                                "emotion": emo, "emotion_from": "acoustic"})
             except Exception as e:
                 print(f"[web] 后台声学情绪跳过：{type(e).__name__}: {e}", flush=True)
 
-        asyncio.create_task(run())
+        return asyncio.create_task(run())
 
     def fill_tags(self, payload: dict, text: str, audio_path: str = "",
                   acoustic: bool = True) -> dict:

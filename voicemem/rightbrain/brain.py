@@ -634,47 +634,6 @@ class RightBrain:
             self._cache["traits"] = TraitStore(_space.db(self._memory_root), self._embed)
         return self._cache["traits"]
 
-    def _registry_names(self) -> set:
-        """声纹注册表里登记过的人名——用来认出「说话人自己」。
-
-        RightBrain 没有直接持有 registry（它是音频侧的东西），从 space 的
-        multi_modal/voiceprint_registry.json 直接读，读不到就返回空集：
-        认不出自己顶多是多一个节点，不该让写入失败。
-        """
-        try:
-            import json
-            from voicemem.utils.common import space as _space
-            p = _space.mm(self._memory_root, "voiceprint_registry.json")
-            if not p.is_file():
-                return set()
-            data = json.loads(p.read_text(encoding="utf-8"))
-            out = set()
-            for k, v in data.items():
-                out.add(k)
-                if isinstance(v, dict) and v.get("name"):
-                    out.add(v["name"])
-            return out
-        except Exception:
-            return set()
-
-    def _write_trait(self, slot_name: str, label: str, memory_id: str) -> bool:
-        """往图层 slot 下挂一个语义去重的特质 entity，并把这条记忆作为证据链上去。
-        description 交给 AttributionManager 从证据里归纳，这里只负责挂 + touch。"""
-        if not slot_name or not label:
-            return False
-        rb_graph = self._rb_graph_store()
-        slot = rb_graph.get_slot_by_name(self._user_id, slot_name)
-        if slot is None:
-            return False
-        ent, _created = rb_graph.get_or_create_entity_semantic(
-            self._user_id, slot.id, label, self._embed(label),
-        )
-        rb_graph.link_memory(ent.id, self._user_id, memory_id)
-        tracker = self._tracker()
-        tracker.touch(self._user_id, "rb_entity_short", ent.id)
-        tracker.touch(self._user_id, "rb_slot_long", slot.id)
-        return True
-
     # ── 回应成败经验（agent 自己说过的话，被用户的反应打分）──────────────────────
 
     #: 归因每段的字数上限——这几段每轮都要拼进 system prompt，松了就是固定开销。

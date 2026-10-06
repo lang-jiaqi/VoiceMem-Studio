@@ -210,18 +210,22 @@ def search_left_for_reply(
 
     if use_graph and cfg.left_use_graph and isinstance(client, LeftBrainGraphSearchClient):
         try:
-            raw = client.search_with_graph(
-                query,
-                user_id=user_id,
-                top_k=cfg.mem0_top_k,
-                threshold=cfg.mem0_threshold,
-            )
-        except TypeError:
-            raw = client.search_with_graph(
-                query,
-                user_id=user_id,
-                top_k=cfg.mem0_top_k,
-            )
+            try:
+                raw = client.search_with_graph(
+                    query,
+                    user_id=user_id,
+                    top_k=cfg.mem0_top_k,
+                    threshold=cfg.mem0_threshold,
+                )
+            except TypeError:
+                raw = client.search_with_graph(
+                    query,
+                    user_id=user_id,
+                    top_k=cfg.mem0_top_k,
+                )
+        except NotImplementedError:
+            # An explicit unsupported graph capability uses the existing plain search.
+            return search_left_channel(client, asr_text=asr_text, user_id=user_id, config=cfg), ""
         hits, appendix = _normalize_graph_search_hits(raw)
         if hits:
             return hits, appendix

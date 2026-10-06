@@ -20,13 +20,19 @@ regressions. Avoid loading unrelated files or sensitive runtime traces.
 
 ## Repository map
 
-- `voicemem/`: memory framework plus Studio providers, routing, prompt support,
-  and local inference utilities.
+- `voicemem/`: reusable memory framework, input routing, and shared utilities;
+  `voicemem/README.md` lists implementation owners and maintenance boundaries.
 - `voicemem/leftbrain/`, `voicemem/rightbrain/`: factual and affective memory.
-- `voicemem/stream.py`: ASR/VAD/EOT state, turn routing, and speculative search.
-- `voicemem/gate.py`: `backchannel`, `shallow`, and `deep` turn routes.
-- `voicemem/local_llm.py`, `voicemem/tts.py`, `voicemem/breeze_tts.py`: local
-  and remote reply/speech providers.
+- `voicemem/leftbrain/memory_repository.py`, `memory_repository_v2.py`: original
+  base persistence and slot metadata extension implementations.
+- `voicemem/orchestrator.py`: orchestration, capability loading and search contracts.
+- `voicemem/stream.py`: streaming input, turn snapshots, confirmation and speculation.
+- `voicemem/gate.py`: memory eligibility and interruption routes.
+- `voicemem/reply.py`, `tts.py`, `audio_timing.py`: shared reply/speech interfaces
+  and provider adapters; Studio-specific adapters remain under `studio/core/utils/`.
+- `voicemem/lang.py`, `llm_config.py`: language context and model role configuration.
+- `voicemem/utils/common/prompt_trace.py`: shared request journal imported directly
+  by both VoiceMem and Studio.
 - `voicemem/utils/gpu_loop.py`, `voicemem/utils/torch_lock.py`: process-level
   accelerator scheduling.
 - `studio/core/core.py`, `studio/core/voiceagent.py`: Studio service composition
@@ -41,8 +47,10 @@ regressions. Avoid loading unrelated files or sensitive runtime traces.
 - `web/run.py`: compatibility entry; prefer `python -m studio`.
 - `studio/prompt/`, `studio/prompt_config.py`: editable Studio reply/TTS
   defaults and validated loader; root `prompt/logs/` contains sensitive runtime traces.
-- `evals/`: Studio latency and behavioral regressions.
-- `tests/`: core regressions; new local tests are ignored by default.
+- `evals/`: manually run latency, model-quality and memory-effectiveness evaluations.
+- `tests/voicemem/`, `tests/studio/`, `tests/frontend/`: deterministic regressions.
+- `tests/helpers/`: shared synthetic fixtures; never import another test module for fixtures.
+- `tests/manual/`: browser checks requiring visual inspection.
 - `evaluation/`, `finetune/`: benchmark and training workflows.
 - `studio/resources/voice/`: reviewed speech assets and local voice-reference material.
 - `studio/pet/`: desktop pet source, reviewed Live2D runtime assets, and provenance notices.
@@ -236,11 +244,11 @@ Select checks that cover the changed ownership boundary.
 
 ```bash
 python -m py_compile path/to/changed_file.py
-python -m unittest tests.test_offline_engine tests.test_session_context
-python -m unittest evals.test_dialogue_harness evals.test_prompt_config
-python -m unittest evals.test_prompt_logging evals.test_prewarm_scheduling
-node evals/test_mic_capture.cjs
-node evals/test_transcript_ui.cjs
+python -m unittest tests.voicemem.test_reaction_traits tests.studio.test_session_context
+python -m unittest tests.studio.test_dialogue_harness tests.studio.test_prompt_config
+python -m unittest tests.studio.test_prompt_logging tests.studio.test_prewarm_scheduling
+node tests/frontend/test_mic_capture.cjs
+node tests/frontend/test_transcript_ui.cjs
 git diff --check
 ```
 
@@ -249,8 +257,9 @@ hardware, or benchmark fixtures. Inspect them before running. A latency script
 is not a unit test, and synthetic timing does not establish live perceived
 latency.
 
-New files under `tests/` are ignored by default. Keep local regressions there;
-do not force-add them unless the user explicitly asks to publish tests.
+Organized regressions under the named `tests/` subdirectories are repository
+source. Root-level local experiments remain ignored. Keep runtime data and
+credentials out of fixtures; do not force-add ignored files.
 
 For streaming or audio changes, cover the applicable capture, partial ASR,
 final ASR, EOT, gate route, early-speculation commit/reject, backchannel, echo,

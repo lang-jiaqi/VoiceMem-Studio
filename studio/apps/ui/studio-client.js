@@ -243,11 +243,6 @@
         case 'backchannel':
           backchannel(owner, message); break;
         case 'error':
-          if (message.code === 'demo_speech_busy' || message.code === 'demo_speech_unavailable') {
-            emit(owner, message);
-            fail(owner, new Error(message.message || '语音服务暂不可用，请稍后重试。'));
-            return;
-          }
           owner.player.port.postMessage({ type: 'clear', reason: 'interrupted' });
           owner.output = ''; phase(owner, owner.mic ? 'listening' : 'idle');
           VMUI.notify(message.message || '服务返回错误，请重试。'); break;

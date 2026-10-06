@@ -1,23 +1,19 @@
-"""轮次闸门 · 三路判别准确度。
+"""Evaluate the production Turn Gate on labelled utterance prefixes.
 
-现在每一轮都检索左右脑 top5 并注入回复模型。更自然的做法是先判这一句要什么：
+Reports accuracy, missed memory queries, unnecessary memory queries and
+backchannel recall for lexical routing and its embedding fallback. This is a
+manual evaluation, not a latency measurement or a replacement routing policy.
 
-    backchannel  纯附和（"嗯嗯""知道了"）→ 不打断、不检索，助手继续说
-    shallow      浅内容（"讲个笑话""今天几号"）→ 打断、但不检索
-    deep         深内容（"我明天什么安排"）→ 打断 + 检索，即现在的行为
+    python evals/turn_gate.py
+    python evals/turn_gate.py 15
+    python evals/turn_gate.py 15 --space demo
 
-难点全在 deep/shallow 这条边，而且判定要在 ASR 只吐出前若干个字时就做出来。
-这个脚本就量那件事：**前 N 个字够不够判**，以及哪种判别法值得写进链路。
-
-两类错误代价不对称，所以主看的不是总准确率：
-    深判成浅 = 助手忘了你的事，用户立刻听得出来   ← 主指标（漏检率）
-    浅判成深 = 多花 ~300 token，即现在的默认行为   ← 可以忍
-
-跑：
-    python3 evals/turn_gate.py                 # 扫全部前缀长度 × 全部方法
-    python3 evals/turn_gate.py 15              # 只看前 15 字
-    python3 evals/turn_gate.py 15 --space demo # 额外量 base_score 阈值法（要有库）
+Only --space opts into reading an existing Space's evidence as a weakly labelled
+holdout. No memory is opened, ingested or modified. Semantic evaluation may load
+the configured embedding model.
 """
+import argparse
+from contextlib import closing
 import re
 import sys
 from pathlib import Path
@@ -127,12 +123,21 @@ def run(method, texts, golds) -> dict:
     return score(list(zip(golds, [method(t) for t in texts])))
 
 
-def main():
-    argv = [a for a in sys.argv[1:] if not a.startswith("--")]
-    lengths = [int(argv[0])] if argv else [6, 9, 12, 15, 999]
-    space = None
-    if "--space" in sys.argv:
-        space = sys.argv[sys.argv.index("--space") + 1]
+def _space_name(value: str) -> str:
+    """Accept a Space identifier, never an arbitrary filesystem path."""
+    if not re.fullmatch(r"[0-9A-Za-z\u4e00-\u9fff_-]{1,32}", value):
+        raise argparse.ArgumentTypeError("--space 必须是空间名称，不能是路径")
+    return value
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("length", nargs="?", type=int, help="评测前 N 个字符；省略时扫描多个长度")
+    parser.add_argument("--space", type=_space_name, help="只读评测该空间的证据留出集")
+    args = parser.parse_args(argv)
+    if args.length is not None and args.length < 1:
+        parser.error("前缀长度必须大于零")
+    lengths = [args.length] if args.length is not None else [6, 9, 12, 15, 999]
 
     texts_full = [t for t, _ in DATASET]
     golds = [g for _, g in DATASET]
@@ -160,9 +165,8 @@ def main():
         if pred != g:
             print(f"  {g:>11} → {pred:<11} margin={gate.semantic_margin(t[:L], 'zh'):+.3f}  {t}")
 
-    if space:
-        base_score_probe(space, texts_full, golds)
-    holdout()
+    if args.space:
+        holdout(args.space)
 
 
 #: rb_evidence 里混着系统生成的描述，不是用户说的话，量之前先剔掉。
@@ -170,22 +174,25 @@ _NOT_USER = ("This memory relates", "User played a sound", "用户放了一段�
              "这条记忆", "The user", "user's")
 
 
-def holdout(space: str = "demo-zh"):
-    """留出集：真实会话里被抽成记忆证据的用户原话——不是本脚本作者写的，规则没见过。
+def holdout(space: str):
+    """Read evidence without writes and compare prefix lengths on one fixed pool.
 
-    两个已知缺陷，量之前说清楚：
-      · quote 存的是**抽取后的转述**（"Doesn't like crowded places" 里的 I 已被抹掉），
-        人称线索天然被削弱，所以绝对漏检率偏高；
-      · "这批全是 deep"这个假设不严格——里面混着 "Can you hear?" 这种本就该判浅的。
-    所以**只看同一批数据上 6/15/全句的相对差距**，那个不受这两条影响。
+    Stored quotations may be paraphrased and are not independently labelled.
+    Treating all of them as memory queries supports relative comparisons only;
+    these numbers are not an absolute routing-accuracy estimate.
     """
     import sqlite3
-    db = f"voicemem_memoryspace/{space}/{space}.sqlite"
-    if not Path(db).exists():
+    db = Path(__file__).resolve().parents[1] / "voicemem_memoryspace" / _space_name(space) / f"{space}.sqlite"
+    if not db.exists():
+        print(f"留出集不存在：{space}")
         return
-    con = sqlite3.connect(db)
-    quotes = [r[0].strip().strip('"') for r in con.execute(
-        "select quote from rb_evidence where quote is not null and length(quote)>4")]
+    with closing(sqlite3.connect(db.as_uri() + "?mode=ro", uri=True)) as con:
+        try:
+            quotes = [r[0].strip().strip('"') for r in con.execute(
+                "select quote from rb_evidence where quote is not null and length(quote)>4")]
+        except sqlite3.OperationalError:
+            print(f"该空间没有可评测的 rb_evidence：{space}")
+            return
     quotes = sorted({q for q in quotes if not any(k in q for k in _NOT_USER)})
     # 问句子集：闸门真正要判的是"用户在问什么"，陈述句混在里面会稀释信号。
     asks = [q for q in quotes if "?" in q or "？" in q or "吗" in q]
@@ -193,6 +200,8 @@ def holdout(space: str = "demo-zh"):
         return
 
     for name, pool in (("全部原话", quotes), ("其中问句", asks)):
+        if not pool:
+            continue
         print(f"\n\n留出集 · {space} {name} {len(pool)} 条（按「应判 deep」计漏检）")
         print(f"{'前缀':>6} {'词表+正则':>10} {'+向量兜底':>11}")
         for L in (6, 9, 12, 15, 999):
@@ -207,7 +216,5 @@ def holdout(space: str = "demo-zh"):
             print(f"    margin={gate.semantic_margin(q, 'en'):+.3f}  {q[:64]}")
 
 
-# NOTE: 词表在 web/run.py 里也有一份。哪种方法胜出、真要接进链路时，这份该搬进
-# 核心（voicemem/gate.py）由两边共用——demo 层和核心各留一份词表，改一处漏一处。
 if __name__ == "__main__":
     main()

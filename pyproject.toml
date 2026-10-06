@@ -98,21 +98,12 @@ Repository = "https://github.com/lang-jiaqi/VoiceMem-Studio"
 Issues = "https://github.com/lang-jiaqi/VoiceMem-Studio/issues"
 
 [tool.setuptools.packages.find]
-include = ["voicemem*", "studio*"]
-exclude = ["studio.models*"]
+# Keep the Python helpers used by the SDK's optional Studio speech adapters.
+include = ["voicemem*", "studio", "studio.core*", "studio.harness*", "studio.web*"]
 
-# data/ 下的 prompt 文本是运行时读的（见 leftbrain/mem0_additive_prompt_build.py），
-# 不显式声明的话 wheel 里不会有，装完一调用就 FileNotFoundError。
+# The wheel provides the SDK, its sample audio and runtime prompt files.
+# The complete Studio app runs from a repository checkout; do not ship a partial UI.
 [tool.setuptools.package-data]
-# data/ 下的 prompt 文本是运行时读的（见 leftbrain/mem0_additive_prompt_build.py），
-# 不显式声明的话 wheel 里不会有，装完一调用就 FileNotFoundError。
-#
-# assets/*.wav 是 README 和 examples 里用的示例音频（一共 1MB）。不打进包的话，
-# pip 装完照 README 跑第一个例子就是 LibsndfileError——那是别人对这个项目的
-# 第一印象。voicemem.sample_audio() 会先找仓库里的 assets/，没有再回落到这份。
-"*" = ["data/*.txt", "*.txt", "assets/*.wav"]
-
+"*" = ["data/*.txt"]
+"voicemem" = ["assets/*.wav"]
 "studio" = ["prompt/*.md", "prompt/*.json"]
-
-"studio.web" = ["*.html", "*.js", "images/*.webp"]
-"studio.apps" = ["ui/*.html", "ui/*.css", "ui/*.js", "ui/*.webp", "ui/assets/*.jpg", "ui/ref/*.js"]

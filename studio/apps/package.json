@@ -15,7 +15,7 @@
     "start": "node launch.cjs",
     "prestart:remote": "npm run ensure:deps && npm run prepare:pet",
     "start:remote": "node launch.cjs --remote",
-    "test": "node --test evals/*.test.cjs",
+    "test": "node --test ../../tests/frontend/*.test.cjs",
     "prepack": "npm run ensure:deps && npm run prepare:pet",
     "pack": "electron-builder --dir",
     "predist:win": "npm run ensure:deps && npm run prepare:pet",

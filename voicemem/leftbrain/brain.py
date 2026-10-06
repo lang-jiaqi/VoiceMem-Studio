@@ -254,7 +254,8 @@ class LeftBrain:
             if "repo" not in self._cache:
                 from voicemem.leftbrain.cognitive_graph import CognitiveAnnotator, CognitiveAnnotatorConfig
                 from voicemem.leftbrain.local_memory_store import OpenAILocalEmbedder, OpenAILocalEmbedderConfig
-                from voicemem.leftbrain.memory_repository_v2 import LeftBrainMemoryRepositoryConfig, LeftBrainMemoryRepositoryV2
+                from voicemem.leftbrain.memory_repository import LeftBrainMemoryRepositoryConfig
+                from voicemem.leftbrain.memory_repository_v2 import LeftBrainMemoryRepositoryV2
                 annotator = CognitiveAnnotator(CognitiveAnnotatorConfig(base_url=self._base_url))
                 embedder  = self._embedder or OpenAILocalEmbedder(OpenAILocalEmbedderConfig(base_url=self._base_url))
                 cfg = LeftBrainMemoryRepositoryConfig(

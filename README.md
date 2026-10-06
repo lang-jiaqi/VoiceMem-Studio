@@ -110,6 +110,8 @@ npm run start:remote
 
 ### 安装 VoiceMem Python 包
 
+Python 安装包提供 VoiceMem SDK、示例音频和运行时提示词，保留 SDK 所需的 Studio Python 辅助代码。完整 Studio 应用请从克隆的仓库启动；Python wheel 不包含完整界面、数字人资源或模型权重。
+
 ```bash
 git clone https://github.com/lang-jiaqi/VoiceMem-Studio.git
 cd VoiceMem-Studio
@@ -337,10 +339,12 @@ VoiceMem 家族开源模型包括 **Qwen3-Omni 和 Step-Audio2-Mini**。这些�
 
 **麦克风 → VoiceMem 监听语音并提前检索相关记忆 → 你的模型读取这些记忆并生成回答**
 
+下面是独立的命令行 SDK 示例，不参与 Studio 的启动或对话流程。
+更多配置和运行条件见 [examples/README.md](examples/README.md)。
+
 ```bash
 export OPENAI_API_KEY=sk-...
-# 仅在写入记忆时用于事实信息提取。
-# 记忆检索完全在本地运行。
+# 此示例默认使用 OpenAI 向量、事实提取、回复和 TTS。
 
 python examples/03_simple_agent_with_voicemem_memory.py
 ```
@@ -589,6 +593,11 @@ npm run start:remote
 
 **Prerequisite:** Python 3.10+
 
+The Python package provides the VoiceMem SDK, sample audio, runtime prompts and
+the Studio Python helpers used by the SDK. Run the complete Studio application
+from a repository checkout; the wheel does not contain its full UI, avatar assets
+or model weights.
+
 ```bash
 git clone https://github.com/lang-jiaqi/VoiceMem-Studio.git
 cd VoiceMem-Studio
@@ -819,10 +828,13 @@ The basic flow is:
 
 **microphone → VoiceMem listens and prefetches relevant memories → your model reads those memories and generates a response**
 
+The following is a standalone command-line SDK example, independent of Studio's
+startup and dialogue pipeline. See [examples/README.md](examples/README.md) for
+configuration and prerequisites.
+
 ```bash
 export OPENAI_API_KEY=sk-...
-# Only used for fact extraction when writing memories.
-# Memory retrieval runs entirely locally.
+# This example defaults to OpenAI embeddings, fact extraction, replies and TTS.
 
 python examples/03_simple_agent_with_voicemem_memory.py
 ```

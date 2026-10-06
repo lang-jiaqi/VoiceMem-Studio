@@ -1,7 +1,8 @@
-"""最简 voicegent：voicemem 流式记忆 → OpenAI → 小 TTS 实时播放，用户一开口就打断。"""
+"""Run a standalone microphone agent with VoiceMem, OpenAI replies and OpenAI TTS.
 
-"""请先运行
-pip install openai sounddevice scipy"""
+Install the project and its audio dependencies before running this script.
+This example owns its own audio and dialogue loop; it is not the Studio pipeline.
+"""
 
 
 import asyncio
@@ -48,7 +49,7 @@ PROMPT = """你是一个语音助手。结合左脑中本轮有价值的信息�
 """
 
 
-# ── tiny thread-safe playback buffer ─────────────────────────────────
+# Playback buffer shared with the audio callback.
 class AudioBuffer:
     def __init__(self):
         self.q = queue.Queue()
@@ -151,7 +152,7 @@ class AudioIO:
         self.stream.close()
 
 
-# ── persistent Kokoro: load ONCE before "[ready]" ────────────────────
+# One OpenAI client and worker thread process queued speech segments.
 class TTS:
     def __init__(self, audio: AudioIO):
         from openai import OpenAI
@@ -187,22 +188,22 @@ class TTS:
                 continue
 
             try:
-                # 流式拿 PCM，不等整句合成完 —— 第一块出来就能播。
+                # Queue received PCM without waiting for the full synthesis response.
                 with self.client.audio.speech.with_streaming_response.create(
                     model=TTS_MODEL, voice=TTS_VOICE, input=text,
-                    response_format="pcm",          # 24kHz 单声道 PCM16
+                    response_format="pcm",          # 24 kHz mono PCM16.
                 ) as resp:
                     tail = b""
                     for chunk in resp.iter_bytes(4096):
                         if self.audio.stop_reply.is_set():
                             break
                         buf = tail + chunk
-                        cut = len(buf) & ~1          # PCM16 两字节一个样本，别切一半
+                        cut = len(buf) & ~1          # Preserve complete PCM16 samples.
                         tail = buf[cut:]
                         if not cut:
                             continue
                         wav = np.frombuffer(buf[:cut], np.int16).astype(np.float32) / 32768.0
-                        # AEC 和扬声器共用同一路 16k 远端信号
+                        # Playback and the AEC reference use the same 16 kHz signal.
                         self.audio.playback.put(resample_poly(wav, SR, TTS_NATIVE_SR))
             except Exception as e:
                 print(f"\n[tts] 合成失败：{type(e).__name__}: {e}", flush=True)
@@ -216,8 +217,7 @@ def tts_chunks():
         nonlocal buf
         buf += delta
 
-        # punctuation gets spoken immediately;
-        # otherwise don't hold more than a few Chinese chars.
+        # Release at punctuation or the configured character limit.
         if re.search(r"[。！？!?；;，,\n]$", buf) or len(buf) >= TTS_MIN_CHARS:
             x, buf = buf, ""
             return x
@@ -298,7 +298,7 @@ def show_turn(st):
     print("\n助手：", end="", flush=True)
 
 
-# ── main: initialization first; ONLY THEN user starts talking ────────
+# Initialize providers before starting microphone capture.
 async def main():
     key = os.environ["OPENAI_API_KEY"]
 
@@ -306,14 +306,13 @@ async def main():
     client = AsyncOpenAI(api_key=key)
 
     vm = VoiceMem(openai_key=key)
-    # Local models load lazily; without this the first utterance waits ~25s
-    # for E5 / FunASR / silero / perception to load.
+    # Load lazy audio capabilities before accepting the first utterance.
     print("[warmup] loading local models…", flush=True)
     await asyncio.to_thread(vm.warmup)
     stream = vm.stream(src_rate=SR, vad_threshold=BARGE_THRESHOLD)
 
     audio = AudioIO(loop)
-    tts = await asyncio.to_thread(TTS, audio)   # TTS fully loaded here
+    tts = await asyncio.to_thread(TTS, audio)   # Starts the API worker, not a local model.
 
     audio.start()
     print("[ready] 一切准备完成，说话吧。", flush=True)
@@ -339,8 +338,7 @@ async def main():
             print()
 
             if reply:
-                # agent_reply 是关键字参数：写成 ingest(text, reply) 的话 reply 会
-                # 落到 audio 上，被当成音频文件路径。
+                # Pass assistant text by keyword; the second positional argument is audio.
                 vm.ingest(st.transcript, agent_reply=reply)
 
     finally:

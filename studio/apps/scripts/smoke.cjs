@@ -66,7 +66,7 @@ async function main() {
   const profile = path.join(directory, 'profile'), project = path.join(directory, 'project'), bin = path.join(directory, 'bin');
   for (const dir of [profile, project, bin]) await fs.mkdir(dir);
   for (const name of ['compose.yaml', 'pyproject.toml']) await fs.writeFile(path.join(project, name), 'synthetic fixture');
-  await fs.copyFile(path.join(apps, 'evals/fixtures/docker.cjs'), path.join(bin, 'docker'));
+  await fs.copyFile(path.join(apps, '../../tests/frontend/fixtures/docker.cjs'), path.join(bin, 'docker'));
   await fs.chmod(path.join(bin, 'docker'), 0o755);
   const html = await fs.readFile(path.join(apps, '../web/voicemem.html'));
   const readyAt = Date.now() + 5000;

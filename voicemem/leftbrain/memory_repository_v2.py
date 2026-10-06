@@ -1,25 +1,12 @@
-"""LeftBrainMemoryRepositoryV2 — semantic-slot V2 + multi-label memory_tags retrieval.
+"""Slot metadata extension of factual-memory persistence.
 
-Extends :class:`LeftBrainMemoryRepository` with:
-
-* **Embedding-based slot matching** — cosine similarity between the query
-  embedding and per-slot description embeddings replaces brittle keyword
-  matching.
-* **Multi-label tags** — each memory can belong to several V2 slots
-  (stored in the ``memory_tags`` table via :class:`CognitiveGraphStoreV2`).
-* **Weighted scope** — direct entity matches, 1-hop neighbours, and slot
-  hits are combined into a continuous-weight dict before the vector search.
-* **Backfill helper** — :meth:`backfill_memory_tags_from_text` embeds all
-  stored memories and writes V2 tags in bulk.
-
-Only *new* public methods are added; every method from the parent class
-continues to work unchanged.
+Keeps the existing seven-slot tags, summaries and backfill contracts.
+``search_slot_based`` is an opt-in repository API; the default query pipeline
+is owned by ``LeftBrain`` and does not call it.
 """
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from typing import Any
 
 from voicemem.utils.common._graph_common import cosine as _cosine
@@ -28,7 +15,6 @@ from voicemem.leftbrain.memory_repository import (
     LeftBrainMemoryRepository,
     LeftBrainMemoryRepositoryConfig,
 )
-from voicemem.leftbrain.cognitive_graph.store import CognitiveGraphStore
 from voicemem.leftbrain.cognitive_graph.store_v2 import CognitiveGraphStoreV2
 from voicemem.leftbrain.cognitive_graph.slot_v2 import (
     SLOT_V2_DESCRIPTIONS,
@@ -50,40 +36,13 @@ _SLOT_EMBED_CACHE: dict[str, list[float]] = {}
 
 
 class LeftBrainMemoryRepositoryV2(LeftBrainMemoryRepository):
-    """LeftBrainMemoryRepository with semantic-slot V2 retrieval.
+    """Extend base writes with slot tags while retaining its public methods."""
 
-    The constructor accepts the same arguments as the parent.  If a
-    :class:`CognitiveGraphStore` (non-V2) is instantiated by the parent's
-    ``__init__``, it is automatically upgraded to a
-    :class:`CognitiveGraphStoreV2` using the same database file.
-
-    Parameters
-    ----------
-    embedder:
-        A :class:`~.local_memory_store.TextEmbedder` instance.
-    config:
-        Repository configuration (same as parent).
-    **kwargs:
-        Additional keyword arguments forwarded to the parent constructor.
-    """
+    _cognitive_store_type = CognitiveGraphStoreV2
 
     def __init__(self, embedder: Any, *, config: LeftBrainMemoryRepositoryConfig | None = None,
                  **kwargs: Any) -> None:
         super().__init__(embedder, config=config, **kwargs)
-
-        # Upgrade the cognitive store to V2 if the parent created a plain one.
-        # embedder=self._embedder carried through -- without this the upgraded
-        # store silently loses the embedder the parent wired in, and
-        # upsert_entity()'s semantic dedup never activates (fell back to
-        # exact-string matching with no error, i.e. a fix that looked wired
-        # but wasn't -- caught this via a real duplicate-entity test, not by
-        # inspection alone).
-        if (
-            self._cognitive_store is not None
-            and isinstance(self._cognitive_store, CognitiveGraphStore)
-            and not isinstance(self._cognitive_store, CognitiveGraphStoreV2)
-        ):
-            self._cognitive_store = CognitiveGraphStoreV2(self._cognitive_store._path, embedder=self._embedder)
 
     # ── Slot embedding helpers ────────────────────────────────────────────────
 
@@ -101,25 +60,6 @@ class LeftBrainMemoryRepositoryV2(LeftBrainMemoryRepository):
         vecs = self._embedder.embed_texts(texts)
         for slot_val, vec in zip(missing, vecs):
             _SLOT_EMBED_CACHE[slot_val] = vec
-
-    def _detect_slots_semantic(
-        self,
-        query_embedding: list[float],
-        *,
-        threshold: float,
-        top_k: int,
-    ) -> list[str]:
-        """Return up to *top_k* V2 slot names whose embedding cosine similarity
-        to *query_embedding* exceeds *threshold*, sorted by similarity desc.
-        """
-        self._ensure_slot_embeddings()
-        scored: list[tuple[float, str]] = []
-        for slot_val in ALL_SLOT_V2_VALUES:
-            sim = _cosine(query_embedding, _SLOT_EMBED_CACHE[slot_val])
-            if sim >= threshold:
-                scored.append((sim, slot_val))
-        scored.sort(reverse=True)
-        return [sv for _, sv in scored[:top_k]]
 
     # ── Memory text helper for backfill ──────────────────────────────────────
 
@@ -181,7 +121,7 @@ class LeftBrainMemoryRepositoryV2(LeftBrainMemoryRepository):
             import logging
             logging.getLogger(__name__).warning("auto-tag slot failed: %s", exc)
 
-    # ── Slot-based retrieval (new primary method) ─────────────────────────────
+    # Opt-in retrieval for direct repository callers.
 
     def search_slot_based(
         self,

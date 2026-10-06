@@ -8,7 +8,7 @@
 不跟界面走，也不跟用户这一句用什么语言走：语言是库的属性，混语存会让一半记忆
 检索不到。
 
-    from voicemem import persona
+    from studio.core.utils.prompts import legacy_persona as persona
     persona.system_prompt()          # 当前空间的语言
     persona.system_prompt("en")      # 指定
 

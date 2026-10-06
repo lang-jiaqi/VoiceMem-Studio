@@ -110,3 +110,7 @@ class ReplySink:
                     await self._send_audio(payload)
             self._buf.clear()
             self.live = True
+
+
+class SpeechSynthesisError(RuntimeError):
+    """A reply segment failed to produce its requested speech."""

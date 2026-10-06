@@ -66,13 +66,5 @@
     return {start,stop,cancel,toggle:()=>active?stop():start()};
   }
   window.addEventListener('pagehide',()=>clearTimeout(toastTimer));
-  fetch('/auth/me').then(response=>response.ok?response.json():null).then(account=>{
-    if(!account)return;
-    const button=document.createElement('button');button.type='button';button.textContent=`${account.name} · 退出`;
-    button.setAttribute('aria-label','退出体验账号');
-    button.style.cssText='position:fixed;top:12px;right:54px;z-index:40;padding:6px 11px;border:1px solid #d8d2e5;border-radius:99px;background:#ffffffe8;color:#4d4169;font:12px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;cursor:pointer';
-    button.onclick=async()=>{await fetch('/auth/logout',{method:'POST'});location.href='/ui/login.html';};
-    document.body.append(button);
-  }).catch(()=>{});
   window.VMUI = {notify,copy,voice,reduced:matchMedia('(prefers-reduced-motion: reduce)').matches};
 })();

@@ -1,0 +1,347 @@
+"""CPU-only regressions for short speech, late acknowledgements and echo UI.
+
+Execute the actual anticipate coroutine without importing the model-loading demo.
+"""
+import asyncio
+import json
+from pathlib import Path
+import sys
+import types
+import unittest
+from unittest.mock import patch
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path[:0] = [str(ROOT), str(ROOT / "web")]
+from tests.helpers.capture import CaptureFixture, anticipate_namespace, state
+from studio.core.utils.interruption.component import Interruption
+from studio.core.utils.echo_guard.component import UtteranceGuard, is_echo
+from studio.core.utils.turn_taking.initialize import Backchannel, TurnTakingStateMachine
+from voicemem.stream import VoiceStream
+from web.harness import backchannel_policy
+
+
+class ShortSpeechTests(unittest.IsolatedAsyncioTestCase):
+    def make_stream(self, result="ok.", enabled=True):
+        calls = []
+        def transcribe(pcm):
+            calls.append(pcm.copy())
+            return result
+        stream = VoiceStream(types.SimpleNamespace(), src_rate=16000,
+                             gate=lambda _: "backchannel", confirm_s=.2,
+                             textless_confirm_s=.2 if enabled else None)
+        stream._final_asr = types.SimpleNamespace(transcribe=transcribe)
+        stream._asr_w = types.SimpleNamespace(
+            push=lambda _: "", reset=lambda: None, report=lambda: "test")
+        stream._vad = types.SimpleNamespace(is_speech=lambda _: self.speaking)
+        self.speaking = True
+        return stream, calls
+
+    async def feed_for(self, stream, seconds, *, speaking, energy=0):
+        self.speaking = speaking
+        # 20ms frames: measured in audio duration, not sleep/wall-clock timing.
+        raw = np.full(320, energy, np.int16).tobytes()
+        states = []
+        for _ in range(round(seconds / .02)):
+            states.append(await stream.feed(raw))
+        return states
+
+    async def test_empty_streaming_ok_finishes_after_200ms_even_with_residual_energy(self):
+        stream, calls = self.make_stream()
+        await self.feed_for(stream, .16, speaking=True, energy=1000)
+        states = await self.feed_for(stream, .22, speaking=False, energy=1000)
+        turns = [s.turn for s in states if s.turn]
+        self.assertEqual([t.text for t in turns], ["ok."])
+        self.assertEqual(len(calls), 1)  # no duplicate final decode / stream flush
+        self.assertLessEqual(len(calls[0]) / 16000, .38)
+        self.assertEqual(stream._voiced_s, 0)
+
+    async def test_empty_probe_is_not_a_reply_and_does_not_repeat_in_silence(self):
+        stream, calls = self.make_stream(result="")
+        await self.feed_for(stream, .16, speaking=True)
+        states = await self.feed_for(stream, .8, speaking=False)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(all(s.turn is None for s in states))
+        self.assertGreater(stream._pcm_len, 0)  # preserve sound-only input
+        await self.feed_for(stream, .16, speaking=True)
+        await self.feed_for(stream, .22, speaking=False)
+        self.assertEqual(len(calls), 2)  # new speech can try again
+
+    async def test_noise_without_voice_and_library_default_do_not_probe(self):
+        for enabled, voiced in [(True, 0), (True, .04), (False, .16)]:
+            stream, calls = self.make_stream(enabled=enabled)
+            await self.feed_for(stream, voiced, speaking=True)
+            states = await self.feed_for(stream, .8, speaking=False, energy=1000)
+            self.assertEqual(calls, [])
+            self.assertTrue(all(s.turn is None for s in states))
+
+    async def test_continuing_speech_and_subthreshold_pause_do_not_cut(self):
+        stream, calls = self.make_stream(result="ok但是我还想问一个问题")
+        await self.feed_for(stream, .4, speaking=True)
+        await self.feed_for(stream, .1, speaking=False)
+        await self.feed_for(stream, .4, speaking=True)
+        self.assertEqual(calls, [])
+        states = await self.feed_for(stream, .22, speaking=False)
+        self.assertEqual([s.turn.text for s in states if s.turn], ["ok但是我还想问一个问题"])
+
+
+class CaptureBackchannelTests(unittest.IsolatedAsyncioTestCase):
+    async def test_conversation_start_control_has_no_user_turn(self):
+        ns = anticipate_namespace()
+        ns['vm'] = types.SimpleNamespace(stream=lambda **_: types.SimpleNamespace())
+        called = []
+
+        class Sock:
+            def __init__(self):
+                self.messages = iter([
+                    {'text': json.dumps({'type': 'conversation_start'})},
+                    {'type': 'websocket.disconnect'},
+                ])
+
+            async def receive(self):
+                return next(self.messages)
+
+        with patch('studio.core.utils.turn_taking.backchannel.emitting', return_value=False):
+            turns = [turn async for turn in ns['anticipate'](
+                Sock(), on_conversation_start=lambda: called.append(True))]
+        self.assertEqual(called, [True])
+        self.assertEqual(turns, [])
+
+    async def run_pause(self, *, busy=False, early=False, echo=False, growing=True):
+        """Feed real capture/policy code voiced frames followed by a 120ms gap."""
+        ns, sent, interrupted, speculated = anticipate_namespace(), [], [], []
+        reference = "今天外面天气不错"
+        texts = ["我来讲", "我来讲今天", "我来讲今天的安排"]
+        if echo:
+            texts = [reference] * 3
+        elif not growing:
+            texts = [texts[-1]] * 3
+        frames = []
+        # The current policy requires two seconds of sustained speech before an ack.
+        for index in range(108):
+            text = texts[min(index, len(texts) - 1)]
+            st = state(text)
+            st.eot_score = .9 if early else 0
+            frames.append((st, 1200))
+        for i in range(6):
+            st = state(texts[-1])
+            st.state, st.silence = "<silence>", (i + 1) * .02
+            frames.append((st, 0))
+        frames = iter(frames)
+        current = None
+        clock = types.SimpleNamespace(now=100.0)
+        ns["time"] = types.SimpleNamespace(monotonic=lambda: clock.now)
+        ns["_backchannel_voice"] = lambda language='': types.SimpleNamespace(
+            available={"嗯"}, get=lambda *args: bytes(4800))
+        taking = TurnTakingStateMachine(backchannel=Backchannel(policy=backchannel_policy()))
+
+        class Sock:
+            async def receive(self):
+                nonlocal current
+                current = next(frames, None)
+                if current is None:
+                    return {"type": "websocket.disconnect"}
+                clock.now += .02
+                return {"bytes": np.full(480, current[1], np.int16).tobytes()}
+
+            async def send_json(self, message):
+                sent.append(message)
+
+        async def feed(_):
+            return current[0]
+
+        async def stop():
+            nonlocal busy
+            busy = False
+            taking.finish_reply()
+            interrupted.append(True)
+
+        async def on_early(text, st, refined):
+            speculated.append(await refined)
+
+        stream = types.SimpleNamespace(
+            feed=feed, confirm_s=.2,
+            refine_current_snapshot=lambda: asyncio.create_task(
+                asyncio.sleep(0, result=current[0].text)))
+        ns["vm"] = types.SimpleNamespace(stream=lambda **kw: stream)
+        with patch("studio.core.utils.turn_taking.backchannel.emitting", return_value=True):
+            turns = [turn async for turn in ns["anticipate"](
+                Sock(), is_busy=lambda: busy, said=lambda: reference if busy or echo else "",
+                on_speech=stop, on_early=on_early if early else None,
+                turn_taking=taking)]
+        self.assertEqual(turns, [])
+        return [m for m in sent if m["type"] == "backchannel"], interrupted, speculated
+
+    async def test_confirmed_barge_can_receive_backchannel(self):
+        clips, interrupted, _ = await self.run_pause(busy=True)
+        self.assertEqual(interrupted, [True])
+        self.assertEqual(len(clips), 1)
+
+    async def test_speculative_eot_does_not_block_backchannel(self):
+        clips, _, speculated = await self.run_pause(early=True)
+        self.assertTrue(speculated)
+        self.assertEqual(len(clips), 1)
+
+    async def test_idle_pause_can_receive_backchannel(self):
+        clips, _, _ = await self.run_pause()
+        self.assertEqual(len(clips), 1)
+
+    async def test_echo_and_unconfirmed_barge_still_cannot_receive_backchannel(self):
+        for options in ({"busy": True, "echo": True},
+                        {"busy": True, "growing": False}, {"echo": True}):
+            with self.subTest(**options):
+                clips, interrupted, _ = await self.run_pause(**options)
+                self.assertEqual(clips, [])
+                self.assertEqual(interrupted, [])
+
+
+class AnticipateTests(CaptureFixture, unittest.IsolatedAsyncioTestCase):
+    async def test_filler_completion_is_forwarded_without_creating_a_turn(self):
+        ns = anticipate_namespace()
+        ns["vm"] = types.SimpleNamespace(
+            stream=lambda **kw: types.SimpleNamespace(confirm_s=.2))
+        messages = iter((
+            {"text": json.dumps({"type": "filler_done", "filler_id": "fill-1"})},
+            {"type": "websocket.disconnect"},
+        ))
+        completed = []
+
+        class Sock:
+            async def receive(self):
+                return next(messages)
+
+        with patch("studio.core.utils.turn_taking.backchannel.emitting", return_value=False):
+            turns = [turn async for turn in ns["anticipate"](
+                Sock(), on_filler_done=completed.append)]
+        self.assertEqual(turns, [])
+        self.assertEqual(completed, ["fill-1"])
+
+    async def test_late_ok_is_display_only_even_when_playback_drains_during_final(self):
+        sent, turns, interrupted = await self.run_frames([
+            (True, "我是语音助手", state()),
+            (True, "我是语音助手", state("ok.", final=True), False),
+        ])
+        self.assertEqual(turns, [])
+        self.assertEqual(interrupted, [])
+        self.assertEqual([m["text"] for m in sent if m["type"] == "user_backchannel"], ["ok."])
+        partial = next(m for m in sent if m["type"] == "partial_transcript")
+        self.assertTrue(partial["non_interrupting"])
+
+    async def test_idle_ok_and_ok_with_content_are_real_turns(self):
+        for busy, text in [(False, "ok."), (True, "ok但是我想换个话题")]:
+            sent, turns, _ = await self.run_frames([
+                (busy, "我是语音助手" if busy else "", state()),
+                (False, "", state(text, final=True)),
+            ])
+            self.assertEqual([p.text for p in turns], [text])
+            self.assertFalse(any(m["type"] == "user_backchannel" for m in sent))
+
+    async def test_echo_is_hidden_during_playback_and_after_reference_expires(self):
+        sent, turns, _ = await self.run_frames([
+            (True, "今天天气非常好适合出去走走", state("今天天气非常好")),
+            (False, "", state("今天天气非常好适合出去走走")),
+            (False, "", state("今天天气非常好适合出去走走", final=True)),
+        ])
+        self.assertEqual(turns, [])
+        self.assertFalse(any(m.get("text") for m in sent))
+
+    async def test_guard_does_not_leak_into_next_user_turn(self):
+        sent, turns, _ = await self.run_frames([
+            (True, "我是语音助手", state()),
+            (False, "", state("ok.", final=True)),
+            (False, "", state("ok.")),
+            (False, "", state("ok.", final=True)),
+        ])
+        self.assertEqual(len([m for m in sent if m["type"] == "user_backchannel"]), 1)
+        self.assertEqual([p.text for p in turns], ["ok."])
+
+    async def test_real_interrupt_survives_and_late_echo_is_still_hidden(self):
+        sent, turns, interrupted = await self.run_frames([
+            (True, "我是语音助手今天很高兴认识你", state("停一下")),
+            (False, "", state("今天很高兴认识你")),
+            (False, "", state("停一下我想换个话题", final=True)),
+        ])
+        self.assertTrue(interrupted)
+        self.assertEqual([p.text for p in turns], ["停一下我想换个话题"])
+        self.assertNotIn("今天很高兴认识你", [m.get("text") for m in sent])
+
+    async def test_late_ack_or_echo_cannot_start_early_generation(self):
+        calls = []
+        async def early(*args):
+            calls.append(args)
+        for text in ("ok.", "我是语音助手"):
+            partial = state(text)
+            partial.eot_score = .99
+            await self.run_frames([
+                (True, "我是语音助手", state()),
+                (False, "", partial),
+                (False, "", state(text, final=True)),
+            ], on_early=early)
+        self.assertEqual(calls, [])
+
+    async def test_new_idle_speech_can_still_start_early_generation(self):
+        calls = []
+        async def early(partial, _, refined):
+            calls.append((partial, await refined))
+        partial = state("今天天气怎么样")
+        partial.eot_score = .99
+        await self.run_frames([(False, "", partial)], on_early=early)
+        self.assertEqual(calls, [("今天天气怎么样", "今天天气怎么样")])
+
+    async def test_eot_bet_is_cancelled_when_speech_resumes_after_pause(self):
+        calls, cancellations = [], []
+
+        async def early(partial, _, refined):
+            calls.append((partial, await refined))
+
+        async def cancel(reason):
+            cancellations.append(reason)
+
+        partial = state("我喜欢安静的地方")
+        partial.eot_score = .99
+        paused = state("我喜欢安静的地方")
+        paused.state = "<silence>"
+        paused.silence = .1
+        resumed = state("我喜欢安静的地方但是")
+        _, turns, _ = await self.run_frames([
+            (False, "", partial),
+            (False, "", paused),
+            (False, "", resumed),
+            (False, "", state("我喜欢安静的地方但是图书馆很吵", final=True)),
+        ], on_early=early, on_early_cancel=cancel)
+
+        self.assertEqual(calls, [("我喜欢安静的地方", "我喜欢安静的地方")])
+        self.assertEqual(cancellations, ["用户停顿后继续说"])
+        self.assertEqual(len(turns), 1)
+        self.assertFalse(turns[0].early_ok)
+        self.assertEqual(turns[0].text, "我喜欢安静的地方但是图书馆很吵")
+
+
+class GuardTests(unittest.TestCase):
+    def test_fragment_is_held_until_growth_but_ack_and_explicit_stop_are_immediate(self):
+        guard = UtteranceGuard()
+        guard.observe(active=True, busy=True, reference="我是语音助手")
+        self.assertFalse(guard.allow_partial("我想", echo=False))
+        self.assertFalse(guard.allow_partial("我想", echo=False))
+        self.assertTrue(guard.allow_partial("我想问你", echo=False))
+        self.assertTrue(guard.allow_partial("ok", echo=False, backchannel=True))
+        self.assertTrue(guard.allow_partial("停", echo=False, explicit=True))
+        self.assertFalse(guard.allow_partial("语音助手", echo=True, confirmed=True))
+
+    def test_echo_normalization_and_non_echo_topic_overlap(self):
+        self.assertTrue(is_echo("在呢，刚刚在整理", "在呢刚在整理"))
+        self.assertFalse(is_echo("项目其实上周就交了", "是不是最近那个项目压得慌"))
+
+    def test_echo_detection_works_without_top_level_echo_guard(self):
+        guard = Interruption()
+        guard.ECHO_WINDOW = 300
+        guard.ECHO_RATIO = 0.6
+        guard.ECHO_FUZZY_MIN = 4
+        with patch.dict(sys.modules, {'echo_guard': None}):
+            self.assertTrue(guard._is_echo('在呢，刚刚在整理', '在呢刚在整理'))
+            self.assertFalse(guard._is_echo('项目其实上周就交了', '是不是最近那个项目压得慌'))
+
+
+if __name__ == "__main__":
+    unittest.main()

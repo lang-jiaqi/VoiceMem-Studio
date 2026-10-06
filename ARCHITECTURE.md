@@ -136,6 +136,13 @@ non-interactive commands do not prompt. Non-interactive startup defaults to
 DeepSeek reply, Breeze TTS, and the `studio-zh` Memory Space.
 An explicit `--space` selects another existing or new space; stored language and
 memory data are preserved when the default selection changes.
+Without `--memory_root`, each selectable Space owns its existing named directory
+under the repository memory parent. An explicit `--memory_root` preserves the
+VoiceMem contract of one exact database directory, not a parent for new Spaces.
+Studio binds that directory to the startup `--space`, reads its existing metadata
+and counts, and rejects creating or selecting another Space. The browser exposes
+this fixed selection and hides new-Space controls. Existing memory is neither
+moved nor rewritten to introduce child directories.
 Qwen is selectable with `--llm qwen`: `qwen3.6-flash` uses the international
 DashScope OpenAI-compatible endpoint with streamed content and request-scoped
 thinking. Credentials come from `DASHSCOPE_API_KEY` or ignored `.env.qwen`;
@@ -167,6 +174,12 @@ Selected model warmup failures prevent serving a silently degraded pipeline.
 model classes and factories live in `core/utils/<component>/`.
 
 ### Deployment boundary
+
+The Python wheel distributes the VoiceMem SDK, sample audio and runtime prompts.
+Studio Python helpers remain included for existing SDK speech-provider and default
+persona imports. The complete Studio application runs from a repository checkout;
+its UI, avatar assets and model weights are not wheel resources. Package-data
+patterns deliberately exclude partial Studio frontends and reviewed Studio voices.
 
 Native Apple Silicon setup installs the Studio extra with
 `studio/constraints-macos-py312.txt`, a Python 3.12 profile pinning direct and
@@ -225,73 +238,28 @@ siblings remain a compatibility fallback. The repository root still owns runtime
 results, and legacy model reuse, while weights default to `studio/models/`.
 The startup loader reads `.env` before importing `studio.paths`, so optional
 model and voice directory overrides are effective on a fresh process.
-VoiceMem-owned prompts retain `voicemem.prompt_config` as their path authority;
+Studio-owned prompts use `studio.prompt_config` as their path authority;
 Studio startup inspects that effective prompt directory rather than assuming
 the repository root. The desktop pet preparation follows the same Studio-first,
 legacy-second source rule. The App-managed Python backend requires the package
 entry point and root package metadata, while Docker startup separately requires
 Compose; local MLX/WSL startup is not coupled to a Studio Compose file.
 
-`studio/web/` owns browser assets, HTTP/WebSocket transport, and the pet bridge.
-An opt-in `STUDIO_PUBLIC_DEMO=1` browser deployment keeps the server on loopback
-behind Tailscale Funnel. `studio/web/demo_accounts.py` owns local name/password
-accounts and cookie sessions. HTTP and conversation WebSocket entry points resolve
-the authenticated account before reading memory or constructing a session; the pet
-observer is disabled. Each account owns one `VoiceAgent` and one private default
-Space under the demo data directory. The VoiceMem `memory_root` is set to that
-private directory; public demo browsers cannot create or switch Spaces.
-HTTP and WebSocket requests lease their account agent for the request lifetime.
-Idle agents are released after 15 minutes or when more than eight idle agents
-are cached. Active leases, pending ingest tasks and native memory completion
-callbacks prevent eviction. A background sweep reclaims idle entries even if
-no further requests arrive; eviction leaves the account's files, credentials
-and explicit Harness preferences intact. Shared local inference providers remain
-process owned. Public-demo Qwen TTS leases one private vendor connection per
-conversation, including multiple connections belonging to the same account.
-Demo Spaces accept Chinese and English in the same memory pool. Each conversation owns
-its recent-language fallback; accounts do not change a process language override.
-The account owns its turn recordings. Browser chat lists remain page-local;
-long-term memory persists with the account. Mobile demo requests enter a dedicated
-browser pet page, which reuses the desktop Live2D behavior and browser voice client.
-Per-account agents retain the same speaker gate as local Studio. In both
-deployments, an `llm_tts` stranger turn excludes retrieved memory and recent
-session messages from the reply request. The gate's identity decision stays in server state and diagnostics;
-it is not included in text or realtime reply prompts. The gate also skips or
-discards speculative replies before playback. Background ingestion and speaker
-tracking retain their existing lifecycle so a later matching voice can clear the gate.
-Conversation text and input live in a separate sheet so the avatar remains visible
-by default. The VoiceMem sheet shows this turn's retrieved hits. A turn-scoped
-`memory_store_status` event is sent only after the durable ingest callback;
-completion causes one snapshot fetch instead of polling while the reply is
-still playing. Factual entries are matched by the completed turn's memory IDs;
-affective summaries are account-level snapshot changes. A later input invalidates
-an earlier turn's pending fetch. Disconnected or changed-Space sessions receive
-no stale completion event. Its top-right settings panel exposes only Self Harness
-controls. Explicit Harness choices persist in the account's default Space via the
-demo account database; model-driven changes remain conversation scoped. The demo
-serves only allowlisted pet scripts and local PixiJS runtime files to authenticated
-accounts. The mobile HTML remains uncached and supplies a content-versioned pet
-resource root. Model-relative texture, expression and physics URLs stay within
-that root; the background, mobile CSS/client scripts and local runtime libraries
-use the same version. These fixed resources use private browser caching and
-conditional requests. The content version is computed once at backend startup;
-pulling updated resources and restarting changes their URLs automatically.
-The mobile HTML preloads the default model manifest, moc, physics, full-resolution
-textures and runtime scripts. Texture preloads and the mobile Pixi loader share
-anonymous CORS mode with same-origin account cookies. Deferred page scripts
-download concurrently but execute in document order. The renderer loads Core and
-Pixi concurrently, then the display plugin after both are ready; pending loads
-are shared and failures permit retries. Startup selects a local Core when present;
-otherwise the mobile page requests the official CDN directly. Native desktop
-loading retains its local-first fallback.
-The transport prepares gzip variants of compressible fixed resources once at
-startup. Representation-specific ETags and `Vary: Accept-Encoding` keep compressed
-and original browser caches distinct; range requests retain the original file
-response. PNG textures and backgrounds remain unchanged. Compression never wraps
-account APIs, WebSockets or streamed conversation output.
-Authentication and account APIs remain uncached, and actual asset requests retain
-the login check. Unversioned compatibility paths retain their existing behavior.
-The ordinary desktop homepage does not redirect based on viewport size.
+`studio/web/` owns browser assets, HTTP/WebSocket transport, and the desktop
+pet bridge. Public account registration, authenticated mobile pet pages,
+account preference storage, asset caching and per-conversation API connection
+limits belong to the independent `VoiceMem-Studio-Demo` project. This repository
+does not serve those account or mobile routes and does not import that project.
+The old public-demo environment flag is rejected with its new entry point,
+rather than accidentally exposing an ordinary Studio service as an account site.
+
+In Studio `llm_tts`, a stranger turn excludes retrieved memory and recent
+session messages from the reply request. The speaker gate's identity decision
+stays in server state and diagnostics; it is not included in reply prompts.
+The gate also skips or discards speculative replies before playback. Background
+ingestion and speaker tracking keep their lifecycle so a later matching voice
+can clear the gate.
+
 `studio/apps/` owns the Windows/macOS Electron desktop client and pet. Linux is
 a backend deployment target, not a desktop release target. Windows runs capture,
 playback and the pet natively, while local CUDA inference belongs in WSL2 or its
@@ -363,16 +331,14 @@ lists are page-local and reset on refresh; opening a previous list item starts a
 new backend context for subsequent input. Both styles let each new chat choose a
 Memory Space. Chats retain that choice and share the Space's persistent memory;
 switching chats selects the corresponding backend Space before further turns.
-The technical, digital-human and mobile pet pages render assistant Markdown
+The technical and digital-human pages render assistant Markdown
 through one DOM-only preview, including headings, emphasis, lists, quotes, links,
 tables, code and delimited LaTeX math. Math is recognized before Markdown escapes
 or emphasis so `\[...\]`, `\(...\)`, `$$...$$` and `$...$` retain their commands
 and subscripts. Fences labelled `math`, `latex` or `tex` also use math layout;
 ordinary code, escaped dollars and currency remain literal. A vendored KaTeX
 0.18.10 runtime, stylesheet, fonts and license ship with the UI; users do not
-need a browser CDN or an additional npm install for formulas. Mobile asset
-versioning and caching include these files and their relative font URLs.
-KaTeX receives untrusted input with resource/HTML commands disabled, fresh macros
+need a browser CDN or an additional npm install for formulas. KaTeX receives untrusted input with resource/HTML commands disabled, fresh macros
 per expression, bounded expansion, bounded size and an 8192-character input
 limit. Incomplete streaming math waits for closure; malformed final input falls
 back to text without failing the reply. Up to 128 rendered expressions are
@@ -503,8 +469,8 @@ with its own saved position and scale. Native users can disable the backend's
 automatic pet with the existing `STUDIO_DESKTOP_PET=0` to avoid duplicate windows;
 containers already do this. The standalone launch and Web playback contracts remain unchanged.
 
-Original `web/run.py` and moved provider modules remain thin compatibility
-entry points; executable Studio implementations have one owner under `studio/`.
+Original `web/run.py` remains a thin compatibility entry point. Studio-specific
+implementations have one owner under `studio/` and callers import them directly.
 The old top-level `harness/` forwarding package is removed: Studio policies
 are imported through `studio.harness` only. Studio-specific offline speech/TTS
 development scripts live in `studio/tools/`; they are never part of startup.
@@ -513,28 +479,48 @@ demo and is not a directory to copy wholesale during migration.
 
 ### Memory plane
 
-Owned by the reusable `voicemem` package:
+Owned by the reusable `voicemem` package, following upstream module boundaries:
 
-- `core.py`: public `VoiceMem` facade;
-- `orchestrator.py`: cross-component search and ingest workflows;
-- `leftbrain/`: factual memory, vector retrieval, slots, entities, and time;
-- `rightbrain/`: affective episodes, traits, reactions, and directives;
-- `stream.py`: reusable streaming input and speculative retrieval;
+- `core.py`, `config.py`, `__init__.py`: public facade, configuration and lazy exports;
+- `orchestrator.py`: cross-component search/ingest, capabilities and `SearchResult`;
+- `stream.py`: ASR workers, turn snapshots, confirmation and speculative retrieval;
+- `gate.py`: memory eligibility and interruption routes;
+- `lang.py`, `llm_config.py`: language context and process-wide model roles;
+- `reply.py`, `tts.py`, `audio_timing.py`: shared reply/speech adapters and contracts;
+- `startup_check.py`: optional capability probes;
+- `leftbrain/`, `rightbrain/`: factual and affective memory;
 - `memory_api.py`: prompt-ready memory helpers.
 
-The package exposes normalized contracts and replaceable capabilities. It does
-not depend on browser code.
+These files contain their implementations directly. There is no module redirection
+layer or parallel runtime/input/output package tree. Search, ingest and streaming
+retain their original state, locks, executors and cancellation boundaries.
+
+`leftbrain/memory_repository.py` owns backend writes, the Space mirror and
+maintenance APIs. `memory_repository_v2.py` extends those writes with slot metadata
+and summaries; it is an implementation, not a second independent memory engine.
+`LeftBrain` continues to own classification, candidate expansion and ranking.
+The extension selects its graph-store type before construction so base schema
+initialization and migration run once. Existing tables and query algorithms remain
+unchanged. See `voicemem/README.md` for the owner inventory and historical opt-in APIs.
+
+The repository's historical `search_with_graph()` and `search_combined()` are
+deprecated and unsupported. Direct calls immediately raise `NotImplementedError`
+and direct callers to `VoiceMem.search()`; they do not query stores or start work.
+The optional fusion adapter falls back to its existing plain search only when a
+graph provider explicitly raises `NotImplementedError`. Custom graph providers
+remain supported. Studio's cognitive-graph, ranking and dual-brain search flow
+does not call these legacy entry points and remains unchanged.
 
 ### Inference and scheduling plane
 
 Owned by provider modules and shared schedulers:
 
 - `studio/core/utils/llm/local.py`: local MLX reply generation and prefix/KV caching;
-- `studio/core/utils/tts/providers.py`, `component.py`, `cache.py`: speech providers and local
+- `voicemem/tts.py`, `studio/core/utils/tts/component.py`, `cache.py`: speech providers and local
   synthesis support;
 - `utils/gpu_loop.py`: the single process-level MLX execution thread;
 - `utils/torch_lock.py`: serialization for shared Torch/MPS work;
-- the streaming ASR worker and dedicated final-ASR executor in `stream.py`.
+- the streaming ASR worker and dedicated final-ASR executor in `voicemem/stream.py`.
 
 Provider adapters translate configuration and provider events into shared
 reply, text, PCM, and timing contracts.
@@ -549,9 +535,10 @@ Owned by:
   inputs;
 - `studio/prompt/tts.json`: TTS tone and backchannel synthesis configuration;
 - `studio/prompt_config.py`: validated Studio prompt loading and caching;
-- `studio/core/utils/logging_utils/prompt_trace.py`: asynchronous request tracing;
+- `voicemem/utils/common/prompt_trace.py`: shared asynchronous request tracing;
 - `studio/core/utils/logging_utils/component.py`: runtime log routing;
-- `evals/`: Studio behavioral and latency regressions.
+- `tests/`: deterministic regressions and shared synthetic fixtures;
+- `evals/`: manually run latency and model-quality evaluations.
 
 Prompt traces may contain complete conversation and memory context. They are
 runtime data even though their schema is part of the observability design.
@@ -568,9 +555,32 @@ browser / application
 ```
 
 Allowed cross-cutting infrastructure includes normalized contracts,
-configuration, locks, schedulers, and logging. The memory pipeline does not import Studio. Legacy explicit TTS and local-reply
-imports lazily resolve to Studio adapters, preserving provider injection and a
-single provider cache. Plain `import voicemem` does not load Studio or models.
+configuration, locks, schedulers and logging. The memory pipeline does not import
+Studio. Studio-specific persona, prompt loading, local reply, Breeze and tone
+controls are imported directly from their owners under `studio/`. Shared speech
+adapters and timing contracts live in `voicemem/tts.py` and `audio_timing.py`.
+Their optional Studio providers retain the existing injection and provider cache.
+Plain `import voicemem` and importing the API reply module do not load Studio or
+models. Using the existing default reply persona loads Studio lazily.
+VoiceMem and Studio import `voicemem.utils.common.prompt_trace` directly, preserving
+one writer and one task-local trace context.
+
+`studio/core/voicemem.py::open_memory` composes the existing ASR, reply and speech
+implementations. Each component's `initialize.py` owns its defaults and construction;
+the bridge passes the resulting reply callable and ASR/TTS factories into VoiceMem.
+Replacement implementations use the same contracts:
+
+| Component | Existing boundary | State ownership |
+| --- | --- | --- |
+| Streaming ASR | `feed`, `flush`, `reset`, `text`; `new_stream` for independent decoders | Decoder state per connection; reusable model weights |
+| Final ASR | `transcribe(audio)` | Refinement adapter; VoiceStream owns scheduling and stale-result guards |
+| Reply LLM | Async callable accepting text, memory context and history, yielding text deltas | Request generation; Conversation owns dialogue state |
+| TTS | `stream(text, instruction)`, yielding PCM or timed audio chunks | Provider synthesis; Conversation owns playback and interruption |
+
+No additional plugin registry or abstract interface is required. Provider credentials,
+model acquisition and warmup belong to the selected implementation's initialization,
+not memory retrieval or turn policy. The built-in startup manifest describes the
+default implementations; replacing one also requires its matching readiness checks.
 
 ## 4. Mode and provider model
 
@@ -614,7 +624,7 @@ profile and eval workflow are standardized on Python 3.12.
 | Gate route | `voicemem/gate.py` | `backchannel`, `shallow`, or `deep` |
 | `Pending` | `studio/core/utils/contracts/component.py` | Application-ready confirmed turn |
 | `ReplySink` | `studio/core/utils/contracts/component.py` | Hidden speculative output timeline |
-| `TimedAudioChunk` | `studio/core/utils/tts/audio_timing.py` | Optional PCM text alignment |
+| `TimedAudioChunk` | `voicemem/audio_timing.py` | Optional PCM text alignment |
 | `AudioTimeline` | `studio/core/utils/audio_timeline/component.py` | One output's text/media clock |
 | `SessionTurn` | `studio/core/utils/session_context/component.py` | Unpersisted dialogue context |
 
@@ -741,7 +751,7 @@ the same index for either language; short cross-language queries can still rank
 imperfectly. Canonical slot/emotion keys stay fixed.
 Existing persisted memories and Space metadata are not translated or migrated.
 The compatibility `/api/lang` endpoint changes UI language and reports
-`reply_lang: "auto"`; authenticated demo requests retain their account resolution.
+`reply_lang: "auto"`.
 
 ASR finalization gives full-audio refinement an 80 ms preference window, then
 accepts the first non-empty result from refinement or streaming flush. Passing
@@ -849,7 +859,7 @@ task's first execution still reaps any adopted generator and finalizes the
 confirmed user input once. Legacy direct `Reply` callers retain their existing
 standalone finalization path.
 
-The Web demo uses EOT both to start speculative reply work and, after acoustic
+Studio uses EOT both to start speculative reply work and, after acoustic
 silence plus pause-policy approval, to end the Studio user turn. `VoiceStream` owns the
 immutable audio snapshot and final-ASR refinement; `studio/core/utils/capture/component.py` owns the policy
 that starts LLM/TTS generation from the refined snapshot text. Streaming ASR
@@ -1011,11 +1021,11 @@ The Studio Web system prompt and dialogue context live in `studio/harness/`.
 Legacy reply/default prompt files live in `studio/prompt/llm_*.md` and
 `studio/prompt/llm_context.json`. TTS tone configuration is loaded from
 `studio/prompt/tts.json`. The installed Studio package owns these files,
-its parser, legacy reply persona and request trace implementation;
-`voicemem.prompt_config`, `voicemem.persona` and `voicemem.prompt_trace`
-are compatibility aliases in this checkout,
-not a dependency for Studio. `STUDIO_PROMPT_DIR` can replace the complete
+its parser and legacy reply persona. Callers import `studio.prompt_config` and
+`studio.core.utils.prompts.legacy_persona` directly. `STUDIO_PROMPT_DIR` can replace the complete
 configuration directory; the older `VOICEMEM_PROMPT_DIR` remains a fallback.
+The provider-neutral request journal lives in `voicemem.utils.common.prompt_trace`;
+both packages import this single state owner directly.
 Request logs remain external runtime data under the ignored root `prompt/logs/`.
 
 Prompt configuration is parsed and cached by `prompt_config.py`; malformed or
@@ -1053,28 +1063,32 @@ The TTS layer accepts plain 24 kHz mono PCM16 bytes and optional
 `TimedAudioChunk` alignment metadata. Segment concurrency is selected by the
 provider; local GPU providers can require serialized segments.
 
-Qwen-Audio-TTS Flash is an optional Studio TTS adapter. It streams the same PCM
-contract over a Singapore workspace WebSocket and passes the existing per-segment
-tone instruction into each synthesis task. It uses the `longanlingxi` system
-voice by default and can select another system voice through configuration.
-A cancelled segment closes the connection so stale audio cannot enter the next
-reply. The serving loop opens the Qwen WebSocket before accepting sessions;
-local model warmup does not issue a billable synthesis request.
-Only public-demo Qwen deployments use `QwenDemoTTS`: a process-owned manager
-limits active conversation leases with `STUDIO_DEMO_MAX_TTS_SESSIONS` (default
-four). Admission includes connection setup and rejects excess conversations
-immediately with a `demo_speech_busy` browser error and WebSocket close code
-1013; failed connection setup uses `demo_speech_unavailable`. The client releases
-its microphone/audio resources and retains the specific retry message. This is a
-resource limit, not a measured hardware or provider capacity guarantee. The
-first lease adopts the preconnected startup socket; other leases preconnect
-their own sockets. Each conversation passes its provider explicitly to normal,
-opening, speculative and unfinished-follow-up replies and work fillers. Segments
-remain ordered within that connection but do not block other conversations.
-Conversation cleanup reaps reply/filler tasks before releasing its connection;
-failure or interruption discards only that connection. Leases use the same
-configured API credentials and voice. Ordinary App Qwen connections and all
-local-model factories retain their existing reuse and scheduling contracts.
+The SDK `voicemem.tts.speak_stream()` helper serializes synthesis while consuming
+reply deltas in a separate task. Input, callback and synthesis errors wake the
+audio consumer and propagate instead of leaving it waiting for output. Cancellation
+or explicit generator closure cancels and awaits both tasks. Callers that break
+iteration early must close the generator, for example with `contextlib.aclosing`.
+Studio uses its own speech pipeline rather than this helper.
+
+Studio consumes reply deltas in an owned task alongside segmentation, synthesis
+and audio delivery. A failed synthesis segment, including a stream that returns
+no nonempty audio, fails the reply instead of silently skipping that segment.
+Stage failure cancels and awaits the remaining pipeline tasks, marks the timeline
+interrupted and reports a generic error scoped to its output ID. Failed replies
+never send `answer_done`; exception details are not client messages. Normal
+streaming does not add a model call, retry or wait before first audio.
+The request-options and reply-capture wrappers close their underlying streams
+from the producing task, including cancellation while delivering a text delta.
+
+Studio's default speech factory shares one Breeze instance across Spaces, selecting
+MLX or CUDA from the existing backend profile. VoiceMem receives that factory through
+its capability-injection contract; memory algorithms do not select speech vendors.
+Reply and filler generation accept a conversation-owned speech provider through the
+same `stream(text, instruction)` contract. Optional `preconnect` and `aclose` hooks
+remain at the server lifecycle boundary. New adapters can use these existing
+contracts without adding vendor-specific branches to routing or dialogue policy.
+The public-demo Qwen API adapter, its credentials and connection admission belong
+to the independent demo project and are not included in this repository.
 
 `studio/core/utils/tts/segmentation.py` owns sentence-first text boundaries and
 the pending text buffer. A reply-local segmenter consumes plain text after tone
@@ -1227,6 +1241,13 @@ Studio tracks whether reply or speech output is on the user-visible hot path.
 Background perception and ingest may wait for an idle window, subject to a
 bounded fallback so memory work cannot starve indefinitely.
 
+Acoustic-emotion tasks belong to the conversation or realtime session and capture
+their output ID, Memory Space and VoiceMem instance. Ownership is checked before
+and after inference. A new output cancels old tasks, and session closure cancels
+and awaits them. Native inference already running in a thread may finish, but its
+stale result cannot update the client. Accepted tag updates carry the output ID;
+reply audio never awaits this background result.
+
 ## 11. Output, playback, and interruption
 
 ```mermaid
@@ -1339,10 +1360,9 @@ budget, evicting its oldest turns and completion lookup entries when full.
 Background ingest captures the target `VoiceMem` instance and Memory Space when
 scheduled, along with the confirmed input language. A later UI space change or
 another account's language cannot redirect or relabel an existing write.
-An agent tracks unfinished native writes separately from its asyncio task set:
-returning from `ingest(async_facts=True)` does not yet release the account cache
-entry. Only its durable completion callback or a failed ingest releases that
-write. Browser completion messages contain status and IDs, never backend error
+An agent tracks unfinished native writes separately from its asyncio task set.
+Returning from `ingest(async_facts=True)` does not complete a native write; its
+durable completion callback or a failed ingest releases that pending write. Browser completion messages contain status and IDs, never backend error
 details.
 
 ## 13. State ownership
@@ -1358,7 +1378,6 @@ details.
 | Factual and affective memory | Memory Space stores | Persistent |
 | Streaming ASR/VAD/EOT/gate state | `VoiceStream` | Input turn/session |
 | Turn-taking phase, latency estimate, and backchannel policy | `TurnTakingStateMachine` | WebSocket session |
-| Public-demo Qwen speech connection | `Conversation` / `QwenDemoTTS` lease | WebSocket session |
 | Self Harness profile, Persona supplement, and confirmation state | `SelfHarnessState` | WebSocket session |
 | Reply router model | `studio/core/utils/reply_modes` | Process |
 | Reply mode | Confirmed `Pending` turn | Turn |
@@ -1369,6 +1388,7 @@ details.
 | Text/media alignment | `AudioTimeline` | Assistant output ID |
 | PCM queue and echo reference | Browser worklets | Assistant output ID/session |
 | Background ingest | Captured turn and `VoiceMem` | Until completion |
+| Background acoustic emotion | Conversation or realtime session, captured output and Space | Until completion or cancellation |
 
 Turn-specific state is explicit. Process globals are reserved for configuration,
 shared model caches, and schedulers whose process-wide behavior is intentional.
@@ -1379,10 +1399,18 @@ turns for every Memory Space owned by the closing WebSocket session.
 
 Studio has three distinct verification categories:
 
-- deterministic Python regressions in `tests/` and `evals/test_*.py`;
-- browser/worklet simulations in `evals/*.cjs`;
-- latency, quality, and benchmark scripts in other `evals/` files and
+- deterministic Python regressions in `tests/voicemem/` and `tests/studio/`;
+- browser/worklet and desktop simulations in `tests/frontend/`, with visual
+  checks in `tests/manual/`;
+- latency, quality, and benchmark scripts in `evals/` and
   `evaluation/`.
+
+`tests/helpers/` owns synthetic capture, reply, conversation and display fixtures;
+test cases do not import other test modules to reuse their state. Python discovery
+uses `-t .` so `tests/voicemem` and `tests/studio` cannot shadow runtime packages.
+`tests/README.md` documents the Python, Node and manual entry points. Tests are
+development source and are not imported by application startup or bundled in
+the Python wheel or Electron application.
 
 `prompt_trace.py` records allowlisted provider requests asynchronously so disk
 I/O does not block speech. `prompt/logs/` entries can include system prompts,
@@ -1407,10 +1435,10 @@ network-provider performance require the corresponding native environment.
 | Tone-label protocol | `studio/core/utils/tts/control.py`, prompts, and TTS wiring |
 | Reply provider | `voicemem/reply.py` or `studio/core/utils/llm/local.py`, then config |
 | Three-way reply routing | `studio/core/utils/reply_modes/` and Web composition root |
-| TTS provider | `studio/core/utils/tts/providers.py` or provider module, then config |
+| TTS provider | `voicemem/tts.py` or provider module, then config |
 | GPU scheduling | `voicemem/utils/gpu_loop.py` |
 | Studio prompt parsing | `studio/prompt_config.py` and `studio/prompt/` schema |
-| Prompt tracing | `voicemem/prompt_trace.py` |
+| Prompt tracing | `voicemem/utils/common/prompt_trace.py` |
 | Early generation | `ReplySink`, EOT callback, and cancellation path |
 | Capture echo control | Browser mic worklet and server echo guard |
 | Playback timing and heard prefix | Audio timeline and both reply modes |

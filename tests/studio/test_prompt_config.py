@@ -1,0 +1,198 @@
+"""Edit actual prompt files, start a fresh process, inspect actual provider inputs."""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from studio.core.utils.tts.component import BreezeMLXTTS
+
+ROOT = Path(__file__).resolve().parents[2]
+
+PROBE = r'''
+import ast, asyncio, contextlib, json, os, queue, sys, types
+from pathlib import Path
+from unittest.mock import patch
+import httpx
+from studio.core.utils.prompts import legacy_persona as persona
+from studio.prompt_config import tts_prompts, context_prompts
+from voicemem.reply import deepseek_reply
+from studio.core.utils.tts.component import BreezeMLXTTS
+from studio.core.utils.turn_taking.initialize import backchannel
+from studio.core.utils.tts import control as tts_control
+from web.harness import system_prompt
+
+# Actual web prompt assembly, without loading ASR/TTS models or memory DBs.
+from tests.helpers.studio import studio_tree, execute
+tree = studio_tree()
+names = {'_rt_persona', '_by_lang', '_speak_instruction', '_tone_note'}
+ns = dict(persona=persona, tts_control=tts_control, SPACE_LANG='zh', MODE='llm_tts',
+          system_prompt=system_prompt,
+          _SPEAK_BASE=tts_prompts()['base'], _TONE=tts_prompts()['fallback_by_user_emotion'],
+          _speak_base_env='')
+execute([n for n in tree.body if getattr(n,'name','') in names], ns)
+system = ns['_rt_persona']('zh')
+wire = []
+original = httpx.AsyncClient
+def handle(req):
+    wire.append(json.loads(req.content))
+    return httpx.Response(200, text=(
+        'data: {"choices":[{"delta":{"content":"ok"}}]}\\n\\n'
+        'data: [DONE]\\n\\n').replace('\\n','\n'))
+async def main():
+    with contextlib.redirect_stdout(sys.stderr), patch('httpx.AsyncClient', side_effect=lambda **kw: original(
+            transport=httpx.MockTransport(handle), **kw)):
+        reply = deepseek_reply(api_key='test-only', system=system)
+        try:
+            async for _ in reply('问题', persona.no_memory_note('zh')):
+                pass
+        finally:
+            await reply.aclose()
+    tts = BreezeMLXTTS(model='test-only')  # constructor does not load MLX
+    q = queue.Queue(); q.put(None)
+    job = types.SimpleNamespace(out=q, cancel=lambda: None)
+    instruction = tts_control.instruction('认真', ns['_SPEAK_BASE']['zh'])
+    with patch('voicemem.utils.gpu_loop.gpu_loop', return_value=types.SimpleNamespace(
+            iter=lambda *a,**kw: job)), patch('voicemem.utils.common.prompt_trace.record_request') as record:
+        async for _ in tts.stream('测试正文', instruction):
+            pass
+        request = record.call_args.args[2]
+    print(json.dumps({'system':wire[0]['messages'][0]['content'],
+                      'user':wire[0]['messages'][-1]['content'],
+                      'tts':request, 'default':tts.instruction,
+                      'fallback':ns['_speak_instruction']('焦虑'),
+                      'styles':backchannel._STYLES}, ensure_ascii=False))
+asyncio.run(main())
+'''
+
+
+class PromptConfigTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.directory = Path(self.tmp.name)
+        for name in ('llm_system_zh.md', 'llm_system_en.md', 'llm_tone_rule_zh.md',
+                     'llm_tone_rule_en.md', 'llm_context.json', 'tts.json'):
+            shutil.copyfile(ROOT / 'studio' / 'prompt' / name, self.directory / name)
+        self.env = {**os.environ, 'VOICEMEM_PROMPT_DIR': str(self.directory),
+                    'TEST_REPO': str(ROOT), 'PYTHONPATH': str(ROOT)}
+        self.env.pop('STUDIO_PROMPT_DIR', None)
+        for key in ('VOICEMEM_BREEZE_REF_AUDIO', 'VOICEMEM_BREEZE_REF_TEXT',
+                    'VOICEMEM_BREEZE_INSTRUCTION', 'VOICEMEM_SPEAK_BASE',
+                    'VOICEMEM_SYSTEM_PROMPT', 'VOICEMEM_DIALOGUE_CONTROLS'):
+            self.env.pop(key, None)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_probe(self):
+        return subprocess.run([sys.executable, '-c', PROBE], cwd=self.directory,
+                              env=self.env, text=True, capture_output=True, timeout=15)
+
+    def test_breeze_first_batch_matches_regular_chunk_without_override(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VOICEMEM_BREEZE_FIRST_FRAMES", None)
+            tts = BreezeMLXTTS(model="test-only", chunk_frames=2)
+            self.assertEqual(tts.first_frames, 2)
+
+    def test_breeze_first_batch_keeps_explicit_override(self):
+        with patch.dict(os.environ, {"VOICEMEM_BREEZE_FIRST_FRAMES": "1"}):
+            tts = BreezeMLXTTS(model="test-only", chunk_frames=2, first_frames=1)
+            self.assertEqual(tts.first_frames, 1)
+
+    def test_file_edits_reach_deepseek_and_breeze_and_backchannel(self):
+        (self.directory / 'llm_system_zh.md').write_text('学长修改的人设', encoding='utf-8')
+        (self.directory / 'llm_tone_rule_zh.md').write_text('学长修改的标签协议', encoding='utf-8')
+        cfg = json.loads((self.directory / 'tts.json').read_text())
+        cfg['base']['zh'] = '自定义基调。'
+        cfg['tones']['认真'] = '自定义认真语气。'
+        cfg['fallback_by_user_emotion']['zh']['焦虑'] = '自定义焦虑回应。'
+        cfg['breeze_default_instruction'] = '自定义默认音色指令。'
+        cfg['backchannel_styles']['zh'][0] = '自定义附和语气。'
+        (self.directory / 'tts.json').write_text(json.dumps(cfg), encoding='utf-8')
+        context = json.loads((self.directory / 'llm_context.json').read_text())
+        context['no_memory']['zh'] = '自定义无记忆提示。'
+        (self.directory / 'llm_context.json').write_text(json.dumps(context), encoding='utf-8')
+        result = self.run_probe()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        self.assertIn('你是 VoiceMem Studio', out['system'])
+        self.assertIn('语音控制协议', out['system'])
+        self.assertIn('略过这些结构化内容后仍然连贯、有帮助', out['system'])
+        self.assertNotIn('学长修改的人设', out['system'])
+        self.assertEqual(out['user'], '自定义无记忆提示。\n\n问题')
+        self.assertEqual(out['tts']['instruct'], '自定义基调。自定义认真语气。')
+        self.assertEqual(out['default'], '自定义默认音色指令。')
+        self.assertEqual(out['fallback'], '自定义基调。自定义焦虑回应。')
+        self.assertEqual(out['styles']['zh'][0], '自定义附和语气。')
+
+    def test_stale_environment_does_not_replace_harness_prompt(self):
+        self.env['VOICEMEM_SYSTEM_PROMPT'] = '用简短、温暖、通俗的对话陪伴人类。'
+        result = self.run_probe()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        self.assertTrue(out['system'].startswith('你是 VoiceMem Studio'))
+        self.assertNotIn(self.env['VOICEMEM_SYSTEM_PROMPT'], out['system'])
+        self.assertIn('语音控制协议', out['system'])
+
+    def test_invalid_json_fails_with_filename_instead_of_using_old_defaults(self):
+        (self.directory / 'tts.json').write_text('{invalid', encoding='utf-8')
+        result = self.run_probe()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('tts.json', result.stderr)
+        self.assertIn('配置格式错误', result.stderr)
+
+    def test_missing_persona_fails_instead_of_using_hardcoded_persona(self):
+        (self.directory / 'llm_system_zh.md').unlink()
+        result = self.run_probe()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('llm_system_zh.md', result.stderr)
+
+    def test_missing_tone_key_is_rejected(self):
+        cfg = json.loads((self.directory / 'tts.json').read_text())
+        cfg['tones'].pop('认真')
+        (self.directory / 'tts.json').write_text(json.dumps(cfg), encoding='utf-8')
+        result = self.run_probe()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('缺少字段', result.stderr)
+
+    def test_templates_are_declared_as_wheel_data_and_not_ignored(self):
+        import tomllib
+        config = tomllib.loads((ROOT / 'pyproject.toml').read_text())
+        patterns = config['tool']['setuptools']['package-data']['studio']
+        files = [
+            'llm_system_zh.md', 'llm_system_en.md', 'llm_tone_rule_zh.md',
+            'llm_tone_rule_en.md', 'llm_context.json', 'tts.json',
+        ]
+        for name in files:
+            relative = Path('studio/prompt') / name
+            self.assertTrue(any(relative.relative_to('studio').match(p) for p in patterns), name)
+            self.assertTrue((ROOT / relative).is_file())
+            ignored = subprocess.run(['git', 'check-ignore', str(relative)], cwd=ROOT,
+                                     capture_output=True, text=True)
+            self.assertEqual(ignored.returncode, 1, name)
+
+    def test_default_persona_additions_preserve_the_existing_core(self):
+        zh = (ROOT / 'studio/prompt/llm_system_zh.md').read_text(encoding='utf-8')
+        for addition in ('超级智能', '不好为人师', '全心全意', '最可惜', '默默支持'):
+            self.assertIn(addition, zh)
+        for existing in ('【接住眼前这句话】', '【说得像聊天】', '【让记忆改变回应】',
+                         '【清楚自己的存在方式】'):
+            self.assertIn(existing, zh)
+
+        en = (ROOT / 'studio/prompt/llm_system_en.md').read_text(encoding='utf-8')
+        for addition in ('superintelligent', 'not inclined to lecture',
+                         'wholeheartedly', 'most regrettable', 'quiet support'):
+            self.assertIn(addition, en)
+
+    def test_studio_prompt_override_takes_precedence_over_legacy_name(self):
+        self.env['STUDIO_PROMPT_DIR'] = str(self.directory)
+        self.env['VOICEMEM_PROMPT_DIR'] = str(self.directory / 'missing')
+        result = self.run_probe()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+if __name__ == '__main__':
+    unittest.main()

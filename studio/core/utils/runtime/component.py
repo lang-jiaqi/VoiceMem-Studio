@@ -11,7 +11,6 @@ from studio.prompt_config import tts_prompts
 from studio.core.utils.session_context.component import SessionBuffer
 from voicemem import gate
 from studio.paths import ROOT as _ROOT
-from studio.core.utils.tts.qwen_audio_api import selected as qwen_tts_selected
 
 def configure(self, args):
     self.ARGS = args
@@ -71,8 +70,7 @@ def configure(self, args):
         os.environ["VOICEMEM_STUDIO_API_KEY"] = reply_key
     memory_llm = configuration(memory_provider, "memory")
     memory_llm["config"]["api_key"] = memory_key
-    tts_provider = ("qwen_audio_api" if qwen_tts_selected() else
-                    "breeze_cuda" if args.backend == "cuda" else "breeze_mlx")
+    tts_provider = "breeze_cuda" if args.backend == "cuda" else "breeze_mlx"
     self.CONFIG = {
         "mode": "multi_modal", "memory_root": args.memory_root,
         "space": args.space, "embedding": {"provider": "local"},

@@ -1,10 +1,8 @@
-"""voicemem 各能力的内置默认实现工厂（util 名 -> 无参工厂）。
+"""Lazy default factories for injectable VoiceMem capabilities.
 
-core.py 的 Utils 用它建默认；传函数给 VoiceMem(embedding=..., slots=...) 即覆盖对应项。
-九个位子：embedding / schema / entity / emotion / voiceprint / asr / vad /
-memory_engine / tts。前八个在核心链路上（按 mode 由 _NEED 决定加载哪些），
-tts 不在——记忆系统只到文本为止，出声是可选的一层。
-放这里而不是 core.py，是让顶层门面只讲「系统骨架」，不被这些具体默认实现的 import 撑大。
+Utils in orchestrator.py resolves and caches these factories per instance.
+Its mode profile chooses capabilities to warm up. Optional TTS is not part of
+memory search and loads only when the caller explicitly requests it.
 """
 from __future__ import annotations
 
@@ -16,11 +14,9 @@ def default_utils(base_url, memory_root):
         from voicemem.leftbrain.local_memory_store import OpenAILocalEmbedder, OpenAILocalEmbedderConfig
         return OpenAILocalEmbedder(OpenAILocalEmbedderConfig(base_url=base_url))
     def slots():
-        # 默认本地句向量分类器：0 LLM、0 网络——投机预取那 0–300ms 预算里不能走网络，
-        # 而 Classify 就在那条路上（voicemem/stream.py 的 _speculate）。
-        # sentence-transformers 不在基础依赖里（随 [demo] extra 装），缺了就回落到
-        # LLM 版并打一行说明——静默回落等于悄悄开始花钱。
-        # VOICEMEM_SLOTS=openai 可强制用 LLM 版（要实体抽取 / 子 slot 下钻时）。
+        # Local classification shares the embedding model and avoids network
+        # work during speculative retrieval. An unavailable optional runtime
+        # falls back to the LLM classifier with an explicit notice.
         if os.environ.get("VOICEMEM_SLOTS", "local").lower() != "openai":
             try:
                 from voicemem.leftbrain.cognitive_graph.local_query_classifier import LocalQueryClassifier
@@ -36,7 +32,7 @@ def default_utils(base_url, memory_root):
                                                                 spec.tokenizer_kwargs))
             except ImportError as e:
                 print(f"[slots] 本地分类器不可用（{e}）→ 回落 LLM 版 QuerySlotClassifier。"
-                      "装 sentence-transformers（或 pip install -e '.[demo]'）可用本地版。",
+                      "安装 sentence-transformers 可用本地版。",
                       flush=True)
         from voicemem.leftbrain.cognitive_graph.query_slot_classifier import QuerySlotClassifier
         return QuerySlotClassifier()
@@ -50,20 +46,12 @@ def default_utils(base_url, memory_root):
         from voicemem.utils.audio.voiceprint.speaker_encoder import SpeakerEncoder
         return SpeakerEncoder(device="cpu")
     def asr():
-        """**按空间语言选**：zh → FunASR paraformer-zh，en → sherpa 英文专用。
+        """Select the core ASR default from the Space language or explicit override.
 
-        一个模型只认一种语言，所以不能跟空间语言脱钩——早先一律默认 FunASR，
-        英文库里说英文转出来是一串无意义的中文（"hellolo""今天天气如何何" 这类
-        脏记忆就是这么来的）。双语那个也不行：它会把英文吐成中文（实测
-        "Wait, why are you on mute?" → "喂我也用"）。
-
-        代价：一个库不能中英混说。这跟 voicemem/lang.py 的既有立场一致——语言是
-        库的属性。要混说：VOICEMEM_ASR=bilingual。
-
-        **英文这一档已知不够好**：本地流式小模型对英文短句都很弱（实测 "Wait."
-        → 空，"Why we are helping your plan." → "I"），而同一批音频 Whisper 全对。
-        这是这一档模型的上限，不是选型问题——要准得在说完之后用大模型重转一遍。
-        中文那边没这个问题，FunASR 实测够用。
+        Chinese Spaces default to FunASR; English Spaces default to Zipformer.
+        ``VOICEMEM_ASR=bilingual`` selects the bilingual Zipformer adapter.
+        Studio injects its own shared bilingual FunASR provider independently.
+        This selection does not restrict the language of stored memory text.
         """
         from voicemem.utils.common.paths import model_path
         from voicemem.utils.audio.asr import StreamingASR
@@ -80,7 +68,7 @@ def default_utils(base_url, memory_root):
                 return StreamingASR(str(model_path(_SHERPA[pick], kind="asr")))
             except Exception as e:
                 print(f"[asr] {_SHERPA[pick]} 不可用（{type(e).__name__}: {e}）"
-                      f"→ 回落 FunASR（**只认中文**）。"
+                      f"→ 回落 FunASR。"
                       f"scripts/download_models.sh 可下载。", flush=True)
         from voicemem.utils.audio.asr import FunASRStreamingASR
         return FunASRStreamingASR()

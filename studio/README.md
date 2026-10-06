@@ -2,6 +2,8 @@
 
 VoiceMem Studio 是展示 VoiceMem 记忆能力的语音对话应用。Studio 负责语音输入、对话、语音合成和界面；VoiceMem 在 Studio 后端中处理记忆。它们不是两个需要分别启动的对话服务。
 
+以下启动方式需要完整的仓库源码。VoiceMem Python wheel 提供 SDK 及其依赖的 Python 辅助代码，不包含完整 Studio 界面、数字人资源或模型权重。
+
 如果你使用 Apple Silicon Mac，可以直接从 [本机启动](#apple-silicon-mac-本机启动)开始。已有 Linux/Windows 后端，或使用 Intel Mac 的用户，可按[连接已有服务](#连接已有服务)只运行桌面界面。
 
 ## Apple Silicon Mac 本机启动
@@ -57,6 +59,9 @@ docker compose logs -f studio
 Windows 用户可在 WSL2/NVIDIA 环境中运行后端，再使用桌面 App；也可以直接连接一台已运行 Studio 的 Linux 服务器。Windows 本机路径尚需实机验证，相关要求见[桌面 App 说明](apps/README.md)；Linux/Docker 部署见[部署说明](deploy/README.md)。App 不会替你安装 WSL2、显卡驱动或 Python 解释器。
 
 ## 配置与常见问题
+
+- **体验站在哪里？** 账号登录、手机宠物页面及访客并发配置在独立的 `VoiceMem-Studio-Demo` 目录。本仓库只提供普通 Studio；旧体验站启动参数会提示使用独立目录。
+- **如何指定已有记忆库？** 用 `--memory_root /path/to/memory --space myspace` 指定一个具体库目录。Studio 保留该库的位置和数据，并固定使用启动时的 Space；界面不能新建或切换其他 Space。不指定 `--memory_root` 时仍可管理多个 Space。
 
 - **两个 API 要怎么选？** VoiceMem API 用于记忆处理，Studio API 用于对话生成；语音输入、语音合成和界面仍属于同一个 Studio 应用。两处可以选同一家服务，也可以分别选择。
 - **从哪里更换模型服务？** 本机 App 的“设置 → 组件”可修改记忆或回复模型服务，并由 App 重启它管理的本机后端。连接已有服务时这里是只读的，需要到服务器修改 `.env` 后重启。

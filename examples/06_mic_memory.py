@@ -1,18 +1,12 @@
-"""只听不答：麦克风 → 转写 → 记忆检索。没有 LLM 回复，没有 TTS。
+"""Inspect microphone transcription, memory retrieval and background ingestion.
 
     export OPENAI_API_KEY=sk-...
     python examples/06_mic_memory.py
 
-说一句话，你会看到三件事按顺序发生：
-
-    [听]  实时转写，你还在说的时候就在出字
-    [查]  你说完的那一刻，相关记忆**已经在手上了**——检索是在你说话期间
-          后台跑完的（0–500ms 投机预取），不占你说完之后的时间
-    [存]  这一轮写进记忆库，下次就能被查到
-
-想看它真的记住了：说「我对花生过敏」，然后隔几句再问「我不能吃什么」。
-
-Ctrl-C 退出。
+This example generates no assistant reply or speech. Fact extraction during
+ingestion can still call the configured LLM. The ingestion task runs in the
+background; its scheduling message does not confirm that persistence has finished.
+Press Ctrl-C to exit.
 """
 import asyncio
 import os
@@ -24,16 +18,15 @@ import sounddevice as sd
 
 from voicemem import VoiceMem
 
-SR = 16000          # 麦克风采样率
-BLOCK = 512         # 每块样本数：32ms @16k，跟 VAD 的帧长对齐
+SR = 16000
+BLOCK = 512         # 32 ms of microphone audio at 16 kHz.
 
 vm = VoiceMem.from_config({
     "mode": "normal",
-    "embedding": {"provider": "local"},   # 记忆向量：本地，0 网络
-    "slots": {"provider": "local"},       # 槽位分类：本地，0 LLM
-    "api_key": os.environ["OPENAI_API_KEY"],   # 只在写入侧抽事实时用
-    # 单独一个库：本地 E5 是 384 维，跟默认库（OpenAI 1536 维）混用会直接报
-    # shapes (n,384) and (1536,) not aligned
+    "embedding": {"provider": "local"},
+    "slots": {"provider": "local"},
+    "api_key": os.environ["OPENAI_API_KEY"],
+    # Share the local-embedding example store with examples 01 and 02.
     "memory_root": str(Path(__file__).resolve().parent / "example_memory"),
 })
 
@@ -45,8 +38,7 @@ def show_partial(text):
 async def main():
     vm.warmup()
 
-    # sounddevice 的回调跑在自己的线程里，不能直接 await。用队列过一道，
-    # 让事件循环这边去取——回调里只做搬运，一点都别阻塞，否则会丢音频。
+    # Transfer audio from the sounddevice callback thread to the async consumer.
     blocks: queue.Queue = queue.Queue()
 
     def on_audio(indata, frames, time_info, status):
@@ -76,7 +68,7 @@ async def main():
             else:
                 print("[查] 还没有相关记忆（库是空的，多说几句就有了）")
 
-            # 写入是秒级的，丢线程别挡住麦克风
+            # Schedule synchronous ingestion outside the microphone loop.
             asyncio.create_task(asyncio.to_thread(vm.ingest, st.transcript))
             print("[存] 已写入，下次可被检索\n", flush=True)
 

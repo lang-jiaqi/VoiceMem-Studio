@@ -5,7 +5,16 @@ __pycache__/
 build/
 dist/
 .pytest_cache/
-tests/
+# Publish organized regressions while keeping root-level local experiments ignored.
+/tests/*
+!/tests/__init__.py
+!/tests/README.md
+!/tests/requirements.txt
+!/tests/voicemem/
+!/tests/studio/
+!/tests/frontend/
+!/tests/helpers/
+!/tests/manual/
 
 # 运行时数据：记忆库、评测结果、录音归档
 results/

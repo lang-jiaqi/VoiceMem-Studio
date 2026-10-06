@@ -42,9 +42,7 @@ def models(args, stage="all"):
             Model('三级回复路由', 'reply-router/Qwen3-0.6B', 'Qwen/Qwen3-0.6B',
                   HF + ('tokenizer.json',), ('*.json', '*.safetensors', '*.txt', '*.jinja')),
         ])
-        from studio.core.utils.tts.qwen_audio_api import selected as qwen_tts_selected
-        remote_tts = qwen_tts_selected()
-        if not remote_tts and args.backend == 'cuda':
+        if args.backend == 'cuda':
             from studio.core.utils.tts.cuda import model_directory
             from studio.paths import ROOT
             shared.append(Model('Breeze CUDA', str(model_directory()), 'BreezeBlue/breeze-tts-2',
@@ -52,7 +50,7 @@ def models(args, stage="all"):
                                  'tokenizer.json', 'audio_tokenizer/config.json',
                                  'audio_tokenizer/*.safetensors'),
                                 legacy=(str(ROOT.parent / 'breeze-tts-2'), 'tts/breeze-tts-2')))
-        elif not remote_tts:
+        else:
             shared.append(Model('Breeze MLX', 'tts/Breeze-TTS-2-mlx-4bit',
                                 'mlx-community/Breeze-TTS-2-mlx-4bit', HF + ('tokenizer.json',)))
         if args.llm == 'local':

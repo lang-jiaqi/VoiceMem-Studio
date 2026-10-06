@@ -5,7 +5,7 @@ from studio.core.utils.dialogue.component import backchannel_policy_summary
 class Speech:
     def _backchannel_tts(self):
         if self.MODE == "realtime":
-            from studio.core.utils.tts.providers import TTS_VOICE
+            from voicemem.tts import TTS_VOICE
             rt = str(TTS_VOICE or "")
             if rt not in self._TTS_SHARED_VOICES:
                 print(f"[backchannel] Realtime 音色 {rt!r} 在 TTS API 里没有对应的，"
@@ -13,7 +13,7 @@ class Speech:
                       f"想开就把 OPENAI_REALTIME_VOICE 换成 "
                       f"{'/'.join(sorted(self._TTS_SHARED_VOICES))} 之一。", flush=True)
                 return None
-            from studio.core.utils.tts.providers import OpenAITTS
+            from voicemem.tts import OpenAITTS
             return OpenAITTS(voice=rt)
         tts = self.vm.utils.get("tts")
 

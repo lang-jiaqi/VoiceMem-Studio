@@ -21,9 +21,7 @@ class VoiceAgent(
     Speech, Capture, Visualization, Startup,
 ):
     """Own application state while each utility retains its session/task boundary."""
-    def __init__(self, args, *, space_root=None, public_demo=False):
-        self._SPACE_ROOT = space_root
-        self.PUBLIC_DEMO = public_demo
+    def __init__(self, args):
         configure(self, args)
 
     async def llm_tts_session(self, socket):

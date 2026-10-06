@@ -1,19 +1,14 @@
-"""接 Realtime 语音模型：voicemem 只管记忆，音频平行喂给 gpt-realtime / qwen-omni-realtime。
+"""Connect a standalone VoiceMem microphone agent to a realtime speech API.
 
     pip install sounddevice pywebrtc-audio "websockets>=14"
 
     OPENAI_API_KEY=sk-...    python examples/05_realtime_gpt_qwen.py gpt
     DASHSCOPE_API_KEY=sk-... python examples/05_realtime_gpt_qwen.py qwen
 
-麦克风的每一块音频（已消过回声）走两条路：一条进 realtime 出原生语音，一条进
-voicemem 做投机预取。本地 VAD 判「说完了」的那一刻记忆已经是现成的，直接跟着
-response.create 发过去——所以记忆不占回复前面那段时间。
-
-两条路各有各的消费者（uplink / 主循环），不排在一起：feed() 的 ASR 是在事件循环上
-跑的，串在一起的话它抖一下，发给 realtime 的上行音频也跟着抖。
-
-两家的事件名一样（session.update / input_audio_buffer.append / response.create /
-response.*audio.delta），只有 session 那一段的结构不同，见下面两个 dict。
+Echo-cancelled microphone audio feeds both the remote speech API and VoiceMem.
+Separate consumers keep audio upload independent of local turn processing.
+Confirmed turns attach their memory context to response.create. Provider-specific
+session payloads and sample rates are configured below, independently of Studio.
 """
 import argparse
 import asyncio
@@ -35,14 +30,13 @@ GPT = {
     "url": "wss://api.openai.com/v1/realtime?model=gpt-realtime",
     "key_env": "OPENAI_API_KEY",
     "in_rate": 24000,
-    # turn_detection 在 session.audio.input 下，**不是顶层**——写成顶层会被静默拒绝。
-    # create_response=False：什么时候回复由我们决定（等本地判完一轮、记忆预取好）；
-    # interrupt_response=True：用户一开口服务端直接掐掉正在播的回复。
+    # Disable automatic replies so confirmed local turns can attach memory.
+    # Server VAD still interrupts active responses when it detects speech.
     "session": {"type": "realtime", "audio": {
         "input": {"turn_detection": {"type": "server_vad", "create_response": False,
                                      "interrupt_response": True}},
         "output": {"voice": "marin"}}},
-    # 记忆写入侧还要个普通 chat 模型抽事实，这条路用 OpenAI 的。
+    # Fact extraction uses a separate chat request.
     "llm": {"model": "gpt-4o-mini", "api_key": os.environ.get("OPENAI_API_KEY"),
             "base_url": None},
 }
@@ -55,20 +49,18 @@ QWEN = {
                 "input_audio_format": "pcm16", "output_audio_format": "pcm16",
                 "turn_detection": {"type": "server_vad", "create_response": False,
                                    "interrupt_response": True}},
-    # 抽事实也留在阿里这边：DashScope 的 OpenAI 兼容模式。
+    # Fact extraction uses DashScope's OpenAI-compatible endpoint.
     "llm": {"model": "qwen-plus", "api_key": os.environ.get("DASHSCOPE_API_KEY"),
             "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"},
 }
 
-# 服务端 VAD 判完一句会自己 commit 音频缓冲，我们随后那次 commit 就撞上空缓冲。
-# 说得太短时它不会自动 commit，所以手动那次得留着——这条属于预期内。
-# response_cancel_not_active：打断有两条路（本地 AEC 和服务端 VAD），互为备份，
-# 谁先到算谁的，慢的那个扑空是正常的。
+# Server VAD may already have committed the buffer when the local turn commits it.
+# Local and server interruption can also race to cancel the same response.
 _EXPECTED_ERRORS = ("input_audio_buffer_commit_empty", "response_cancel_not_active")
 
 
 def to_wire(pcm: bytes, rate: int) -> str:
-    """麦克风块（16k，AEC 的原生档）→ 这一家要的采样率 → base64。"""
+    """Resample microphone PCM16 to the provider's input rate and encode as base64."""
     if rate != SR:
         f = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
         out = resample(f, src=SR, dst=rate)
@@ -79,20 +71,20 @@ def to_wire(pcm: bytes, rate: int) -> str:
 async def main(p, name):
     vm = VoiceMem.from_config({
         "mode": "normal",
-        "embedding": {"provider": "local"},     # 检索 0 网络，投机预取才来得及
+        "embedding": {"provider": "local"},
         "slots":     {"provider": "local"},
         "llm": {"provider": "openai", "config": p["llm"]},
     })
 
     loop = asyncio.get_running_loop()
-    to_ws: asyncio.Queue = asyncio.Queue()      # 上行给 realtime
-    to_vm: asyncio.Queue = asyncio.Queue()      # 同一份音频，给记忆预取
+    to_ws: asyncio.Queue = asyncio.Queue()
+    to_vm: asyncio.Queue = asyncio.Queue()
     stream = vm.stream(src_rate=SR)
     turn = {"text": "", "reply": "", "live": False}
 
     print("[warmup] 正在加载模型…", flush=True)
-    await asyncio.to_thread(vm.warmup)           # E5 + FunASR + silero + 感知
-    await asyncio.to_thread(vm.search, "预热")   # 向量库
+    await asyncio.to_thread(vm.warmup)
+    await asyncio.to_thread(vm.search, "预热")
     await stream.feed(b"\x00" * 320)
 
     key = os.environ[p["key_env"]]
@@ -102,7 +94,7 @@ async def main(p, name):
         await ws.send(json.dumps({"type": "session.update", "session": p["session"]}))
 
         def on_barge_in():
-            """本地 AEC 听到人声（播放缓冲已经清了）→ 让服务端也别再生成。"""
+            """Cancel remote generation after AudioIO has stopped local playback."""
             if not turn["live"]:
                 return
             turn["live"] = False
@@ -112,22 +104,21 @@ async def main(p, name):
         audio = AudioIO(loop, on_barge_in=on_barge_in)
 
         async def split():
-            """一份音频，两条路。"""
+            """Send each microphone block to both consumers."""
             while True:
                 pcm = await audio.mic.get()
                 to_ws.put_nowait(pcm)
                 to_vm.put_nowait(pcm)
 
         async def uplink():
-            """音频上行独占一条协程，不跟本地 ASR 排队。"""
+            """Upload audio independently of local turn processing."""
             while True:
                 pcm = await to_ws.get()
                 await ws.send(json.dumps({"type": "input_audio_buffer.append",
                                           "audio": to_wire(pcm, p["in_rate"])}))
 
         async def pump():
-            """事件流只能有一个消费者，收音频/文本/收尾都在这里——所以这里面
-            一律不许有阻塞调用。"""
+            """Consume remote events without blocking on playback or ingestion."""
             async for raw in ws:
                 ev = json.loads(raw)
                 t = ev.get("type", "")
@@ -140,15 +131,14 @@ async def main(p, name):
                         turn["reply"] += ev["delta"]
                         print(ev["delta"], end="", flush=True)
                 elif t.endswith("input_audio_buffer.speech_started"):
-                    # 服务端 VAD 听到人声：它那侧已经掐了回复，本地缓冲也得清，
-                    # 不然那几秒照样播完，听感是「打断没用」。
+                    # Remote cancellation cannot remove PCM already buffered locally.
                     if turn["live"]:
                         turn["live"] = False
                         audio.stop_playing()
                 elif t.endswith("response.done") or t.endswith("response.cancelled"):
                     turn["live"] = False
                     audio.assistant_done()
-                    # 存记忆是秒级的，丢线程里；卡在这儿等于整条会话不响应。
+                    # Keep synchronous ingestion outside the WebSocket event consumer.
                     asyncio.create_task(asyncio.to_thread(
                         vm.ingest, turn["text"], agent_reply=turn["reply"], async_facts=True))
                     turn["reply"] = ""
@@ -171,8 +161,7 @@ async def main(p, name):
                 print(f"\n你：{st.transcript}\n助手：", end="", flush=True)
 
                 await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-                # 记忆走 per-response 的 instructions，不是 session.update——后者是
-                # 会话级设置，这一轮模型根本读不到（库里明明检索到了，它还说没听清）。
+                # Attach the current memory snapshot to this response only.
                 await ws.send(json.dumps({"type": "response.create", "response": {
                     "instructions": f"{PERSONA}\n\n{st.memory_context}"}}))
                 audio.assistant_started()

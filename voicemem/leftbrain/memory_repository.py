@@ -1,7 +1,7 @@
-"""左脑双写存储：Mem0 Platform 风格 JSON + SQLite 向量库 + 认知图。
+"""Factual-memory persistence: Mem0 vectors, the Space mirror, and cognitive metadata.
 
-语义记忆：``memories.json`` + ``voicemem_leftbrain.sqlite``（向量）。
-认知图：``cognitive_graph.sqlite``（entities / edges / slot_profiles / right-brain stub）。
+Query classification, candidate expansion and ranking belong to ``LeftBrain``.
+The base repository preserves vector-store injection and maintenance APIs.
 """
 
 from __future__ import annotations
@@ -53,11 +53,9 @@ class LeftBrainMemoryRepositoryConfig:
 
 
 class LeftBrainMemoryRepository:
-    """Mem0 JSON 镜像、向量库、认知图（Cognitive Graph）。
+    """Persist facts and delegate vector queries to the injected backend."""
 
-    ``search`` 纯向量检索；
-    ``search_with_cognitive_scope`` 先从认知图缩小范围再向量检索。
-    """
+    _cognitive_store_type = CognitiveGraphStore
 
     def __init__(
         self,
@@ -98,7 +96,7 @@ class LeftBrainMemoryRepository:
                 if cfg.cognitive_db_path is not None
                 else root / _DEFAULT_COGNITIVE_DB_NAME
             )
-            self._cognitive_store = CognitiveGraphStore(cog_db, embedder=self._embedder)
+            self._cognitive_store = self._cognitive_store_type(cog_db, embedder=self._embedder)
         self._cognitive_annotator: CognitiveAnnotator | NullAnnotator | None = cognitive_annotator
 
         # 右脑（可选注入，不影响任何现有方法）
@@ -311,21 +309,15 @@ class LeftBrainMemoryRepository:
         top_k: int = 5,
         threshold: float | None = None,
         relation_depth: int = 1,
-    ) -> list[GraphSearchHit]:
-        """语义检索后附加本地图关系上下文。"""
-        hits = self.search(query, user_id=user_id, top_k=top_k, threshold=threshold)
-        if self._graph_store is None:
-            return [
-                GraphSearchHit(
-                    memory=h,
-                    graph=GraphMemoryContext(memory_id=h.memory_id),
-                )
-                for h in hits
-            ]
-        return self._graph_store.enrich_hits(
-            hits,
-            user_id=user_id,
-            relation_depth=relation_depth,
+    ) -> list[Any]:
+        """Deprecated legacy entry point; always raise NotImplementedError.
+
+        Use VoiceMem.search() for the supported cognitive-graph and dual-brain
+        retrieval pipeline. This method performs no search or background work.
+        """
+        raise NotImplementedError(
+            "search_with_graph() is a retired, unsupported repository API. "
+            "Use VoiceMem.search() for cognitive-graph and dual-brain retrieval."
         )
 
     @property
@@ -348,48 +340,15 @@ class LeftBrainMemoryRepository:
         use_slot_filtering: bool = True,
         signals=None,   # CurrentSignals | None
     ) -> tuple[list, Any, dict]:
-        """左右脑并行检索，返回 (left_hits, right_context, trace)。
+        """Deprecated legacy entry point; always raise NotImplementedError.
 
-        - left_hits: 与 search_with_cognitive_scope 完全相同
-        - right_context: RightBrainContext（experience_repo=None 时为空）
-        - trace: 左脑 trace + right_brain_empty 标记
-
-        所有现有调用方只用左脑时不需要改任何代码，
-        只有需要右脑时才调用此方法。
+        Use VoiceMem.search() for the supported cognitive-graph and dual-brain
+        retrieval pipeline. This method performs no search or background work.
         """
-        from concurrent.futures import ThreadPoolExecutor
-
-        # ── 左脑（已有逻辑，不做任何修改）────────────────────────────────────
-        def _left():
-            return self.search_with_cognitive_scope(
-                query,
-                user_id=user_id,
-                top_k=top_k,
-                scope_min=scope_min,
-                scope_ratio_max=scope_ratio_max,
-                use_slot_filtering=use_slot_filtering,
-            )
-
-        # ── 右脑（无 experience_repo 时快速返回空）────────────────────────────
-        def _right():
-            if self._experience_repo is None:
-                from voicemem.rightbrain.types import RightBrainContext, CurrentSignals
-                return RightBrainContext(current_signals=signals or CurrentSignals())
-            plan = self._experience_repo.build_query_plan(
-                query, user_id, signals=signals,
-            )
-            return self._experience_repo.retrieve(plan)
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            from voicemem.lang import contextualize
-            fut_left  = pool.submit(contextualize(_left))
-            fut_right = pool.submit(contextualize(_right))
-            left_hits, trace = fut_left.result()
-            right_context    = fut_right.result()
-
-        trace["right_brain_active"] = self._experience_repo is not None
-        trace["right_brain_empty"]  = right_context.is_empty()
-        return left_hits, right_context, trace
+        raise NotImplementedError(
+            "search_combined() is a retired, unsupported repository API. "
+            "Use VoiceMem.search() for cognitive-graph and dual-brain retrieval."
+        )
 
     def backfill_cognitive_graph_from_json(
         self,

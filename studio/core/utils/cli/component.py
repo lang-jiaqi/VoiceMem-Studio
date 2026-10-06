@@ -49,7 +49,8 @@ def parse_args(argv=None):
     parser.add_argument("--memory-llm", choices=("deepseek", "qwen", "openai"),
                         default=os.environ.get("VOICEMEM_MEMORY_PROVIDER") or None,
                         help="VoiceMem 记忆整理 API；默认跟随 --llm")
-    parser.add_argument("--memory_root", default="")
+    parser.add_argument("--memory_root", default="",
+                        help="指定单个记忆库目录；使用时固定当前 Space，不支持新建或切换")
     parser.add_argument("--spec_min_chars", type=int, default=6)
     parser.add_argument("--gamble_ms", type=int, default=200)
     parser.add_argument("--eot", action=argparse.BooleanOptionalAction, default=True)

@@ -22,8 +22,8 @@ async def main(args):
     # Match the demo's first-clause settings before importing the splitter.
     os.environ.setdefault("VOICEMEM_TTS_FIRST_MIN", "2")
     os.environ.setdefault("VOICEMEM_TTS_FIRST_SOFT", "1")
-    from voicemem import persona
-    from voicemem import tts_control
+    from studio.core.utils.prompts import legacy_persona as persona
+    from studio.core.utils.tts import control as tts_control
     from voicemem.reply import deepseek_reply
     from voicemem.tts import cut_point
     provider = deepseek_reply(

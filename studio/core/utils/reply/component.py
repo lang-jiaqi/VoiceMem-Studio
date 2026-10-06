@@ -6,7 +6,7 @@ import threading
 import time
 from contextlib import aclosing
 from studio.web import transport as utils
-from studio.core.utils.tts.audio_timing import TimedAudioChunk
+from voicemem.audio_timing import TimedAudioChunk
 from voicemem import gate
 from studio.core.utils.tts import control as tts_control
 
@@ -78,7 +78,7 @@ class Reply:
         ready = asyncio.Event()
         display = asyncio.create_task(self._send_reply_display(
             pending, send, ready, timeline.output_id, context_space, memory_vm))
-        from studio.core.utils.logging_utils.prompt_trace import prompt_scope
+        from voicemem.utils.common.prompt_trace import prompt_scope
         try:
             with prompt_scope(output_id=timeline.output_id, session=context_session,
                               space=context_space, early=bool(getattr(pending, "early_ok", False))):
@@ -93,9 +93,17 @@ class Reply:
             raise
         except Exception as exc:
             # Surface provider failure without exposing exception details or credentials.
+            from studio.core.utils.contracts.component import SpeechSynthesisError
+            english = getattr(pending, "language", "") == "en"
+            speech_failed = isinstance(exc, SpeechSynthesisError)
+            message = (("Speech synthesis failed. Please try again." if english else
+                        "语音合成失败，请重试。") if speech_failed else
+                       ("The reply could not finish. Please try again." if english else
+                        "回复未能完成，请重试。"))
             try:
-                await send({"type": "error", "message":
-                            "回复服务刚才没有及时返回，已自动重试；请再说一次。"})
+                await send({"type": "error", "output_id": timeline.output_id,
+                            "code": "speech_failed" if speech_failed else "reply_failed",
+                            "message": message})
             except Exception:
                 pass
             raise
@@ -144,6 +152,7 @@ class Reply:
         private_control = PrivateControlFilter()
         tone = {"tag": "", "head": True, "buf": ""}
         from studio.core.utils.tts.markdown import MarkdownSpeech
+        from studio.core.utils.contracts.component import SpeechSynthesisError
         speech_markdown = MarkdownSpeech(
             language, language_resolver=lambda: detect_language(reply, language, keep_short=False))
         logged_instruction = object()
@@ -199,6 +208,8 @@ class Reply:
                         try:
                             async with aclosing(_synth_one(seg, text_start)) as speech:
                                 async for chunk in speech:
+                                    if not getattr(chunk, "pcm", chunk):
+                                        continue
                                     if not state["first"]:
                                         state["first"] = True
                                         if self.BARGE_DEBUG:
@@ -207,11 +218,16 @@ class Reply:
                         finally:
                             if _serial is not None:
                                 _serial.release()
+                        if not state["first"]:
+                            raise SpeechSynthesisError("TTS segment returned no audio")
                         state["complete"] = True
                     except asyncio.CancelledError:
                         raise
                     except Exception as e:
-                        print(f"[web] 合成失败：{type(e).__name__}: {e}", flush=True)
+                        print(f"[web] 合成失败：{type(e).__name__}", flush=True)
+                        failure = SpeechSynthesisError("TTS segment failed")
+                        failure.__cause__ = e
+                        await chunks.put(failure)
                     finally:
                         await chunks.put(None)
 
@@ -250,6 +266,8 @@ class Reply:
                     said["text"] = (said.get("text") or "") + seg
                 try:
                     while (chunk := await chunks.get()) is not None:
+                        if isinstance(chunk, SpeechSynthesisError):
+                            raise chunk
                         if isinstance(chunk, TimedAudioChunk):
                             if chunk.sample_rate != timeline.sample_rate:
                                 raise ValueError(
@@ -271,7 +289,7 @@ class Reply:
                 except Exception as e:
                     timeline.finish_segment(segment_id, complete=False)
                     print(f"[web] 语音发送中断：{type(e).__name__}", flush=True)
-                    break
+                    raise
                 else:
                     timeline.finish_segment(
                         segment_id, complete=state["complete"])
@@ -321,11 +339,15 @@ class Reply:
         speaker = asyncio.create_task(speak())
         reply = ""
         interrupted = False
+        generation = None
 
         async def _drop_pipeline():
-            for task in (segmenter, speaker, synther, *synths):
+            tasks = [segmenter, speaker, synther, *synths]
+            if generation is not None:
+                tasks.append(generation)
+            for task in tasks:
                 task.cancel()
-            await asyncio.gather(segmenter, speaker, synther, *synths, return_exceptions=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         _hot = self.hot_path_enter()
         try:
@@ -427,66 +449,69 @@ class Reply:
                     delta = parsed.rest
                 await consume_tone(delta)
 
-            async for d in deltas:
-                if not _lat["llm"]:
-                    _lat["llm"] = (time.monotonic() - _t0) * 1000
-                await consume_delta(d)
-            # Only normal EOF may resolve buffered prefixes. Cancellation and
-            # provider failures must never leak a private control header.
-            if control["head"]:
-                parsed = split_control_prefix(control["buf"], final=True)
-                control["head"], control["buf"] = False, ""
-                if parsed.error:
-                    print(f"[self-harness] 忽略模型控制头：{parsed.error}",
-                          flush=True)
-                apply_self_harness_update(parsed.update)
-                await consume_tone(parsed.rest, final=True)
-            else:
-                await consume_tone("", final=True)
-            if timeline.source_text is not None:
-                emit_speech("", final=True)
+            async def generate_text():
+                try:
+                    async with aclosing(deltas):
+                        async for d in deltas:
+                            if not _lat["llm"]:
+                                _lat["llm"] = (time.monotonic() - _t0) * 1000
+                            await consume_delta(d)
+                    # Only normal EOF may resolve buffered prefixes. Cancellation and
+                    # provider failures must never leak a private control header.
+                    if control["head"]:
+                        parsed = split_control_prefix(control["buf"], final=True)
+                        control["head"], control["buf"] = False, ""
+                        if parsed.error:
+                            print(f"[self-harness] 忽略模型控制头：{parsed.error}",
+                                  flush=True)
+                        apply_self_harness_update(parsed.update)
+                        await consume_tone(parsed.rest, final=True)
+                    else:
+                        await consume_tone("", final=True)
+                    if timeline.source_text is not None:
+                        emit_speech("", final=True)
+                finally:
+                    text_queue.put_nowait(None)
+
+            generation = asyncio.create_task(generate_text())
+            # Any failed stage stops the reply, even while the LLM is awaiting tokens.
+            await asyncio.gather(generation, segmenter, synther, speaker)
         except asyncio.CancelledError:
             interrupted = True
         except Exception:
             await _drop_pipeline()
+            timeline.mark_interrupted()
             self.hot_path_exit(_hot)
             raise
-        finally:
-            text_queue.put_nowait(None)
 
         if interrupted:
             await _drop_pipeline()
         else:
 
+            self.hot_path_exit(_hot)
+            acoustic = None
+            if not getattr(timeline, "context_managed", False):
+                acoustic = self._kick_acoustic(
+                    send, pending.audio_path or "", output_id=timeline.output_id,
+                    is_current=lambda: (not timeline.interrupted
+                                        and self.ACTIVE_SPACE == context_space and self.vm is memory_vm))
+            timeline.mark_generation_complete()
             try:
-                await segmenter
-                await synther
-                await speaker
+                await send({"type": "answer_done", "output_id": timeline.output_id})
+                if getattr(timeline, "context_managed", False):
+                    return
+                timeout = max(2.0, min(
+                    60.0, timeline.sent_samples / timeline.sample_rate + 2.0))
+                await asyncio.wait_for(timeline.wait_playback_done(), timeout=timeout)
+            except asyncio.TimeoutError:
+                timeline.assume_drained()
             except asyncio.CancelledError:
                 interrupted = True
                 await _drop_pipeline()
-            except Exception:
-                await _drop_pipeline()
-                self.hot_path_exit(_hot)
-                raise
-            else:
-
-                self.hot_path_exit(_hot)
-                if not getattr(timeline, "context_managed", False):
-                    self._kick_acoustic(send, pending.audio_path or "")
-                timeline.mark_generation_complete()
-                try:
-                    await send({"type": "answer_done", "output_id": timeline.output_id})
-                    if getattr(timeline, "context_managed", False):
-                        return
-                    timeout = max(2.0, min(
-                        60.0, timeline.sent_samples / timeline.sample_rate + 2.0))
-                    await asyncio.wait_for(timeline.wait_playback_done(), timeout=timeout)
-                except asyncio.TimeoutError:
-                    timeline.assume_drained()
-                except asyncio.CancelledError:
-                    interrupted = True
-                    await _drop_pipeline()
+            finally:
+                if acoustic is not None:
+                    acoustic.cancel()
+                    await asyncio.gather(acoustic, return_exceptions=True)
 
         if getattr(timeline, "context_managed", False):
             if interrupted:

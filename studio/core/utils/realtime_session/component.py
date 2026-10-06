@@ -18,8 +18,10 @@ class RealtimeSession:
                 "prefix_padding_ms": 200, "silence_duration_ms": 320}
 
     async def start_realtime_turn(self, pending, conn, send, timeline,
-                                  context_session="", context_space=""):
+                                  context_session="", context_space="", is_current=None):
         """Send the confirmed turn context and start realtime generation."""
+        memory_vm = self.vm
+        space = context_space or self.ACTIVE_SPACE
         if not getattr(pending, "transcript_managed", False):
             from studio.core.utils.contracts.component import input_transcript_event
             await send(input_transcript_event(pending))
@@ -30,7 +32,6 @@ class RealtimeSession:
                     **self.fill_tags(utils.hits_payload(pending.result, has_audio=self.audio_of,
                                                   cluster_of=self.hit_cluster),
                                 pending.text, pending.audio_path or "", acoustic=False)})
-        self._kick_acoustic(send, pending.audio_path or "")
         if pending.replay:
 
             self._note_replay(pending.replay)
@@ -54,6 +55,11 @@ class RealtimeSession:
         })
         await send({"type": "answer_start", "output_id": timeline.output_id,
                     "sample_rate": timeline.sample_rate})
+        return self._kick_acoustic(
+            send, pending.audio_path or "", output_id=timeline.output_id,
+            is_current=lambda: (not timeline.interrupted and self.vm is memory_vm
+                                and self.ACTIVE_SPACE == space
+                                and (is_current is None or is_current())))
 
     async def truncate_provider_output(self, conn, provider_item_id: str,
                                        timeline: AudioTimeline) -> None:
@@ -102,6 +108,7 @@ class RealtimeSession:
         """Run Realtime speech while local ASR/VAD owns turn confirmation."""
         connected = False
         context_session = uuid.uuid4().hex
+        acoustic_tasks: set[asyncio.Task] = set()
         try:
             async with utils.realtime_connect(self.REPLY) as conn:
 
@@ -392,10 +399,16 @@ class RealtimeSession:
                             memory_vm=memory_vm)
                         response_idle.clear()
                         try:
-                            await self.start_realtime_turn(
+                            for task in acoustic_tasks:
+                                task.cancel()
+                            acoustic = await self.start_realtime_turn(
                                 pending, conn, sock.send_json, timeline,
                                 context_session=context_session,
-                                context_space=context_space)
+                                context_space=context_space,
+                                is_current=lambda output=timeline: turn["timeline"] is output)
+                            if acoustic is not None:
+                                acoustic_tasks.add(acoustic)
+                                acoustic.add_done_callback(acoustic_tasks.discard)
                         except Exception:
                             response_idle.set()
                             raise
@@ -423,4 +436,8 @@ class RealtimeSession:
                 raise
             await self._no_realtime(sock, e)
         finally:
+            for task in acoustic_tasks:
+                task.cancel()
+            if acoustic_tasks:
+                await asyncio.gather(*tuple(acoustic_tasks), return_exceptions=True)
             self._SESSION_CONTEXT.clear_session(context_session)

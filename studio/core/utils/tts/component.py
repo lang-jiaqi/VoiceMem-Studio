@@ -156,7 +156,7 @@ class BreezeMLXTTS:
         if not text.strip():
             return
         async with self._lock:
-            from studio.core.utils.logging_utils.prompt_trace import record_request
+            from voicemem.utils.common.prompt_trace import record_request
             record_request("tts", "breeze_mlx", {
                 "model": self.model_name, "text": text,
                 "instruct": instruction or self.instruction,

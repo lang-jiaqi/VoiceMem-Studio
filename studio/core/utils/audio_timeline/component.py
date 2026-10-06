@@ -6,7 +6,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-from studio.core.utils.tts.audio_timing import OUTPUT_SAMPLE_RATE, TextTimestamp
+from voicemem.audio_timing import OUTPUT_SAMPLE_RATE, TextTimestamp
 
 DEFAULT_SPEECH_UNITS_PER_SECOND = 5.2
 

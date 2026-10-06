@@ -61,7 +61,7 @@ async def generate_local_filler(task_context: str, *, history: Sequence[dict] = 
     text = await router.generate_short_text_async(
         generation_prompt('', lang), prompt, max_tokens=40,
         timeout_s=WORK_FILLER_TIMEOUT_S)
-    from voicemem import tts_control
+    from studio.core.utils.tts import control as tts_control
     tag, spoken = tts_control.split(text)
     text = (spoken if tag else text).strip().strip('“”\"')
     limit = 100 if lang == 'en' else 36
@@ -105,7 +105,7 @@ async def generate_filler(
     text = "".join(chunks).strip()
     # The normal llm_tts system prompt asks for a private leading tone tag.
     # Fillers are public speech too, so remove that transport-only prefix here.
-    from voicemem import tts_control
+    from studio.core.utils.tts import control as tts_control
     tag, spoken = tts_control.split(text)
     return spoken.strip() if tag else text
 

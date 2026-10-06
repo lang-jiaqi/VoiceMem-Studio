@@ -1,19 +1,10 @@
-"""启动自检：逐个独立测速每个组件，在 console 打印一份简单测评报告，用于门控启动。
+"""Opt-in capability probes and startup reporting for VoiceMem callers.
 
-用法（见 openai_voice_demo/backend/main.py 的接入）::
-
-    from voicemem.startup_check import check_and_gate
-    if not check_and_gate(vm):          # 打印报告；全达标返回 True 直接启动
-        raise SystemExit("用户在自检后取消启动")
-
-设计要点：
-  · 每个组件独立探一次（构造 + 跑一次代表性操作），测单次延迟，互不影响。
-  · 缺依赖 / 缺模型 / 缺 API key → 记为 SKIP（不参与速度门控），不是 FAIL。
-  · 每类组件一个经验默认速度预算（ms），可用环境变量
-    ``VOICEMEM_STARTUP_BUDGET_<KEY>`` 覆盖（如
-    ``VOICEMEM_STARTUP_BUDGET_SPEAKER_ENCODER=2000``）。
-  · 全部达标 → 直接启动；有组件偏慢（SLOW）或异常（FAIL）→ 询问是否仍启动。
-"""
+Each probe constructs its component and exercises a representative operation.
+Unavailable optional dependencies, models and credentials are reported as SKIP.
+Latency budgets can be overridden with VOICEMEM_STARTUP_BUDGET_<KEY>.
+The interactive gate asks whether to continue only for slow or failed probes;
+Studio owns its separate application startup profile."""
 
 from __future__ import annotations
 
@@ -28,13 +19,12 @@ from math import sin, tau
 from pathlib import Path
 from typing import Any, Callable
 
-# ── 状态 ─────────────────────────────────────────────────────────────────────
 OK, SLOW, SKIP, FAIL = "ok", "slow", "skip", "fail"
 _SYMBOL = {OK: "✓ 达标", SLOW: "⚠ 偏慢", SKIP: "– 跳过", FAIL: "✗ 异常"}
 
 
 class SkipProbe(Exception):
-    """探针主动跳过（依赖/模型/凭证缺失，不算失败）。"""
+    """Report an unavailable optional dependency, model or credential without marking failure."""
 
 
 @dataclass
@@ -60,7 +50,7 @@ class StartupReport:
 
     @property
     def needs_confirm(self) -> bool:
-        """有偏慢或异常的组件时，需要向用户确认是否仍启动。"""
+        """Return whether a slow or failed probe requires interactive continuation."""
         return bool(self.slow or self.failed)
 
     def render(self) -> str:
@@ -82,15 +72,14 @@ class StartupReport:
         return "\n".join(lines)
 
 
-# ── 默认速度预算（ms）─────────────────────────────────────────────────────────
-# 每类组件一个经验值；音频模型首次推理含加载，预算给得宽。可用环境变量覆盖。
+# Budgets are configurable per component through startup environment settings.
 _DEFAULT_BUDGETS: dict[str, float] = {
-    "preprocess_text":  400,    # 文本预处理（情绪兜底 + 声纹注册表）
-    "scene_classifier": 60,     # 纯 python 场景归类
-    "emotion_vad":      500,    # 韵律 V/A（RMS/ZCR，无 LLM）
-    "environment_ast":  8000,   # AST 声学场景（首次含模型加载/下载）
-    "speaker_encoder":  4000,   # 3D-Speaker 声纹（worker 子进程 + onnx）
-    "dual_search":      300,    # 双脑检索稳态往返（本地 embedding 下 ~几十~300ms）
+    "preprocess_text":  400,
+    "scene_classifier": 60,
+    "emotion_vad":      500,
+    "environment_ast":  8000,
+    "speaker_encoder":  4000,
+    "dual_search":      300,
 }
 
 
@@ -104,7 +93,6 @@ def _budget(key: str) -> float:
     return _DEFAULT_BUDGETS.get(key, 1000)
 
 
-# ── 合成一段测试音频（stdlib，只用于给音频组件喂一次输入）────────────────────
 def _synth_wav(path: Path, seconds: float = 0.5, rate: int = 16000, freq: float = 220.0) -> None:
     n = int(seconds * rate)
     with wave.open(str(path), "wb") as w:
@@ -117,7 +105,6 @@ def _synth_wav(path: Path, seconds: float = 0.5, rate: int = 16000, freq: float 
         w.writeframes(bytes(frames))
 
 
-# ── 探针上下文 ───────────────────────────────────────────────────────────────
 @dataclass
 class _Ctx:
     vm: Any
@@ -137,11 +124,8 @@ class _Ctx:
         return self.vm
 
 
-# ── 各组件探针（返回 detail 或 (detail, 稳态ms)；raise SkipProbe 表示跳过）───────
-# 约定：先预热一次（把模型加载/子进程启动/懒初始化等一次性开销吃掉），再测第二次
-# 并把这个稳态耗时随 detail 一起返回——报告里显示的就是"正常状态"而非冷启动。
 def _measure(op):
-    """op 无参可调用：预热一次（不计时）再测一次，返回 (结果, 稳态ms)。"""
+    """Warm up a zero-argument operation, then return its result and measured milliseconds."""
     op()
     t0 = time.perf_counter(); res = op(); return res, (time.perf_counter() - t0) * 1000
 
@@ -176,7 +160,7 @@ def _probe_environment_ast(ctx: _Ctx):
         raise SkipProbe(f"依赖缺失(transformers/torch): {e}")
     try:
         det = ASTEnvironmentDetector()
-        _, ms = _measure(lambda: det.detect_full(ctx.wav_path))   # 预热=首次加载模型
+        _, ms = _measure(lambda: det.detect_full(ctx.wav_path))
     except (ImportError, OSError, FileNotFoundError) as e:
         raise SkipProbe(f"模型不可用: {e}")
     return ("AST 推理成功", ms)
@@ -189,7 +173,7 @@ def _probe_speaker_encoder(ctx: _Ctx):
         raise SkipProbe(f"依赖缺失(sherpa-onnx): {e}")
     try:
         enc = SpeakerEncoder(device="cpu")
-        vec, ms = _measure(lambda: enc.embed(ctx.wav_path))       # 预热=启动 worker 子进程
+        vec, ms = _measure(lambda: enc.embed(ctx.wav_path))
     except (ImportError, OSError, FileNotFoundError) as e:
         raise SkipProbe(f"模型不可用: {e}")
     if vec is None:
@@ -198,23 +182,20 @@ def _probe_speaker_encoder(ctx: _Ctx):
 
 
 def _probe_dual_search(ctx: _Ctx) -> str:
-    # Search() 一次同时召回左脑(事实 hits)+ 右脑(画像 rb_hits)——双脑检索。
-    # 先预热一次（懒加载 repo/图谱/索引都在首调发生），再测第二次，测的才是
-    # 稳态延迟（本地 embedding 下应在 ~200ms 内）；否则测到的是冷启动。
+    # Exclude lazy repository and index initialization from the reported search timing.
     vm = ctx.get_vm()
     try:
-        vm.Search("测试检索")          # 预热，不计时
+        vm.Search("测试检索")
     except Exception as e:
         raise SkipProbe(f"检索后端不可用: {e}")
     t0 = time.perf_counter()
-    r = vm.Search("测试检索")           # 计时的这次才是稳态
+    r = vm.Search("测试检索")
     ms = (time.perf_counter() - t0) * 1000
     detail = f"左{len(r.hits)}/右{len(getattr(r,'rb_hits',[]) or [])}"
-    return (detail, ms)                 # 自报稳态耗时（不含上面的预热）
+    return (detail, ms)
 
 
 _PROBES: list[tuple[str, str, Callable[[_Ctx], str]]] = [
-    # (显示名, budget key, 探针)
     ("文本预处理 preprocess",   "preprocess_text",  _probe_preprocess_text),
     ("场景分类 scene",          "scene_classifier", _probe_scene_classifier),
     ("韵律情绪 VAD",            "emotion_vad",      _probe_emotion_vad),
@@ -225,18 +206,14 @@ _PROBES: list[tuple[str, str, Callable[[_Ctx], str]]] = [
 
 
 def run_startup_check(vm: Any = None) -> StartupReport:
-    """逐个独立测速每个组件，返回测评报告（不打印、不门控）。
-
-    vm: 可选，复用已构造好的 VoiceMem（如 demo 的 memory_bridge.vm）；不传则
-        在需要时惰性构造一个默认实例，构造失败的相关探针记为 SKIP。
-    """
+    """Probe components independently and return a report without printing or gating startup."""
     report = StartupReport()
     with tempfile.TemporaryDirectory() as td:
         wav = Path(td) / "probe.wav"
         try:
             _synth_wav(wav)
         except Exception:
-            wav = Path(td) / "missing.wav"   # 音频探针会因此 SKIP
+            wav = Path(td) / "missing.wav"  # Audio probes report SKIP when the temporary fixture cannot be created.
         ctx = _Ctx(vm=vm, wav_path=wav)
         for name, key, fn in _PROBES:
             budget = _budget(key)
@@ -244,26 +221,20 @@ def run_startup_check(vm: Any = None) -> StartupReport:
             try:
                 detail = fn(ctx)
                 elapsed = (time.perf_counter() - t0) * 1000
-                # 探针可返回 (detail, measured_ms) 自报稳态耗时（如预热后再测），
-                # 此时以自报值判定，而不是含预热的墙钟时间。
                 if isinstance(detail, tuple):
                     detail, elapsed = detail[0], float(detail[1])
                 status = OK if elapsed <= budget else SLOW
                 report.results.append(ProbeResult(name, status, budget, elapsed, detail))
             except SkipProbe as e:
                 report.results.append(ProbeResult(name, SKIP, budget, None, str(e)))
-            except Exception as e:  # noqa: BLE001 — 未预期异常记为 FAIL
+            except Exception as e:  # noqa: BLE001
                 elapsed = (time.perf_counter() - t0) * 1000
                 report.results.append(ProbeResult(name, FAIL, budget, elapsed, f"{type(e).__name__}: {e}"))
     return report
 
 
 def check_and_gate(vm: Any = None, *, interactive: bool | None = None) -> bool:
-    """跑自检、打印报告，并据结果决定是否启动。
-
-    返回 True 表示可以启动。全部达标 → 直接 True；有偏慢/异常组件 → 询问用户
-    （非交互终端下默认放行并打印告警，避免无人值守部署被卡住）。
-    """
+    """Print the startup report and apply the existing interactive continuation gate."""
     report = run_startup_check(vm)
     print(report.render(), flush=True)
 
@@ -288,8 +259,7 @@ def check_and_gate(vm: Any = None, *, interactive: bool | None = None) -> bool:
     return go
 
 
-# ── util 自检（VoiceMem.test()）：4 档 = 不可用 / 较慢 / 正常 / 极快 ─────────────
-_UTIL_BUDGET = {   # ms，每个 util 的"正常"上限
+_UTIL_BUDGET = {  # Per-capability upper bounds for the normal tier, in milliseconds.
     "embedding": 200, "slots": 400, "entity": 400, "emotion": 500,
     "voiceprint": 3000, "asr": 5000, "memory_engine": 300,
 }
@@ -297,7 +267,7 @@ _TIER = {"极快": "⚡极快", "正常": "✓正常", "较慢": "⚠较慢", "�
 
 
 def _exercise(name, obj, wav):
-    """跑一次代表性操作（没有廉价代表操作的 util 只算构建耗时）。"""
+    """Run a representative operation when available; otherwise report construction time."""
     if name == "embedding":       obj.embed_texts(["测试"])
     elif name == "slots":         obj.classify("我今天有点累")
     elif name == "emotion":       obj.detect(wav)
@@ -306,7 +276,7 @@ def _exercise(name, obj, wav):
 
 
 def run_util_report(utils):
-    """对本 mode 需要的每个 util 加载+跑一次、测延迟，打印 4 档表格。返回结果列表。"""
+    """Probe capabilities required by the active mode, print the report and return its rows."""
     rows = []
     with tempfile.TemporaryDirectory() as td:
         wav = Path(td) / "probe.wav"

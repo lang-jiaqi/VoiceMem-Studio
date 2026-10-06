@@ -2,7 +2,6 @@ from studio.core.utils.turn_taking.pause import needs_continuation
 import asyncio
 import base64
 import json
-import sqlite3
 import threading
 import time
 import uuid
@@ -12,7 +11,7 @@ from studio.core.utils.reply_modes.initialize import DIRECT, MEMORY
 from studio.core.utils.turn_taking.initialize import Backchannel, HandoffKind, TurnTakingStateMachine, wait_for_filler_and_output
 from studio.core.utils.turn_taking.filler import generate_local_filler
 from studio.core.utils.audio_timeline.component import AudioTimeline, SpeechRateEstimator
-from studio.core.utils.tts.audio_timing import TimedAudioChunk
+from voicemem.audio_timing import TimedAudioChunk
 from voicemem import gate
 from voicemem.lang import detect_language
 from voicemem.memory_api import build_memory_context
@@ -48,47 +47,22 @@ class Conversation:
         """Apply one explicit settings-page update to this conversation."""
         try:
             self.self_harness.set_explicit(value)
-            await self._save_demo_harness(profile_update=value)
-        except (TypeError, ValueError, sqlite3.Error, OSError) as exc:
+        except (TypeError, ValueError) as exc:
             await self.publish_self_harness(error=str(exc))
 
     async def update_harness_prompt(self, name, value) -> None:
         """Apply one explicit free-text prompt to the current conversation."""
         try:
             self.self_harness.set_prompt(name, value)
-            await self._save_demo_harness(persona=self.self_harness.prompts.get("persona", ""))
-        except (TypeError, ValueError, sqlite3.Error, OSError) as exc:
+        except (TypeError, ValueError) as exc:
             await self.publish_self_harness(error=str(exc))
 
     async def update_backchannel_curve(self, value) -> None:
         """Apply explicit expected quotas for the four acknowledgement phases."""
         try:
             self.self_harness.set_backchannel_curve(value)
-            await self._save_demo_harness(backchannel_curve=self.self_harness.backchannel_curve,
-                                          profile_update={"turn_taking": {"backchannel": "auto"}})
-        except (TypeError, ValueError, sqlite3.Error, OSError) as exc:
+        except (TypeError, ValueError) as exc:
             await self.publish_self_harness(error=str(exc))
-
-    async def _save_demo_harness(self, *, profile_update=None, persona=None,
-                                 backchannel_curve=None) -> None:
-        """Keep explicit demo preferences by Space without persisting model-driven turns."""
-        save = getattr(self.agent, "_DEMO_HARNESS_SAVE", None)
-        if save is None:
-            return
-        prefs = getattr(self.agent, "_DEMO_HARNESS_PREFS", {})
-        updated = {**prefs, "profile": {**prefs.get("profile", {})}}
-        if profile_update is not None:
-            from studio.core.utils.self_harness.component import validate_update
-            for domain, fields in validate_update(profile_update).items():
-                updated["profile"][domain] = {**updated["profile"].get(domain, {}), **fields}
-        if persona is not None:
-            updated["persona"] = persona
-        if profile_update and "backchannel" in profile_update.get("turn_taking", {}):
-            updated["backchannel_curve"] = self.self_harness.backchannel_curve
-        if backchannel_curve is not None or (profile_update is None and persona is None):
-            updated["backchannel_curve"] = backchannel_curve
-        await asyncio.to_thread(save, updated)
-        self.agent._DEMO_HARNESS_PREFS = updated
 
     async def publish_user_input(self, pending) -> None:
         """Publish accepted input independently of reply/audio cancellation."""
@@ -220,10 +194,13 @@ class Conversation:
                 finalize()
 
     def reset_output_state(self, pending, timeline, reply_state, *, memory_vm=None, context_space='') -> None:
+        for task in self.acoustic_tasks:
+            task.cancel()
         memory_vm = memory_vm or self.agent.vm
         context_space = context_space or self.agent.ACTIVE_SPACE
         timeline.context_managed = True
         self.turn.update(t0=0.0, until=0.0, speech_end=pending.speech_end, play_started=False, reply=reply_state, timeline=timeline, measure_started=0.0, measure_recorded=False)
+        self.turn.update(context_space=context_space, memory_vm=memory_vm)
         self.turn['finalize'] = lambda: self.save_reply_context(pending, timeline, memory_vm, context_space)
         self.turn['generation_task'] = None
 
@@ -275,7 +252,16 @@ class Conversation:
         """Wait after delivery; a missing completion report never implies heard audio."""
         if not timeline.generation_complete or timeline.interrupted:
             return
-        self.agent._kick_acoustic(self.sock.send_json, pending.audio_path or '')
+        space = self.turn.get('context_space') or self.agent.ACTIVE_SPACE
+        memory_vm = self.turn.get('memory_vm') or self.agent.vm
+        task = self.agent._kick_acoustic(
+            self.sock.send_json, pending.audio_path or '', output_id=timeline.output_id,
+            is_current=lambda: (not self.prewarm['closed'] and not timeline.interrupted
+                                and self.turn['timeline'] is timeline
+                                and self.agent.ACTIVE_SPACE == space and self.agent.vm is memory_vm))
+        if task is not None:
+            self.acoustic_tasks.add(task)
+            task.add_done_callback(self.acoustic_tasks.discard)
         if not timeline.sent_samples or timeline.playback_done:
             return
         timeout = max(2.0, min(60.0, timeline.sent_samples / timeline.sample_rate + 2.0))
@@ -524,6 +510,10 @@ class Conversation:
 
     async def close_session(self):
         self.prewarm['closed'] = True
+        for task in self.acoustic_tasks:
+            task.cancel()
+        if self.acoustic_tasks:
+            await asyncio.gather(*tuple(self.acoustic_tasks), return_exceptions=True)
         self.stop_prewarm()
         await self.drop_early()
         continuation_task = self.turn.get('continuation_task')
