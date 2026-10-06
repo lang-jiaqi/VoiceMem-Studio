@@ -66,6 +66,7 @@
         backgroundAlpha: 0, antialias: true, autoStart: false, sharedTicker: false, resolution: 1 });
       try {
         const options = { autoUpdate: false, autoInteract: false };
+        if (root.VM_PET_MOBILE) options.crossOrigin = 'anonymous';
         this.model = await root.PIXI.live2d.Live2DModel.from(this.path, options);
         this.model.autoUpdate = false;
         const internal = this.model.internalModel;
@@ -140,7 +141,7 @@
         ? width / Math.max(1, bounds.width) * 1.8
         : Math.min(width / Math.max(1, bounds.width), height / Math.max(1, bounds.height)) * .96;
       this.model.scale.set(scale); this.model.x = width / 2 - (bounds.x + bounds.width / 2) * scale;
-      const bottom = portrait ? height * 1.84 : height;
+      const bottom = root.VM_PET_MOBILE ? height * 1.6 : portrait ? height * 1.84 : height;
       this.model.y = bottom - (bounds.y + bounds.height) * scale;
     }
     update(deltaMs) {

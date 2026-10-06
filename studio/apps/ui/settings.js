@@ -206,7 +206,7 @@ const DEFAULT_COMPONENT_LAYOUT={
  input:{x:.03,y:.12},memory:{x:.27,y:.57},reply:{x:.51,y:.12},speech:{x:.75,y:.57},pet:{x:.99,y:.12},
 };
 const COMPONENT_LINKS=[['input','memory'],['memory','reply'],['reply','speech'],['speech','pet']];
-const MODEL_DEFAULTS={deepseek:{model:'deepseek-v4-flash',baseUrl:'https://api.deepseek.com'},qwen:{model:'qwen3.6-flash',baseUrl:'https://dashscope-intl.aliyuncs.com/compatible-mode/v1'},openai:{model:'gpt-4o',baseUrl:'https://api.openai.com/v1'},local:{model:'mlx-community/Qwen3.5-4B-4bit',baseUrl:''}};
+const MODEL_DEFAULTS={deepseek:{model:'deepseek-flash',baseUrl:'https://api.deepseek.com'},qwen:{model:'qwen3.6-flash',baseUrl:'https://dashscope-intl.aliyuncs.com/compatible-mode/v1'},openai:{model:'gpt-4o',baseUrl:'https://api.openai.com/v1'},local:{model:'mlx-community/Qwen3.5-4B-4bit',baseUrl:''}};
 function providerName(value){const labels={deepseek:'DeepSeek',qwen:'Qwen',openai:'OpenAI',local:'本地模型',breeze_mlx:'Breeze MLX',breeze_cuda:'Breeze CUDA'};return labels[value]||value||'启动配置';}
 function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));}
 function componentLayout(){

@@ -1514,3 +1514,46 @@ The optional fusion interface accepts a provider-neutral `TurnAttributor` via
 affect, supplied V/A and transcript retrieval terms; semantic evidence and causal
 graph deltas remain empty. Existing persisted records are not rewritten.
 Retired multimodal adapter modules and their exports have been removed.
+
+
+## Public demo branch
+
+The `demo` branch builds on the shared Studio and VoiceMem implementation in
+`main`. Account and deployment behavior is owned by Studio; the reusable
+`voicemem` package retains the same layout, provider injection contracts and
+memory algorithms. Shared fixes, including retrieved-memory reply grounding,
+local Qdrant synchronization and graceful Python shutdown, stay in the common
+implementation. Merging `main` into `demo` requires resolving the Studio demo
+integration explicitly rather than restoring retired module aliases.
+
+`studio/web/demo_accounts.py` owns password authentication, session cookies,
+account agent leases and explicit Harness preference persistence. Its existing
+SQLite schema and data root remain unchanged. One account uses the `default`
+Space under its private root. `VoiceAgent` receives that root before memory
+construction; the Spaces utility passes the resolved directory into VoiceMem.
+HTTP and WebSocket requests select the authenticated account's agent. Pending
+native memory writes prevent idle eviction, and request cancellation releases
+an asynchronously constructed agent when construction eventually completes.
+Speaker verification remains enabled within each account's memory.
+
+`studio/web/transport.py` gates account routes and model assets, validates
+same-origin writes and WebSockets, and selects the mobile pet page on phones.
+`pet_assets.py` prepares content-versioned caches and lossless gzip assets once
+per server lifecycle. `studio/apps/ui/pet-mobile.*` owns mobile conversation and
+memory panels. Visitors can persist their explicit Harness settings; component
+credentials remain deployment-owned and are omitted from account settings.
+
+The Qwen PCM adapter lives in `studio/core/utils/tts/qwen_audio_api.py`; Studio
+injects its existing factory through `studio/core/voicemem.py`, without adding
+Qwen-specific selection to the VoiceMem SDK. A shared admission pool leases one
+connection per conversation. The existing per-session speech scope closes
+conversation tasks before releasing that connection. Capacity includes pending
+connections, rejects excess sessions immediately, and keeps API credentials
+shared on the deployment. Model inference, routing and streaming boundaries
+remain unchanged. Without Qwen selection the existing local Breeze path applies.
+
+`run_demo.sh` enables the demo on loopback port 8790 by default. Ignored local
+configuration, model roots and account data are outside Git branch updates.
+Stop the old backend before switching deployment branches and retain the data
+root; two processes must not open the same embedded memory directory. See
+`docs/public-demo.md` for configuration and deployment commands.

@@ -43,9 +43,11 @@ class Startup:
 
         async def warm_speech():
             tts = self.vm.utils.get('tts')
-            async with aclosing(tts.stream('你好')) as chunks:
-                async for _ in chunks:
-                    break
+            from studio.core.utils.tts.qwen_audio_api import QwenAudioAPI
+            if not isinstance(tts, QwenAudioAPI):
+                async with aclosing(tts.stream('你好')) as chunks:
+                    async for _ in chunks:
+                        break
             if self.ARGS.backchannel:
                 from studio.core.utils.turn_taking.initialize import BackchannelVoice
                 voice = BackchannelVoice(tts, lang=self.space_language(self.ACTIVE_SPACE))

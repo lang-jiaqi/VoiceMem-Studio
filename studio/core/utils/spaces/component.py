@@ -73,7 +73,7 @@ class Spaces:
             if safe != configured:
                 raise ValueError("--memory_root 指定的是单个记忆库，不能切换到其他空间")
             return fixed, safe
-        root = _ROOT / "voicemem_memoryspace"
+        root = getattr(self, "_SPACE_ROOT", None) or _ROOT / "voicemem_memoryspace"
         return root / safe, safe
 
     def get_space(self, name: str):
@@ -81,11 +81,12 @@ class Spaces:
         directory, safe = self.space_dir(name)
         if safe not in self._SPACES:
             if not directory.exists() or not any(directory.iterdir()):
-                directory.mkdir(parents=True, exist_ok=True)
+                directory.mkdir(mode=0o700 if getattr(self, "_SPACE_ROOT", None) else 0o777,
+                                parents=True, exist_ok=True)
                 self._write_space_language(safe, self.ARGS.lang)
             cfg = dict(self.CONFIG)
             cfg["space"] = safe
-            if self._fixed_memory_root() is not None:
+            if self._fixed_memory_root() is not None or getattr(self, "_SPACE_ROOT", None) is not None:
                 cfg["memory_root"] = str(directory)
             cfg["memory_language"] = self.space_language(safe)
 
@@ -123,7 +124,7 @@ class Spaces:
             directory, safe = self.space_dir(self.ARGS.space)
             directories = [(directory, safe)]
         else:
-            root = _ROOT / "voicemem_memoryspace"
+            root = getattr(self, "_SPACE_ROOT", None) or _ROOT / "voicemem_memoryspace"
             directories = [(d, d.name) for d in sorted(p for p in root.glob("*") if p.is_dir())]
         out = []
         for d, name in directories:

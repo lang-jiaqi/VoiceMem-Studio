@@ -11,37 +11,57 @@ async def converse(agent, socket):
     """Listen, wait, interrupt, route, then release or generate one reply."""
     from .utils.conversation.component import Conversation
     from .utils.turn_taking.pause import needs_continuation
+    from .utils.tts.initialize import conversation_speech
+    from .utils.tts.qwen_audio_api import DemoSpeechBusy, DemoSpeechUnavailable
     session = Conversation(agent, socket)
     try:
-        async with aclosing(session.listen()) as turns:
-            async for pending in turns:
-                if session.ignore(pending):
-                    continue
-                pending = await session.merge_continuation(pending)
-                session.stop_prewarm()
-                await session.publish_user_input(pending)
-                if pending.spoken and needs_continuation(pending.text):
-                    await session.drop_early('等待用户补完半句')
-                    await session.defer_unfinished_reply(pending)
-                    continue
-                ack = session.cached_ack(pending)
-                if ack:
-                    await session.emit_filler(*ack)
-                routing = await session.route(pending)
-                try:
-                    if await session.commit_early(pending, routing):
-                        continue
-                    await session.stop_reply(force=True)
-                    await session.start_reply(pending, routing)
-                finally:
-                    if not routing.done():
-                        routing.cancel()
-                    await asyncio.gather(routing, return_exceptions=True)
-    finally:
-        await session.close_session()
+        async with conversation_speech(agent) as speech:
+            session.speech_provider = speech
+            try:
+                async with aclosing(session.listen()) as turns:
+                    async for pending in turns:
+                        if session.ignore(pending):
+                            continue
+                        pending = await session.merge_continuation(pending)
+                        session.stop_prewarm()
+                        await session.publish_user_input(pending)
+                        if pending.spoken and needs_continuation(pending.text):
+                            await session.drop_early('等待用户补完半句')
+                            await session.defer_unfinished_reply(pending)
+                            continue
+                        ack = session.cached_ack(pending)
+                        if ack:
+                            await session.emit_filler(*ack)
+                        routing = await session.route(pending)
+                        try:
+                            if await session.commit_early(pending, routing):
+                                continue
+                            await session.stop_reply(force=True)
+                            await session.start_reply(pending, routing)
+                        finally:
+                            if not routing.done():
+                                routing.cancel()
+                            await asyncio.gather(routing, return_exceptions=True)
+            finally:
+                await session.close_session()
+    except (DemoSpeechBusy, DemoSpeechUnavailable) as exc:
+        english = getattr(agent, 'UI_LANG', 'zh') == 'en'
+        if isinstance(exc, DemoSpeechBusy):
+            code = 'demo_speech_busy'
+            message = ('The demo is full. Please try again shortly.' if english else
+                       '体验站当前对话人数已满，请稍后再试。')
+        else:
+            code = 'demo_speech_unavailable'
+            message = ('The speech service is unavailable. Please try again.' if english else
+                       '语音服务暂时连接失败，请稍后重试。')
+            print(f'[tts] demo connection unavailable: {type(exc.__cause__).__name__}', flush=True)
+        try:
+            await socket.send_json({'type': 'error', 'code': code, 'message': message})
+        finally:
+            await socket.close(code=1013)
 
 
-def build_app(agent):
+def build_app(agent, demo_accounts=None):
     """Bind realtime or text/speech sessions and memory controls to the server."""
     from studio.web import transport
     from studio.core.utils.llm.initialize import credential
@@ -88,6 +108,8 @@ def build_app(agent):
         title=transport.make_title_generator(agent.REPLY, agent.CONFIG["llm"]),
         components=lambda: components_for(agent),
         pet_port=agent.ARGS.port,
+        demo_accounts=demo_accounts, demo_session=session_for,
+        demo_components=components_for,
     )
 
 
@@ -106,9 +128,14 @@ def main(argv=None):
     try:
         from .utils.environment.component import load_environment, prepare
         load_environment()
-        if os.environ.get('STUDIO_PUBLIC_DEMO') == '1':
-            raise ValueError('当前 Studio 不支持 STUDIO_PUBLIC_DEMO；请从环境变量和 .env 中移除该配置后重试。')
         args = parse_args(argv)
+        public_demo = os.environ.get('STUDIO_PUBLIC_DEMO') == '1'
+        if public_demo and args.host not in {'127.0.0.1', 'localhost', '::1'}:
+            raise ValueError('公开体验模式只监听本机；请通过 Tailscale Funnel 转发。')
+        if public_demo and args.llm == 'local':
+            raise ValueError('公开体验模式请使用 API 回复模型，避免每个账号加载一份本地 LLM。')
+        if public_demo and args.mode == 'realtime':
+            raise ValueError('公开体验模式请使用 llm_tts 模式，以保持账号记忆隔离。')
         prepare(args)
         from .utils.startup.initialize import inspect
         stage = args.prepare_stage or 'all'
@@ -128,10 +155,14 @@ def main(argv=None):
         configure(ROOT / 'prompt/logs')
         from .voiceagent import VoiceAgent
         agent = VoiceAgent(args)
+        demo_accounts = None
+        if public_demo:
+            from studio.web.demo_accounts import DemoAccounts
+            demo_accounts = DemoAccounts(args)
         if args.mode == 'llm_tts':
             tts = agent.vm.utils.get('tts')
         agent.warmup()
-        app = build_app(agent)
+        app = build_app(agent, demo_accounts=demo_accounts)
         if tts is not None and hasattr(tts, 'preconnect'):
             app.router.add_event_handler('startup', tts.preconnect)
         if tts is not None and hasattr(tts, 'aclose'):

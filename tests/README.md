@@ -61,3 +61,15 @@ python -m http.server 8000 --bind 127.0.0.1
 - 覆盖故障行为、取消、断开和状态隔离；不要仅为了固定当前源码写法而添加断言。
 - 延迟、模型效果和真实音频体验评测放在仓库根目录的 `evals/`，它们需要另外准备环境或数据。
 - 根目录下的本地实验测试仍由 `.gitignore` 忽略；不要把个人数据放进公开夹具。
+
+
+## 体验站（demo 分支）
+
+账号隔离、手机资源缓存和 Qwen 独立会话连接的回归同样使用临时数据与模拟 API：
+
+```bash
+.venv/bin/python -m unittest tests.studio.test_public_demo tests.studio.test_demo_lifecycle tests.studio.test_qwen_audio_api
+node --test tests/frontend/test_mobile_avatar_loading.cjs tests/frontend/test_mobile_memory_status.cjs
+```
+
+手机资源接口测试需要 App 的 npm 依赖；先运行 `npm --prefix studio/apps run ensure:deps`。测试不会使用部署机器上的真实账号或 Key。

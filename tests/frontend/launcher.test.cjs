@@ -29,7 +29,7 @@ test('npm start prepares VoiceMem memory before choosing the Studio Agent dialog
   assert.equal(env.VOICEMEM_STUDIO_API_KEY, 'reply-secret');
   assert.equal(env.DASHSCOPE_API_KEY, 'memory-secret');
   assert.equal(env.OPENAI_API_KEY, 'reply-secret');
-  assert.equal(path.basename(env.VOICEMEM_DESKTOP_PROJECT_ROOT), 'VoiceMem-Studio');
+  assert.equal(env.VOICEMEM_DESKTOP_PROJECT_ROOT, path.resolve(__dirname, '../..'));
   assert.deepEqual(events, ['memory', 'setup', 'memory', 'reply']);
   assert.equal(choices.length, 0); assert.equal(secrets.length, 0);
   assert.equal(printed.includes('memory-secret'), false);

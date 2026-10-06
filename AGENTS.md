@@ -289,3 +289,17 @@ paths.
   absent from the diff.
 - Focused regressions and documentation match the behavior; untested live paths
   are disclosed.
+
+
+## Demo branch boundaries
+
+- Keep shared VoiceMem code aligned with `main`; account and remote speech
+  integrations belong to Studio.
+- Preserve the existing account database schema, data root, default Space and
+  enabled speaker verification when merging shared fixes.
+- Before publishing demo changes, run account isolation, asset caching,
+  conversation cleanup and Qwen session admission/cancellation regressions in
+  `tests/studio/` and `tests/frontend/`.
+- Local credentials, models and account data are not branch artifacts. Never
+  overwrite deployment configuration or run two backends against the same
+  embedded memory directories during an update.

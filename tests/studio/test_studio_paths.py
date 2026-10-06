@@ -162,28 +162,31 @@ class StudioSpaceIsolationTests(unittest.TestCase):
                 self.assertEqual(client.post("/api/spaces/other/use").status_code, 400)
                 self.assertEqual(agent.ACTIVE_SPACE, "mine")
 
-    def test_studio_has_no_account_or_mobile_demo_entry_points(self):
+    def test_normal_studio_does_not_activate_demo_accounts(self):
         from fastapi.testclient import TestClient
         from unittest.mock import patch
         from studio.web.transport import build_app
         with patch("studio.web.transport.PetSupervisor"):
             app = build_app("llm_tts", session=lambda _: None, classify=lambda _: None)
             with TestClient(app) as client:
-                for route in ("/auth/me", "/ui/login.html", "/ui/pet-mobile.html", "/pet/avatar-controller.js"):
+                for route in ("/auth/me", "/pet/avatar-controller.js"):
                     self.assertEqual(client.get(route).status_code, 404, route)
                 home = client.get("/", headers={"User-Agent": "iPhone Mobile"}, follow_redirects=False)
                 self.assertEqual(home.status_code, 200)
 
-    def test_old_demo_flag_cannot_silently_start_an_unprotected_studio(self):
+    def test_demo_rejects_unsupported_launches_before_model_work(self):
         from unittest.mock import patch
         from studio.core.core import main
-        with patch.dict(os.environ, {"STUDIO_PUBLIC_DEMO": "1"}), \
-                patch("studio.core.utils.environment.component.load_environment"), \
-                patch("studio.core.utils.environment.component.prepare") as prepare:
-            with self.assertRaises(SystemExit) as stopped:
-                main(["--check"])
-            self.assertEqual(stopped.exception.code, 1)
-            prepare.assert_not_called()
+        for flags in (("--host", "0.0.0.0"), ("--llm", "local"),
+                      ("--mode", "realtime")):
+            with self.subTest(flags=flags), \
+                    patch.dict(os.environ, {"STUDIO_PUBLIC_DEMO": "1"}), \
+                    patch("studio.core.utils.environment.component.load_environment"), \
+                    patch("studio.core.utils.environment.component.prepare") as prepare:
+                with self.assertRaises(SystemExit) as stopped:
+                    main(["--check", *flags])
+                self.assertEqual(stopped.exception.code, 1)
+                prepare.assert_not_called()
 
 
 class PackageResourceTests(unittest.TestCase):

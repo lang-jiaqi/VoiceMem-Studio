@@ -1,3 +1,25 @@
+# VoiceMem Studio 体验站（demo 分支）
+
+本分支提供名称/密码登录、每账号一个独立 Memory Space、手机宠物页面、账号 Harness 设置，以及 Qwen 流式 TTS 的独立会话连接。普通 Studio 在 [`main` 分支](https://github.com/lang-jiaqi/VoiceMem-Studio/tree/main)维护；体验站使用同一套 VoiceMem 和 Studio 核心代码。
+
+已有部署先按 [体验站部署说明](docs/public-demo.md#更新已有部署)切换分支。首次准备需要原生 Python 3.12 和 Node.js 22.12 或更新版本：
+
+```bash
+./studio/scripts/setup_mlx.sh
+npm --prefix studio/apps run ensure:deps
+```
+
+仓库根目录的 `.env.example` 是体验站配置模板。仅在没有 `.env` 时复制它，填写 Key 后运行：
+
+```bash
+./run_demo.sh
+tailscale funnel --bg --https=443 8790
+```
+
+使用同一个端口和账号数据目录时，原 Funnel 地址和账号记忆保留。配置、模型、数据库和日志均不提交到 Git。更多说明见 [体验站部署](docs/public-demo.md)与 [Qwen TTS 配置](docs/qwen-tts-api.md)。
+
+---
+
 <a id="chinese"></a>
 
 <p align="center">

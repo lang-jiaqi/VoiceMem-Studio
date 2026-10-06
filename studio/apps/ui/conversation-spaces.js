@@ -1,7 +1,7 @@
 /* Conversation groups share the persistent memory of their selected Space. */
 (() => {
   'use strict';
-  let spaces = [], active = '', fixed = false;
+  let spaces = [], active = '', fixed = false, demo = false;
   const request = async (url, options) => {
     const response = await fetch(url, options);
     if (!response.ok) {
@@ -12,6 +12,7 @@
   };
   async function refresh() {
     const state = await request('/api/spaces');
+    demo = !!state.demo;
     spaces = state.spaces || [];
     fixed = spaces.some(space => space.fixed);
     const changed = active !== (state.active || '');
@@ -25,7 +26,7 @@
     await ready;
     space = space || active;
     if (!space || !spaces.some(item => item.id === space)) throw new Error('Memory Space 不存在，请重新选择。');
-    if (fixed && space === active) return active;
+    if ((fixed || demo) && space === active) return active;
     const result = await request(`/api/spaces/${encodeURIComponent(space)}/use`, { method: 'POST' });
     const changed = active !== result.active;
     active = result.active;
@@ -34,6 +35,7 @@
   }
   async function choose(preferred) {
     await refresh();
+    if (demo) return active;
     return new Promise(resolve => {
       const dialog = document.createElement('dialog');
       dialog.className = 'space-picker';
