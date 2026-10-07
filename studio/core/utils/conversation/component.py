@@ -687,7 +687,9 @@ class Conversation:
             if self.early['task'] is not None and pending.early_ok:
                 await thinking_task
                 early_pending = self.early.get('pending')
-                if (early_pending is None or early_pending.language != pending.language
+                if early_pending is None:
+                    await self.drop_early('提前识别或路由尚未就绪，采用最终转写结果')
+                elif (early_pending.language != pending.language
                         or early_pending.reply_mode != pending.reply_mode
                         or early_pending.memory_query != pending.memory_query
                         or (pending.memory_query

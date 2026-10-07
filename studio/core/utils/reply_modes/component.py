@@ -102,6 +102,7 @@ class QwenThinkingRouter:
         self.history_messages = 4
         self.history_chars = 320
         self._cache: dict[tuple[str, str], ThinkingDecision] = {}
+        self._classifications = {}
 
     def _ensure_model_source(self) -> str:
         """Download the default router with visible progress when it is absent."""
@@ -226,9 +227,34 @@ class QwenThinkingRouter:
 
     async def classify_async(self, text: str, memory_prefetch_hint: bool = False,
                              history=None) -> ThinkingDecision:
-        """Run model inference outside the asyncio/WebSocket thread."""
-        return await asyncio.to_thread(
-            self.classify, text, memory_prefetch_hint, history)
+        """Share identical in-flight depth work without sharing turn state."""
+        history = [dict(message) for message in history or []]
+        loop = asyncio.get_running_loop()
+        key = (loop, text, self._context_prompt(text, history, memory_prefetch_hint))
+        job = self._classifications.get(key)
+        if job is None:
+            task = asyncio.create_task(asyncio.to_thread(
+                self.classify, text, memory_prefetch_hint, history))
+            job = {"task": task, "waiters": 0}
+            self._classifications[key] = job
+
+            def finished(done):
+                if self._classifications.get(key) is job:
+                    self._classifications.pop(key)
+                # A disconnected last waiter must not leave an unobserved error.
+                if not done.cancelled():
+                    done.exception()
+
+            task.add_done_callback(finished)
+        job["waiters"] += 1
+        try:
+            return await asyncio.shield(job["task"])
+        finally:
+            job["waiters"] -= 1
+            if not job["waiters"] and not job["task"].done():
+                if self._classifications.get(key) is job:
+                    self._classifications.pop(key)
+                job["task"].cancel()
 
     async def generate_short_text_async(self, system: str, prompt: str, *,
                                         max_tokens: int = 40, timeout_s: float = 1.2) -> str:

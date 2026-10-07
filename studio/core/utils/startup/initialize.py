@@ -31,7 +31,11 @@ def inspect(args, stage="all"):
     required_keys = required_credentials(args, stage)
     from studio.core.utils.tts.qwen_audio_api import selected as qwen_tts_selected
     remote_tts = args.mode == 'llm_tts' and stage != 'memory' and qwen_tts_selected()
-    print(f'[startup] backend={args.backend} · Studio={args.device} · TTS={"Qwen API" if remote_tts else args.tts_device}', flush=True)
+    mlx = args.backend == 'mlx'
+    router = 'mlx-gpu' if mlx and os.environ.get('STUDIO_ROUTER_BACKEND', 'mlx') == 'mlx' else args.device
+    speech = 'Qwen API' if remote_tts else 'mlx-gpu' if mlx else args.tts_device
+    print(f'[startup] backend={args.backend} · ASR={args.asr_device}'
+          f' · Router={router} · TTS={speech}', flush=True)
     for name, provider, purpose, present in required_keys:
         print(f'[startup] {name}: {"已找到" if present else "缺失"}（{purpose}：{provider}）', flush=True)
         if not present:
@@ -69,7 +73,10 @@ def inspect(args, stage="all"):
             if not torch.cuda.is_available():
                 errors.append('PyTorch 无法使用 CUDA；请检查 NVIDIA 驱动和 CUDA 版 PyTorch')
             else:
-                for device in {args.device, args.tts_device}:
+                devices = {args.device, args.tts_device}
+                if args.asr_device.startswith('cuda'):
+                    devices.add(args.asr_device)
+                for device in devices:
                     index = torch.device(device).index or 0
                     if index >= torch.cuda.device_count():
                         errors.append(f'设备不存在：{device}，当前可见 GPU 数 {torch.cuda.device_count()}')

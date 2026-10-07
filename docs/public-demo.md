@@ -19,6 +19,8 @@
 
 Qwen TTS 在体验站中按对话会话建立独立连接，同一账号打开两个对话也互不抢连接。所有连接共用部署机器配置的 API Key、Workspace 和音色，单个会话内复用连接；打断、退出或断线只释放该会话的连接。普通桌面 App 和本地 Breeze 路径保持原有连接及模型复用方式。
 
+本地 Breeze 会在其他模型加载后完整预热一句话；Qwen API 启动时只预连接，不发送预热合成请求。Mac 的实时 ASR 默认自动选择设备，启动日志会显示实际使用的设备；需要单独指定时可在 `.env` 设置 `STUDIO_ASR_DEVICE=auto`、`cpu` 或 `mps`，无需改动 TTS 配置。
+
 默认最多允许 4 个同时连接的 Qwen 对话会话，包括正在连接语音服务的会话。满员时提示稍后重试，不让访客一直排队。可在部署机器 `.env` 设置 `STUDIO_DEMO_MAX_TTS_SESSIONS=4` 并重启后端。这个上限是资源保护值，实际稳定人数仍取决于 API 并发配额、网络和本机 ASR/感知算力，需要在部署机器实测；不会为每个访客加载一份本地模型。
 
 可先运行 `STUDIO_PUBLIC_DEMO=1 .venv/bin/python -m studio --llm deepseek --memory-llm deepseek --check`，确认两项 API Key 均显示“已找到”。体验模式需要 API 回复模型，并使用 `llm_tts` 模式。然后在仓库根目录运行：

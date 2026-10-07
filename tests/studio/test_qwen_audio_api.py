@@ -364,5 +364,38 @@ class DemoSpeechSessions(unittest.IsolatedAsyncioTestCase):
                 socket.close.assert_awaited_once_with(code=1013)
 
 
+class StartupSpeechWarmup(unittest.TestCase):
+    setUp = QwenAudioContract.setUp
+
+    def test_api_warmup_loads_only_cached_backchannels_without_opening_a_connection(self):
+        from studio.core.utils.startup.component import Startup
+        for provider in (qwen.QwenAudioAPI, qwen.QwenDemoTTS):
+            with self.subTest(provider=provider.__name__):
+                speech = provider()
+                agent = Startup()
+                agent.MODE, agent.ACTIVE_SPACE = 'llm_tts', 'synthetic-space'
+                agent.ARGS = SimpleNamespace(backend='cuda', backchannel=True, eot=False)
+                agent.vm = SimpleNamespace(utils=SimpleNamespace(get=Mock(return_value=speech)))
+                agent._LOCAL_LLM, agent._BC_VOICE = None, {}
+                agent.space_language = lambda _: 'en'
+                for name in ('_warm_final_asr', '_sensevoice', '_warm_emotion2vec',
+                             '_print_backchannel_status', '_mem_line'):
+                    setattr(agent, name, Mock())
+                cached_voice = SimpleNamespace(prime=AsyncMock())
+                with patch.object(speech, 'stream') as synthesis, \
+                        patch.object(speech, 'preconnect', new_callable=AsyncMock) as connect, \
+                        patch('studio.core.voicemem.memory_warmups', return_value=[]), \
+                        patch('studio.core.utils.reply_modes.initialize.thinking_router'), \
+                        patch('studio.core.utils.turn_taking.initialize.BackchannelVoice',
+                              return_value=cached_voice) as voice:
+                    agent.warmup()
+                synthesis.assert_not_called()
+                connect.assert_not_awaited()
+                voice.assert_called_once_with(speech, lang='en')
+                cached_voice.prime.assert_awaited_once_with(cache_only=True)
+                self.assertIs(agent._BC_VOICE['obj'], cached_voice)
+                self.assertIsNone(speech._ws)
+
+
 if __name__ == "__main__":
     unittest.main()

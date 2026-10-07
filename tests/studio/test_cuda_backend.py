@@ -30,6 +30,7 @@ class BackendConfigTests(unittest.TestCase):
                                  ('llm_tts', 'deepseek', 'studio-zh', 'zh', 8787))
                 self.assertEqual(args.host, '127.0.0.1')
                 self.assertEqual(args.memory_llm, 'deepseek')
+                self.assertEqual(args.asr_device, 'auto' if backend == 'mlx' else 'cuda:0')
 
     def test_explicit_space_still_overrides_default(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -75,6 +76,23 @@ class BackendConfigTests(unittest.TestCase):
         with patch.dict(os.environ, {'STUDIO_BACKEND': 'mlx', 'STUDIO_DEVICE': 'cpu'}, clear=True):
             args = parse_args(['--backend', 'cuda', '--device', 'cuda:1', '--tts-device', 'cuda:0'])
         self.assertEqual((args.backend, args.device, args.tts_device), ('cuda', 'cuda:1', 'cuda:0'))
+        self.assertEqual(args.asr_device, 'cuda:1')
+
+    def test_macos_asr_device_is_explicit_and_independent_of_router(self):
+        from studio.core.utils.asr import initialize
+        with patch.dict(os.environ, {}, clear=True):
+            args = parse_args(['--backend', 'mlx', '--device', 'cpu'])
+            self.assertEqual(args.asr_device, 'auto')
+            args = parse_args(['--backend', 'mlx', '--device', 'cpu', '--asr-device', 'mps'])
+            self.assertEqual((args.device, args.asr_device), ('cpu', 'mps'))
+        for requested, expected in (('auto', 'mps'), ('cpu', 'cpu'), ('mps', 'mps')):
+            with self.subTest(requested=requested), patch.dict(os.environ, {
+                    'STUDIO_BACKEND': 'mlx', 'STUDIO_DEVICE': 'cpu',
+                    'STUDIO_ASR_DEVICE': requested}, clear=True), \
+                    patch('voicemem.utils.audio.asr.pick_device', return_value='mps'), \
+                    patch.object(initialize, '_streaming_model') as create:
+                initialize.streaming()
+                create.assert_called_once_with('funasr', expected)
 
     def test_credentials_follow_provider(self):
         with patch.dict(os.environ, {}, clear=True):

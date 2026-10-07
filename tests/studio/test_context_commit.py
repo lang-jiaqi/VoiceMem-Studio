@@ -259,6 +259,46 @@ class ContextCommitTests(ConversationFixture, unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.session.early['task'])
         self.assertEqual(self.model_calls, 0)
 
+    async def test_early_and_final_routes_share_depth_and_keep_ready_output(self):
+        import threading
+        from studio.core.utils.routing.component import Routing
+        from studio.core.utils.reply_modes.component import QwenThinkingRouter
+        router = QwenThinkingRouter(model='/unused')
+        entered, release = threading.Event(), threading.Event()
+        calls = []
+
+        def predict(*args):
+            calls.append(args)
+            entered.set()
+            release.wait(2)
+            return '否'
+
+        router._predict = predict
+        self.agent._THINKING_ROUTER_ON = True
+        self.agent.route_pending_thinking = types.MethodType(
+            Routing.route_pending_thinking, self.agent)
+        st = types.SimpleNamespace(memory=empty_result(), route='shallow', eot_score=.99)
+        final = self.pending('合成测试问题', early_ok=True)
+        route_task = None
+        with patch('studio.core.utils.routing.component.thinking_router', return_value=router):
+            try:
+                await self.session.start_early(final.text, st)
+                self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+                route_task = asyncio.create_task(self.session.route(final))
+                await asyncio.sleep(0)
+                release.set()
+                routed = await asyncio.wait_for(route_task, 1)
+                self.assertIsNotNone(self.session.early['pending'])
+                self.assertTrue(await self.session.commit_early(final, routed))
+                await asyncio.wait_for(self.session.turn['task'], 1)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(self.model_calls, 1)
+            finally:
+                release.set()
+                if route_task is not None and not route_task.done():
+                    route_task.cancel()
+                    await asyncio.gather(route_task, return_exceptions=True)
+
     async def test_final_stranger_discards_speculative_reply(self):
         await self.early()
         value = self.pending(stranger=True, early_ok=True)
