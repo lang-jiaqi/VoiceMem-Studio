@@ -20,6 +20,7 @@ def prepare(args):
     os.environ.update({
         'STUDIO_BACKEND': args.backend,
         'STUDIO_DEVICE': args.device,
+        'STUDIO_ASR_DEVICE': args.asr_device,
         'STUDIO_TTS_DEVICE': args.tts_device,
         'VOICEMEM_MODELS_DIR': str(MODELS),
         'VOICEMEM_MEMORYSPACE_ROOT': str(ROOT / 'voicemem_memoryspace'),

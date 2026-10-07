@@ -34,7 +34,10 @@ def parse_args(argv=None):
     parser.add_argument("--tts-device", default=os.environ.get("STUDIO_TTS_DEVICE") or "",
                         help="Breeze CUDA 设备，如 cuda:0；默认与 --device 相同")
     parser.add_argument("--device", default=os.environ.get("STUDIO_DEVICE") or "",
-                        help="Studio ASR/Router 设备，如 cuda:0；与 Breeze GPU 分开配置")
+                        help="Torch 路由设备；CUDA 下也是 ASR 的默认设备，如 cuda:0")
+    parser.add_argument("--asr-device", default=os.environ.get("STUDIO_ASR_DEVICE") or
+                        os.environ.get("VOICEMEM_ASR_DEVICE") or "",
+                        help="流式 ASR 设备；auto 自动选择，或 cpu/mps/cuda:N")
     parser.add_argument("--mode", choices=("llm_tts", "realtime"), default="llm_tts")
     parser.add_argument("--space", default="studio-zh")
     parser.add_argument("--lang", choices=("zh", "en"), default="zh",
@@ -66,8 +69,13 @@ def parse_args(argv=None):
         args.llm = args.memory_llm or (select_provider(args.backend) if interactive else "deepseek")
     if args.memory_llm is None:
         args.memory_llm = args.llm if args.llm != "local" else "deepseek"
+    args.asr_device = args.asr_device or (
+        (args.device or "cuda:0") if args.backend == "cuda" else "auto")
     args.device = args.device or ("cuda:0" if args.backend == "cuda" else "cpu")
     args.tts_device = args.tts_device or args.device
+    if not (args.asr_device in {'auto', 'cpu', 'mps', 'cuda'} or
+            (args.asr_device.startswith('cuda:') and args.asr_device[5:].isdigit())):
+        parser.error("--asr-device 必须为 auto、cpu、mps 或 cuda:N")
     if args.backend == "cuda" and args.llm == "local" and args.mode == "llm_tts":
         parser.error("--llm local 目前仅支持 --backend mlx；CUDA 请使用 deepseek/openai/qwen")
     if args.backend == "cuda" and not (args.device == "cuda" or

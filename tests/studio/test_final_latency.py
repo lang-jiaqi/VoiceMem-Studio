@@ -113,8 +113,110 @@ class FinalAsrTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final.speech_end, first.speech_end)
         self.assertEqual(stream._speech_end, 0)
 
+    async def test_confirmation_discards_queued_snapshot_and_decodes_complete_audio(self):
+        from voicemem.utils.audio.final_asr_executor import FinalASRExecutor
+        executor = FinalASRExecutor()
+        entered, release = threading.Event(), threading.Event()
+        blocker = executor.submit(lambda: (entered.set(), release.wait(2)))
+        calls = []
+        stream = self.stream(types.SimpleNamespace(
+            transcribe=lambda pcm: (calls.append(pcm.copy()), 'complete')[-1]))
+        stream._pcm = [np.ones(160, dtype=np.float32)]
+        stream._asr_w = types.SimpleNamespace(
+            flush=lambda: asyncio.sleep(0, result=''), reset=lambda: None)
+        snapshot = final = None
+        with patch('voicemem.stream._FINAL_ASR_EXECUTOR', executor):
+            try:
+                self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+                snapshot = stream.refine_current_snapshot()
+                await asyncio.sleep(0)
+                complete = np.ones(320, dtype=np.float32)
+                final = asyncio.create_task(stream._finish_asr(complete))
+                await asyncio.sleep(0)
+                self.assertTrue(all(job.cancelled() for job in stream._snapshot_jobs))
+                release.set()
+                await final
+                with self.assertRaises(asyncio.CancelledError):
+                    await snapshot
+                self.assertEqual(len(calls), 1)
+                np.testing.assert_array_equal(calls[0], complete)
+                self.assertEqual(stream._text, 'complete')
+            finally:
+                release.set()
+                for task in (snapshot, final):
+                    if task is not None and not task.done():
+                        task.cancel()
+                await asyncio.gather(*(task for task in (snapshot, final) if task is not None),
+                                     return_exceptions=True)
+                await asyncio.to_thread(executor.shutdown)
+
+
+class FinalAsrPriorityTests(unittest.TestCase):
+    def test_confirmed_sessions_precede_queued_snapshots_without_parallel_decoding(self):
+        from voicemem.utils.audio.final_asr_executor import FinalASRExecutor
+        executor = FinalASRExecutor()
+        entered, release = threading.Event(), threading.Event()
+        order = []
+
+        def active():
+            entered.set()
+            release.wait(2)
+            order.append('running')
+
+        running = executor.submit(active, speculative=True)
+        try:
+            self.assertTrue(entered.wait(1))
+            queued = executor.submit(lambda: order.append('snapshot'), speculative=True)
+            cancelled = executor.submit(lambda: order.append('obsolete'), speculative=True)
+            confirmed = [executor.submit(lambda name=name: order.append(name))
+                         for name in ('confirmed-one', 'confirmed-two')]
+            self.assertTrue(cancelled.cancel())
+            release.set()
+            for future in (running, *confirmed, queued):
+                future.result(timeout=1)
+            self.assertEqual(order, ['running', 'confirmed-one', 'confirmed-two', 'snapshot'])
+        finally:
+            release.set()
+            executor.shutdown()
+
 
 class WarmupTests(unittest.TestCase):
+    def test_speech_warmup_finishes_after_other_models_and_catches_late_failure(self):
+        from studio.core.utils.startup.component import Startup
+        for fail in (False, True):
+            with self.subTest(fail=fail):
+                events = []
+
+                async def speech(text):
+                    events.append('speech-first')
+                    yield b'first'
+                    if fail:
+                        raise RuntimeError('synthetic codec failure')
+                    events.append('speech-complete')
+                    yield b'last'
+
+                agent = Startup()
+                agent.MODE, agent.ACTIVE_SPACE = 'llm_tts', 'synthetic-space'
+                agent.ARGS = types.SimpleNamespace(backend='cuda', backchannel=False, eot=False)
+                agent.vm = types.SimpleNamespace(utils=types.SimpleNamespace(
+                    get=lambda _: types.SimpleNamespace(stream=speech)))
+                agent._LOCAL_LLM = None
+                agent.space_language = lambda _: 'zh'
+                agent._warm_final_asr = lambda _: events.append('final-asr')
+                agent._sensevoice = lambda: events.append('sensevoice')
+                agent._warm_emotion2vec = lambda: events.append('emotion')
+                agent._print_backchannel_status = lambda: None
+                agent._mem_line = lambda: 'synthetic'
+                with patch('studio.core.voicemem.memory_warmups', return_value=[]), \
+                        patch('studio.core.utils.reply_modes.initialize.thinking_router'):
+                    if fail:
+                        with self.assertRaisesRegex(RuntimeError, 'TTS /'):
+                            agent.warmup()
+                    else:
+                        agent.warmup()
+                        self.assertIn('speech-complete', events)
+                self.assertLess(events.index('emotion'), events.index('speech-first'))
+
     def test_warmup_decodes_even_with_legacy_disabled_option(self):
         tree = studio_tree()
         fn = next(n for n in tree.body if getattr(n, "name", "") == "_warm_final_asr")

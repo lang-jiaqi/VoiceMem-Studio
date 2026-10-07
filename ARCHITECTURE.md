@@ -715,6 +715,10 @@ cache, input buffer and cumulative text. Studio caches model prototypes by
 backend/device and clones their stream state; accounts and Spaces reuse weights
 instead of loading another FunASR model. Cold construction and inference follow
 `TORCH_LOCK`. Stateless final-ASR weights are reused as well.
+`--asr-device` / `STUDIO_ASR_DEVICE` selects streaming ASR independently.
+CUDA's `--device` supplies its fallback; Mac keeps automatic ASR selection
+independently of the Torch router device. Startup reports the requested ASR device and
+the factory reports its actual device, separately from MLX routing and TTS.
 Explicit English adapter calls retain the reusable Zipformer path. FunASR
 buffers 600 ms chunks and appends 50 ms of zero-valued right context at flush.
 Resumed input starts a fresh decoder cache while retaining the utterance text;
@@ -724,6 +728,10 @@ Streaming ASR runs in a dedicated serial worker so chunk inference does not
 block WebSocket input. At turn end, full-audio ASR refinement may run in a
 separate final-ASR executor. Epoch checks prevent obsolete worker results from
 overwriting a newer turn.
+The recognizer remains serial. Confirmed decodes precede queued speculative
+snapshots, and a stream cancels its unstarted snapshots at finalization.
+Already-running native calls finish normally; different audio snapshots are
+never treated as interchangeable.
 `VoiceStream.prepare_audio` constructs connection-owned ASR and VAD adapters
 off the event loop. VAD recurrent state and segment queues are private to a
 connection; consumed segments are discarded because capture only needs speech
@@ -1009,8 +1017,13 @@ verifying the token prefix. CUDA and explicit `STUDIO_ROUTER_BACKEND=torch`
 retain the Torch path under the process Torch lock. Depth decisions are cached
 by text and bounded
 context, independent of the Gate; changing memory eligibility recomposes the
-final route without rerunning depth. Invalid model output uses ordinary reasoning;
-model exceptions preserve Gate memory eligibility. The legacy class name and
+final route without rerunning depth.
+Identical concurrent async requests also share their in-flight depth calculation
+within an event loop. Only text and bounded history form the key, not memory or
+turn objects. One cancelled waiter does not cancel another; the last cancelled
+waiter releases the task, and native inference already running may finish safely.
+Invalid model output uses ordinary reasoning; model exceptions preserve Gate
+memory eligibility. The legacy class name and
 hint argument remain for caller compatibility, but that hint no longer
 participates in depth classification.
 Provider-neutral request options carry the required reasoning across async reply
@@ -1228,6 +1241,8 @@ do not become normal assistant replies.
 
 Local MLX reply, reasoning-depth routing, and TTS work share one process-level
 `GpuLoop`. The loop owns the GPU execution thread and advances active generators in weighted turns.
+Startup completes a short TTS utterance after other model warmups, exercising
+continuous codec generation and cleanup before accepting conversations.
 
 Some speech jobs receive temporary first-chunk priority; afterward they rejoin
 weighted scheduling. Cancellation closes the generator and removes it from the

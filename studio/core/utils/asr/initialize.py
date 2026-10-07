@@ -8,8 +8,10 @@ from functools import lru_cache
 @lru_cache(maxsize=4)
 def _streaming_model(kind, device):
     if kind == "funasr":
-        return FunASRStreamingASR(
+        model = FunASRStreamingASR(
             model=str(MODELS / "asr/funasr-paraformer-zh-streaming"), device=device)
+        print(f"[asr] 流式识别设备：{device}", flush=True)
+        return model
     return StreamingASR(str(MODELS / "asr/sherpa-onnx-streaming-zipformer-en-2023-06-26"))
 
 def streaming(language="auto"):
@@ -17,9 +19,12 @@ def streaming(language="auto"):
     from voicemem.utils.audio.asr import pick_device
     from voicemem.utils.torch_lock import TORCH_LOCK
     kind = "funasr" if language in {"auto", "zh"} else "sherpa"
-    device = ((os.environ.get('STUDIO_DEVICE')
-               if os.environ.get('STUDIO_BACKEND') == 'cuda' else None)
-              or os.environ.get('VOICEMEM_ASR_DEVICE') or pick_device()) if kind == "funasr" else "cpu"
+    configured = (os.environ.get('STUDIO_ASR_DEVICE')
+                  or os.environ.get('VOICEMEM_ASR_DEVICE')
+                  or (os.environ.get('STUDIO_DEVICE')
+                      if os.environ.get('STUDIO_BACKEND') == 'cuda' else None)
+                  or 'auto')
+    device = (pick_device() if configured == 'auto' else configured) if kind == "funasr" else "cpu"
     with TORCH_LOCK:
         return _streaming_model(kind, device).new_stream()
 

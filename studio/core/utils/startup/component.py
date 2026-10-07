@@ -43,9 +43,11 @@ class Startup:
 
         async def warm_speech():
             tts = self.vm.utils.get('tts')
-            async with aclosing(tts.stream('你好')) as chunks:
+            text = ('你好，我在这里。' if self.space_language(self.ACTIVE_SPACE) == 'zh'
+                    else 'Hello, I am here.')
+            async with aclosing(tts.stream(text)) as chunks:
                 async for _ in chunks:
-                    break
+                    pass
             if self.ARGS.backchannel:
                 from studio.core.utils.turn_taking.initialize import BackchannelVoice
                 voice = BackchannelVoice(tts, lang=self.space_language(self.ACTIVE_SPACE))
@@ -63,7 +65,6 @@ class Startup:
                 import mlx.core as mx
                 from voicemem.utils.gpu_loop import gpu_loop
                 gpu_loop().call(lambda: mx.set_cache_limit(536870912))
-            step('TTS / 附和缓存', lambda: asyncio.run(warm_speech()))
             step('三级回复路由', lambda: thinking_router().warmup())
         for name, action in memory_warmups(self.vm):
             step(name, action)
@@ -77,6 +78,9 @@ class Startup:
             step('emotion2vec', self._warm_emotion2vec)
         if self._LOCAL_LLM is not None:
             step('本地回复前缀和首字', lambda: asyncio.run(warm_reply()))
+        if self.MODE == 'llm_tts':
+            # Warm complete speech after other providers have loaded their weights.
+            step('TTS / 附和缓存', lambda: asyncio.run(warm_speech()))
         if failures:
             raise RuntimeError('模型预热失败：' + '、'.join(failures))
         self._print_backchannel_status()

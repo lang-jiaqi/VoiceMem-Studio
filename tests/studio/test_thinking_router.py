@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import tempfile
+import asyncio
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -171,6 +173,86 @@ class ThinkingRouterTests(unittest.TestCase):
         router._predict = Mock(return_value='否')
         self.assertEqual(router.warmup().level, FAST)
         router._predict.assert_called_once()
+
+
+class ConcurrentDepthTests(unittest.IsolatedAsyncioTestCase):
+    async def test_identical_requests_share_inference_and_one_cancelled_waiter_is_isolated(self):
+        router = QwenThinkingRouter(model='/unused')
+        started, release = threading.Event(), threading.Event()
+        calls = []
+
+        def predict(*args):
+            calls.append(args)
+            started.set()
+            release.wait(2)
+            return '是'
+
+        router._predict = predict
+        first = asyncio.create_task(router.classify_async('synthetic question'))
+        second = None
+        try:
+            self.assertTrue(await asyncio.to_thread(started.wait, 1))
+            second = asyncio.create_task(router.classify_async('synthetic question', True))
+            await asyncio.sleep(0)
+            first.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await first
+            self.assertFalse(second.done())
+        finally:
+            release.set()
+        self.assertEqual((await second).level, SLOW)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(router._classifications, {})
+        self.assertEqual((await router.classify_async('synthetic question')).level, SLOW)
+        self.assertEqual(len(calls), 1)
+
+    async def test_different_contexts_are_not_coalesced(self):
+        router = QwenThinkingRouter(model='/unused')
+        router._predict = lambda _s, _e, prompt: '是' if 'deep context' in prompt else '否'
+        results = await asyncio.gather(
+            router.classify_async('continue', history=[{'role': 'user', 'content': 'deep context'}]),
+            router.classify_async('continue', history=[{'role': 'user', 'content': 'ordinary context'}]))
+        self.assertEqual([item.level for item in results], [SLOW, FAST])
+
+    async def test_shared_failure_reaches_all_waiters_and_retry_can_succeed(self):
+        router = QwenThinkingRouter(model='/unused')
+        started, release = threading.Event(), threading.Event()
+        calls = []
+
+        def predict(*args):
+            calls.append(args)
+            started.set()
+            release.wait(2)
+            raise RuntimeError('synthetic failure')
+
+        router._predict = predict
+        first = asyncio.create_task(router.classify_async('synthetic question'))
+        try:
+            self.assertTrue(await asyncio.to_thread(started.wait, 1))
+            second = asyncio.create_task(router.classify_async('synthetic question'))
+            await asyncio.sleep(0)
+        finally:
+            release.set()
+        results = await asyncio.gather(first, second, return_exceptions=True)
+        self.assertTrue(all(isinstance(item, RuntimeError) for item in results))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(router._classifications, {})
+        router._predict = lambda *_: '否'
+        self.assertEqual((await router.classify_async('synthetic question')).level, FAST)
+
+    async def test_last_cancelled_waiter_reaps_pending_task(self):
+        router = QwenThinkingRouter(model='/unused')
+        started, release = threading.Event(), threading.Event()
+        router._predict = lambda *_: (started.set(), release.wait(2), '否')[-1]
+        waiter = asyncio.create_task(router.classify_async('synthetic question'))
+        try:
+            self.assertTrue(await asyncio.to_thread(started.wait, 1))
+            waiter.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await waiter
+            self.assertEqual(router._classifications, {})
+        finally:
+            release.set()
 
 
 class MemoryRoutingIntegrationTests(unittest.IsolatedAsyncioTestCase):

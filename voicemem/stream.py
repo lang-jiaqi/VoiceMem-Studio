@@ -12,7 +12,6 @@ import queue
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -219,7 +218,8 @@ SPEC_MIN_GROWTH = int(os.environ.get("VOICEMEM_SPEC_MIN_GROWTH", "6"))
 from voicemem.utils.torch_lock import TORCH_LOCK as _EMBED_LOCK  # Process-wide Torch serialization.
 # One shared recognizer may serve multiple sessions; never decode it concurrently.
 # Separate from the default executor so ingestion cannot queue ahead of final ASR.
-_FINAL_ASR_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="asr-final")
+from voicemem.utils.audio.final_asr_executor import FinalASRExecutor
+_FINAL_ASR_EXECUTOR = FinalASRExecutor()
 
 
 class _AsrWorker:
@@ -425,6 +425,7 @@ class VoiceStream:
         self._vad = None
         self._closed = False
         self._snapshot_tasks = set()
+        self._snapshot_jobs = set()
         # Mutable state belongs to this input session and is reset at turn boundaries.
         self._text = ""
         self._silence = 0.0
@@ -634,7 +635,7 @@ class VoiceStream:
         text = await self._final_text_async(pcm)
         self._apply_refined(text)
 
-    async def _final_text_async(self, pcm):
+    async def _final_text_async(self, pcm, *, speculative=False):
         """Only return text: competing tasks never mutate turn state."""
         if pcm is None or not len(pcm):
             return
@@ -645,7 +646,10 @@ class VoiceStream:
                 print(f"[asr-final] 排队 {(time.monotonic()-submitted)*1000:.0f}ms", flush=True)
             return self._transcribe_final(pcm)
 
-        future = asyncio.get_running_loop().run_in_executor(_FINAL_ASR_EXECUTOR, work)
+        job = _FINAL_ASR_EXECUTOR.submit(work, speculative=speculative)
+        if speculative:
+            self._snapshot_jobs.add(job)
+        future = asyncio.wrap_future(job)
         try:
             return await asyncio.wait_for(future, timeout=ASR_FINISH_TIMEOUT_S)
         except asyncio.TimeoutError:
@@ -654,6 +658,9 @@ class VoiceStream:
             print(f"[asr-final] 离线复核等待超时（{ASR_FINISH_TIMEOUT_S*1000:.0f}ms，含排队），使用转写回退",
                   flush=True)
             return None
+        finally:
+            if speculative:
+                self._snapshot_jobs.discard(job)
 
     def refine_current_snapshot(self) -> "asyncio.Task[str]":
         """Freeze current audio and return a background final-ASR transcript task.
@@ -666,7 +673,7 @@ class VoiceStream:
         pcm = np.concatenate(self._pcm).copy() if self._pcm else None
 
         async def resolve() -> str:
-            refined = await self._final_text_async(pcm)
+            refined = await self._final_text_async(pcm, speculative=True)
             return (refined or fallback).strip()
 
         task = asyncio.create_task(resolve())
@@ -678,6 +685,10 @@ class VoiceStream:
         """Race both decoders after a final-ASR grace period, with one deadline."""
         started = time.monotonic()
         deadline = started + ASR_FINISH_TIMEOUT_S
+        # A queued snapshot is obsolete once complete-turn decoding is required.
+        # Running native calls finish normally and cannot mutate turn state.
+        for job in tuple(self._snapshot_jobs):
+            job.cancel()
         final = asyncio.create_task(self._final_text_async(pcm))
         flush = asyncio.ensure_future(self.asr_worker.flush())
         pending = {final, flush}
