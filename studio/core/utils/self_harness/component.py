@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import math
+import re
 
 from studio.harness.self_harness.policy import (
     MAX_CHANGES_PER_TURN,
@@ -13,9 +14,20 @@ from studio.harness.self_harness.policy import (
 
 CONTROL_OPEN = "<self_harness>"
 CONTROL_CLOSE = "</self_harness>"
+_CONTROL_TAG = re.compile(r"<\s*(/?)\s*self_harness\s*>", re.IGNORECASE)
 PROMPT_SCHEMA = {
     "persona": {"default": "", "max_length": 2000},
 }
+
+
+def _partial_control_tag(value: str) -> bool:
+    if not value.startswith("<"):
+        return False
+    name = value[1:].lstrip()
+    if name.startswith("/"):
+        name = name[1:].lstrip()
+    name = name.lower()
+    return "self_harness".startswith(name) or name.rstrip() == "self_harness"
 
 
 @dataclass(frozen=True)
@@ -34,34 +46,42 @@ class PrivateControlFilter:
     def __init__(self):
         self.pending = ""
         self.hidden = False
+        self.after_control = False
 
     def feed(self, value: str, *, final: bool = False) -> str:
         """Release visible text; retain only a possible split control delimiter."""
+        if not self.pending and not self.hidden and not self.after_control and "<" not in value:
+            return value
         self.pending += value
         visible = []
         while self.pending:
-            markers = (CONTROL_CLOSE,) if self.hidden else (CONTROL_OPEN, CONTROL_CLOSE)
-            found = [(index, marker) for marker in markers
-                     if (index := self.pending.find(marker)) >= 0]
-            if found:
-                index, marker = min(found)
+            if self.after_control and not self.hidden:
+                from studio.core.utils.tts.control import strip_repeated_prefix
+                resolved, self.pending = strip_repeated_prefix(self.pending, final=final)
+                if not resolved:
+                    break
+                self.after_control = False
+            marker = _CONTROL_TAG.search(self.pending)
+            if marker:
                 if not self.hidden:
-                    visible.append(self.pending[:index])
-                self.pending = self.pending[index + len(marker):]
-                self.hidden = marker == CONTROL_OPEN
+                    visible.append(self.pending[:marker.start()])
+                self.pending = self.pending[marker.end():]
+                self.hidden = not bool(marker.group(1))
+                self.after_control = not self.hidden
                 continue
             start = self.pending.rfind("<")
             suffix = self.pending[start:] if start >= 0 else ""
-            keep = bool(suffix) and any(marker.startswith(suffix) for marker in markers)
+            keep = _partial_control_tag(suffix)
             if not self.hidden:
                 visible.append(self.pending[:start] if keep else self.pending)
             self.pending = suffix if keep else ""
             break
         if final:
             # A recognizable unfinished control tag stays private at normal EOF.
-            if not self.hidden and not self.pending.startswith(("<self", "</self")):
+            name = self.pending[1:].lstrip().lstrip("/").lstrip().lower()
+            if not self.hidden and not name.startswith("self"):
                 visible.append(self.pending)
-            self.pending, self.hidden = "", False
+            self.pending, self.hidden, self.after_control = "", False, False
         return "".join(visible)
 
 
@@ -214,19 +234,21 @@ def split_control_prefix(value: str, *, final: bool = False) -> ControlPrefix:
         if not final:
             return ControlPrefix(False, {}, "")
         return ControlPrefix(True, {}, text)
-    if candidate and CONTROL_OPEN.startswith(candidate) and candidate != CONTROL_OPEN:
+    opening = _CONTROL_TAG.match(candidate)
+    if opening is None and _partial_control_tag(candidate):
         if not final:
             return ControlPrefix(False, {}, "")
         return ControlPrefix(True, {}, "", "unterminated Self Harness control")
-    if not candidate.startswith(CONTROL_OPEN):
+    if opening is None or opening.group(1):
         return ControlPrefix(True, {}, text)
-    end = candidate.find(CONTROL_CLOSE, len(CONTROL_OPEN))
-    if end < 0:
+    closing = next((match for match in _CONTROL_TAG.finditer(candidate, opening.end())
+                    if match.group(1)), None)
+    if closing is None:
         if not final:
             return ControlPrefix(False, {}, "")
         return ControlPrefix(True, {}, "", "unterminated Self Harness control")
-    raw = candidate[len(CONTROL_OPEN):end]
-    rest = candidate[end + len(CONTROL_CLOSE):]
+    raw = candidate[opening.end():closing.start()]
+    rest = candidate[closing.end():]
     try:
         update = validate_update(json.loads(raw))
     except (ValueError, TypeError, json.JSONDecodeError) as exc:

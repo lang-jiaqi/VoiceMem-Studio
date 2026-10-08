@@ -1104,6 +1104,10 @@ It never applies updates from body text, retains only possible split delimiters,
 and discards unfinished private blocks at EOF. Cancellation and provider failure
 do not flush its pending delimiter. Only a validated leading header may update
 conversation preferences.
+Control delimiters tolerate case and surrounding whitespace variants in both
+the leading parser and body filter. A known pipe/bracket tone immediately after
+a removed body control block is also stripped, without changing the active tone
+or preferences. Ordinary prose and code outside those boundaries are preserved.
 The reply pipeline buffers a possible leading tone tag across deltas. If the
 provider ends normally before that buffer becomes a recognized tag or reaches
 the streaming fallback length, nonempty buffered text is delivered once as
@@ -1398,6 +1402,9 @@ After a normal or interrupted reply, ingest runs outside the response path.
 The completion callback removes the session turn only when durable memory was
 created. Non-persistent dialogue remains within a bounded rolling context until
 the session ends.
+Interruption remains a `SessionTurn` state flag. Provider dialogue messages
+contain the heard assistant content without appending runtime annotations to
+the assistant's utterance.
 
 Only confirmed turns enter this path. Chained conversations use one guarded
 finalizer for normal completion, interruption, errors, follow-ups and disconnect;

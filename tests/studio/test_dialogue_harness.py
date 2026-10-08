@@ -531,6 +531,25 @@ class SelfHarnessTests(unittest.TestCase):
         self.assertEqual(incomplete.rest, "")
         self.assertIn("unterminated", incomplete.error)
 
+    def test_private_control_prefix_variants_keep_validation_and_stream_boundaries(self):
+        for opening, closing in (('<SELF_HARNESS>', '</SELF_HARNESS>'),
+                                 ('<self_harness >', '</self_harness >'),
+                                 ('< Self_Harness\n>', '< / Self_Harness >')):
+            with self.subTest(opening=opening):
+                header = opening + '{"speaking_style":{"speech_rate":"slow"}}' + closing
+                for end in range(1, len(header)):
+                    self.assertFalse(split_control_prefix(header[:end]).resolved)
+                parsed = split_control_prefix(header + '温和|正文。')
+                self.assertEqual(parsed.update, {'speaking_style': {'speech_rate': 'slow'}})
+                self.assertEqual(parsed.rest, '温和|正文。')
+                malformed = split_control_prefix(opening + '{"provider":"invalid"}' + closing + '正文。')
+                self.assertEqual(malformed.update, {})
+                self.assertEqual(malformed.rest, '正文。')
+                self.assertTrue(malformed.error)
+                incomplete = split_control_prefix(opening + '{', final=True)
+                self.assertEqual(incomplete.rest, '')
+                self.assertTrue(incomplete.error)
+
     def test_private_control_filter_handles_split_body_tags_with_bounded_state(self):
         from studio.core.utils.self_harness.component import PrivateControlFilter
 
@@ -541,6 +560,17 @@ class SelfHarnessTests(unittest.TestCase):
             '前文。<self_': '前文。',
             'x < y; y > z; 最后 <': 'x < y; y > z; 最后 <',
             '<selfish>普通标记</selfish>': '<selfish>普通标记</selfish>',
+            '前文。<SELF_HARNESS>{}</SELF_HARNESS>后文。': '前文。后文。',
+            '前文。< self_harness >{}</ self_harness >认真 |后文。': '前文。后文。',
+            '前文。<self_harness >{}</self_harness>【认真】后文。': '前文。后文。',
+            '前文。<SELF_HARNESS>{}</SELF_HARNESS>Serious｜后文。': '前文。后文。',
+            '前文。<self_harness>{}</self_harness>认真|鼓励|后文。': '前文。后文。',
+            '前文。<SELF_HARNESS>{"unfinished":': '前文。',
+            '前文。< SELF_HAR': '前文。',
+            '前文。<self_harness>{}</self_harness>认真地说。': '前文。认真地说。',
+            '前文。<self_harness>{}</self_harness>认真': '前文。认真',
+            '前文。<self_harness>{}</self_harness>A|B，`x|y`。': '前文。A|B，`x|y`。',
+            '正文中的认真|、serious|和【温和】不在控制边界。': '正文中的认真|、serious|和【温和】不在控制边界。',
         }
         for raw, expected in cases.items():
             chunks = [[raw], list(raw)] + [[raw[:split], raw[split:]]

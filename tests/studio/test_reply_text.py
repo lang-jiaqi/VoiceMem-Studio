@@ -134,6 +134,62 @@ class ShortReplyTextTests(ReplyFixture, unittest.IsolatedAsyncioTestCase):
         self.assert_body('前半句。后半句。')
         self.assertEqual(updates, {})
 
+    async def test_variant_body_headers_and_repeated_tones_never_reach_reply_consumers(self):
+        for opening, closing, tone in (
+            ('<self_harness >', '</self_harness >', '认真|'),
+            ('<SELF_HARNESS>', '</SELF_HARNESS>', 'Serious｜'),
+            ('< self_harness\n>', '< / self_harness >', '【认真】'),
+        ):
+            raw = ('<self_harness>{}</self_harness>温和|前半句。' + opening
+                   + '{"speaking_style":{"tone":"认真"}}' + closing + tone + '后半句。')
+            for chunks in ([raw], list(raw), [raw[:raw.index(tone)], raw[raw.index(tone):]]):
+                with self.subTest(opening=opening, chunks=chunks):
+                    self.setUp()
+                    updates = {}
+                    await self.complete(chunks, self_harness_profile={},
+                                        on_self_harness_update=updates.update)
+                    self.assert_body('前半句。后半句。')
+                    self.assertEqual(updates, {})
+                    self.assertTrue(all(TONES['温和'] in value for value in self.tts_instructions))
+                    self.assertFalse(any(TONES['认真'] in value for value in self.tts_instructions))
+
+    async def test_variant_leading_header_is_applied_once_and_never_displayed(self):
+        updates = {}
+        await self.complete(list(
+            '< SELF_HARNESS >{"speaking_style":{"speech_rate":"slow"}}'
+            '< / SELF_HARNESS >温和|正常回答。'),
+            self_harness_profile={}, on_self_harness_update=updates.update)
+        self.assert_body('正常回答。')
+        self.assertEqual(updates, {'speaking_style': {'speech_rate': 'slow'}})
+
+    async def test_incomplete_variant_header_and_repeated_tone_are_discarded_on_cancel_or_error(self):
+        for tail in ('<SELF_HARNESS >{"unfinished":',
+                     '<self_harness >{}</self_harness >认真'):
+            for fail in (False, True):
+                with self.subTest(tail=tail, provider_error=fail):
+                    self.setUp()
+                    entered = asyncio.Event()
+
+                    async def model(*_):
+                        yield '温和|前半句。' + tail
+                        entered.set()
+                        if fail:
+                            raise RuntimeError('synthetic provider failure')
+                        await asyncio.Event().wait()
+
+                    task = asyncio.create_task(self.pipeline(model, self_harness_profile={}))
+                    await asyncio.wait_for(entered.wait(), 1)
+                    if fail:
+                        with self.assertRaisesRegex(RuntimeError, 'synthetic provider'):
+                            await asyncio.wait_for(task, 1)
+                    else:
+                        task.cancel()
+                        await asyncio.wait_for(task, 1)
+                    displayed = ''.join(m['text'] for m in self.messages if m['type'] == 'answer_delta')
+                    self.assertEqual(displayed, '前半句。')
+                    self.assertNotIn('认真', ''.join(self.tts_text))
+                    self.assertNotIn('self_harness', self.timeline.generated_text.lower())
+
     async def test_unfinished_misplaced_control_stays_private_at_eof(self):
         await self.complete(list('温和|合成测试回答。<self_harness>{"unfinished":'),
                             self_harness_profile={})
