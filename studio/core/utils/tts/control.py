@@ -28,6 +28,32 @@ _ALIAS: dict[str, str] = {
     "calm": "平静", "neutral": "平静", "plain": "平静",
 }
 
+_REPEATED_NAMES = tuple(TONES) + tuple(_ALIAS)
+_REPEATED_NAME = "|".join(re.escape(name) for name in _REPEATED_NAMES)
+_REPEATED_TAG = re.compile(
+    rf"^\s*(?:({_REPEATED_NAME})\s*[|｜]|[\[【]\s*({_REPEATED_NAME})\s*[\]】])\s*",
+    re.IGNORECASE,
+)
+_REPEATED_PREFIXES = tuple(
+    prefix.lower() for name in _REPEATED_NAMES
+    for prefix in (name + "|", name + "｜", f"[{name}]", f"【{name}】"))
+
+
+def strip_repeated_prefix(text: str, *, final: bool = False) -> tuple[bool, str]:
+    """Resolve a tone after a removed control block without changing speech state.
+
+    Only known pipe/bracket labels are removed. A short split label waits for
+    its delimiter; ordinary prose and code are released unchanged.
+    """
+    match = _REPEATED_TAG.match(text)
+    while match:
+        text = text[match.end():]
+        match = _REPEATED_TAG.match(text)
+    candidate = "".join(text.split()).lower()
+    pending = len(text) <= 128 and any(prefix.startswith(candidate) for prefix in _REPEATED_PREFIXES)
+    return (True, text) if final or not pending else (False, text)
+
+
 def _from_head(head: str) -> str:
     tag = next((t for t in TONES if t in head), "")
     if tag:

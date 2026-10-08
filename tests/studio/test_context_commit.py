@@ -506,7 +506,12 @@ class ContextCommitTests(ConversationFixture, unittest.IsolatedAsyncioTestCase):
         self.assert_once(value)
         heard = self.saved()[0].assistant_text
         self.assertTrue(heard)
+        self.assertTrue(self.saved()[0].interrupted)
         self.assertNotEqual(heard, timeline.generated_text)
+        history = self.agent._SESSION_CONTEXT.messages(
+            self.session.context_session, self.agent.ACTIVE_SPACE,
+            window=self.agent.HISTORY_TURNS)
+        self.assertEqual(history[-1], {'role': 'assistant', 'content': heard})
         interruption = next(m for m in self.messages if m['type'] == 'answer_interrupt')
         self.assertEqual(interruption['heard_text'], heard)
         timeline._first_audio_at -= 20

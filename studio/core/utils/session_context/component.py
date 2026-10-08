@@ -125,10 +125,7 @@ class SessionBuffer:
             if turn.user_text:
                 out.append({"role": "user", "content": turn.user_text})
             if turn.assistant_text:
-                text = turn.assistant_text
-                if turn.interrupted:
-                    text += "（被用户打断）"
-                out.append({"role": "assistant", "content": text})
+                out.append({"role": "assistant", "content": turn.assistant_text})
         return out
 
     def clear_session(self, session_id: str) -> None:

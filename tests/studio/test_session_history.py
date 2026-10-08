@@ -6,6 +6,29 @@ from studio.core.utils.session_context.component import SessionBuffer
 
 
 class SessionHistoryTests(unittest.TestCase):
+    def test_interrupted_history_keeps_heard_content_and_private_state_separate(self):
+        for question, heard in (('请解释这个问题。', '我先说第一点。'),
+                                ('Please explain this.', 'Let me start with the first point.')):
+            with self.subTest(question=question):
+                buffer = SessionBuffer()
+                turn = buffer.add('session', 'space', question, heard, interrupted=True)
+                expected = [{'role': 'user', 'content': question},
+                            {'role': 'assistant', 'content': heard}]
+                self.assertTrue(buffer.turns('session', 'space')[0].interrupted)
+                self.assertEqual(buffer.messages('session', 'space'), expected)
+                buffer.mark_complete(turn, True)
+                self.assertEqual(buffer.messages('session', 'space'), [])
+                self.assertEqual(buffer.messages('session', 'space', window=6), expected)
+                self.assertTrue(buffer.recent('session', 'space', 6)[0].interrupted)
+
+    def test_literal_interruption_text_is_preserved_without_an_added_annotation(self):
+        buffer = SessionBuffer()
+        question = '这里的“（被用户打断）”是什么意思？'
+        heard = '“（被用户打断）”是你引用的文字。'
+        buffer.add('session', 'space', question, heard, interrupted=True)
+        self.assertEqual(buffer.messages('session', 'space', window=6), [
+            {'role': 'user', 'content': question}, {'role': 'assistant', 'content': heard}])
+
     def test_studio_initialization_uses_the_expanded_context_budget(self):
         from studio.core.utils.cli.component import parse_args
         from studio.core.utils.runtime.component import configure
