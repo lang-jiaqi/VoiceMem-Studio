@@ -1,0 +1,33 @@
+{
+  "classification": "experimental",
+  "parameter_count": 102274064,
+  "fresh_authored_test": {
+    "correct": 103,
+    "total": 106
+  },
+  "frozen_behavior_regression": {
+    "correct": 20,
+    "total": 20
+  },
+  "additional_authored_regression": {
+    "correct": 27,
+    "total": 30
+  },
+  "untrained_synthetic_speech": {
+    "correct": 48,
+    "views": 48,
+    "source_contexts": 12
+  },
+  "legacy_untrained_synthetic_asr": {
+    "correct": 712,
+    "views": 716,
+    "deep_recall": 1,
+    "false_deep_rate": 0.009523809523809525
+  },
+  "native_mac_tested": false,
+  "known_limitations": [
+    "Some requests to hide the reasoning process are mistaken for disabling deep reasoning.",
+    "Completed-result recall and requests for a complex derivation can still be confused."
+  ],
+  "scope": "Authored synthetic examples and correlated ASR views; not an overall natural-dialogue accuracy estimate."
+}

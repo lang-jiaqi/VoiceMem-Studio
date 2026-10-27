@@ -99,3 +99,8 @@ slow synchronous inference does not satisfy that boundary. Other synchronous
 input methods retain their existing worker/executor placement. Async router and
 speech methods must offload blocking model work themselves. API clients retained
 by custom adapters must be safe across startup and server loop lifetimes.
+
+The experimental local decision adapters and their independent filler settings
+are documented in [the decision training guide](../../../../finetune/decision_router/README.md).
+They keep the existing adapter contract, avoid loading a generative router,
+and require explicit opt-in for prototype checkpoints.

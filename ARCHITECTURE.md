@@ -710,6 +710,84 @@ manifest skips only replaced component weights; memory perception models remain
 independently required. Custom native adapters must retain engine scheduling
 and existing lock boundaries. Adapter contracts are documented beside the loader.
 
+An opt-in `studio.core.utils.reply_modes.decision:create` adapter loads a local
+NumPy decision head and pins its preprocessing, calibration and embedding model
+identity. It reuses the already-required process-shared memory encoder without
+changing that encoder or existing Space vectors. Current text and bounded recent
+history are encoded separately. Observed EOT probability, quiet duration and
+voiced-span duration may accompany them with explicit missing-value masks;
+these signals never grant turn-ending authority. Capture and early generation
+pass copied, runtime-only `Pending.audio_state` values. Other router providers
+retain their existing text-only call signature.
+
+Decision work uses cancellable input admission, bounded context-sensitive result
+caching and identical in-flight request sharing. Its classifier predicts only
+reasoning depth; VoiceMem still owns memory eligibility and final commitment.
+Prototype checkpoints require an explicit `allow_prototype` adapter option and
+cannot silently replace the default Qwen path. Offline training, calibration and
+test groups are disjoint. A text-only pilot is not evidence of acoustic-model
+accuracy or native Mac performance.
+
+The alternate `studio.core.utils.reply_modes.laya:create` adapter reads the
+trained typed question from a local Laya checkpoint. Its native one-forward
+prediction follows the same cancellation, locking, cache and filler delegation
+boundary, with an explicit CPU/MPS/CUDA device. The optional Laya runtime remains
+lazy and is not imported by the default pipeline. Its offline trainer calls the
+upstream `soft-ce` or `rlcd` objective with option-order augmentation and a
+separate group-held-out calibration set. Checkpoints without paired acoustic
+training leave acoustic-state fusion disabled at inference.
+
+The complete data path pairs reference-free designed speech and licensed public
+speech with actual streaming/final ASR outputs and measured native VAD/EOT state.
+Whole dialogue/semantic groups stay within one train, validation, calibration or
+test partition. Weak consensus labels are training-only. Validation selects a
+saved epoch; calibration fits probabilities afterward; test views stay separate.
+
+The contrastive dialogue workflow in `finetune/decision_router/dialogue_data.py`
+holds out complete wording families, including opposite intent polarities and
+all contextual/audio variants. Every authored partition contains explicit depth
+requests, negatives/quotations, implicit complex tasks, ordinary requests and
+context-dependent continuations. `assemble_v2.py` preserves those assignments,
+excludes legacy consensus labels and reuses only legacy supervised training
+rows. Checkpoint selection reports semantic categories and contextual coverage,
+and weights category accuracy equally instead of letting a large template
+category dominate validation. Private conversation regressions remain outside
+training and public fixtures. These checks establish only their stated authored
+and observed-speech scope; natural-dialogue quality still needs independent use.
+`intent_data.py` adds execution/quotation, negation-scope, speaker-intent and
+changed-instruction contrasts. A prior inspected test partition becomes
+regression-only and is excluded from the new training/validation/calibration
+partitions. Optional target smoothing applies only to training; validation and
+calibration retain hard intent labels. The acoustic-trained flag is based on
+observed training rows, not the presence of audio in evaluation partitions.
+
+The task-specific `studio.core.utils.reply_modes.encoder_depth:create` adapter
+uses a locally fine-tuned BERT encoder and a fixed binary head. Current text and
+bounded history form two independent sequences in one encoder batch. The head
+combines their representations, interaction and observed audio features; absent
+history is masked out. Parameters belong solely to the router. The adapter
+inherits the existing cancellable work/cache and independent filler boundaries,
+and returns the same `ThinkingDecision` contract. It loads only built-in BERT
+configuration, tokenizer and safetensors, or a CPU ONNX graph. Remote code is
+disabled. The graph uses the existing bounded CPU session options and requires
+dynamic batch/sequence parity checks before behavior qualification.
+
+Offline `encoder_train.py` supports full-parameter fine-tuning with validation
+selection and separate hard-label calibration. `hard_examples.py` can promote
+previously inspected synthetic cases to training; their former scores then
+become training regressions, never independent accuracy evidence. New evaluation
+families remain separate. `scope_state_data.py` distinguishes reasoning mode
+from spoken detail, and completed-result recall from unfinished complex work.
+Evaluation-only audio manifests keep schema/group checks without requiring
+training partitions. Selected speech case IDs use safe hashed wave filenames.
+
+For bounded CPU deployment, `onnx_depth.py` uses upstream token construction and
+the trained question with a two-thread ONNX session. It loads graph/config/
+tokenizer only, without expanding a second PyTorch router. Export can preserve
+exact fp16 vocabulary-table values while computing gathered rows in fp32.
+Lower-precision variants need separate calibration and behavior checks before
+selection. Native Mac memory and latency require local measurement.
+
 Deepgram sockets belong to connection-owned ASR workers. The adapter combines
 interim and finalized segments into cumulative text, disables provider endpointing,
 and leaves final turn confirmation and independent final-ASR refinement to Harness.
@@ -1188,8 +1266,21 @@ completion before that sink releases `answer_start` or main PCM. Generation
 remains concurrent, but spoken filler and main audio never overlap or hard-cut
 each other.
 
-Work-filler wording comes from the already-loaded Qwen3-0.6B weights, not the
-main reply API. It uses a separate non-thinking short-generation prompt, the
+By default, work-filler wording comes from the already-loaded Qwen3-0.6B weights.
+The optional local decision adapter instead delegates that legacy method to an
+independent OpenAI-compatible chat provider configured with `STUDIO_FILLER_*`.
+It may use a local server or a cloud model; it does not load a generative router.
+Startup checks its endpoint and credentials without making an auxiliary request.
+Each auxiliary request owns its HTTP client and stream, disables thinking for
+supported protocols, performs no retries, and closes on cancellation. This keeps
+filler generation separate from the main reply request and its model parameters.
+For independent generators, private filler text starts after confirmed routing
+and overlaps the remaining handoff wait. Speech synthesis/emission still waits
+for the original threshold and eligibility. Main readiness, silence preferences,
+interruption and disconnect cancel unused text work and its HTTP stream.
+`STUDIO_FILLER_TIMEOUT_S` bounds auxiliary network-inclusive text preparation
+(three seconds by default); the legacy local Qwen text budget stays unchanged.
+Both paths use a separate non-thinking short-generation prompt, the
 complete current input and at most two bounded history messages, without
 changing depth classification or retrieving additional memory. Cold weights,
 over-budget output, invalid text, failure or a queue-inclusive generation timeout

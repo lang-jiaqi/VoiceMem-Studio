@@ -1,0 +1,12 @@
+{
+  "router": {
+    "provider": "adapter",
+    "factory": "studio.core.utils.reply_modes.encoder_depth:create",
+    "model": "artifacts/voice-router-v6/eager",
+    "options": {
+      "backend": "eager",
+      "device": "cuda:0",
+      "allow_prototype": true
+    }
+  }
+}

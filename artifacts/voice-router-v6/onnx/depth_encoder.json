@@ -1,0 +1,464 @@
+{
+  "version": 1,
+  "prototype": true,
+  "task": "voice-depth-encoder",
+  "features_version": 1,
+  "labels": [
+    "ordinary",
+    "deep"
+  ],
+  "max_length": 384,
+  "temperature": 0.3944324145741548,
+  "model_revision": "a986e004d2a7f2a1c2f5a3edef4e20604a974ed1",
+  "base": "results/decision-router/macbert-base",
+  "init_checkpoint": "results/decision-router/voice-encoder-v5",
+  "data_sha256": "05216ed81b8f6149137fef44a6f53cc7a212c6178491037576406c9c707f277c",
+  "training": {
+    "epochs": 4,
+    "micro_batch": 8,
+    "grad_accum": 4,
+    "encoder_lr": 3e-06,
+    "head_lr": 5e-05,
+    "label_smoothing": 0.04,
+    "seed": 42,
+    "freeze_encoder": false
+  },
+  "report": {
+    "best_epoch": 1,
+    "validation_history": [
+      {
+        "epoch": 1,
+        "mean_loss": 0.10788432808966243,
+        "semantic": {
+          "n": 514,
+          "correct": 506,
+          "accuracy": 0.9844357976653697,
+          "deep_recall": 0.9767441860465116,
+          "false_deep_rate": 0.004694835680751174,
+          "groups": 22,
+          "macro_group_accuracy": 0.9608585858585859,
+          "by_category": {
+            "context_deep": {
+              "n": 4,
+              "correct": 4,
+              "accuracy": 1,
+              "deep_recall": 1,
+              "false_deep_rate": null
+            },
+            "context_ordinary": {
+              "n": 4,
+              "correct": 3,
+              "accuracy": 0.75,
+              "deep_recall": null,
+              "false_deep_rate": 0.25
+            },
+            "explicit_deep": {
+              "n": 294,
+              "correct": 287,
+              "accuracy": 0.9761904761904762,
+              "deep_recall": 0.9761904761904762,
+              "false_deep_rate": null
+            },
+            "implicit_complex": {
+              "n": 3,
+              "correct": 3,
+              "accuracy": 1,
+              "deep_recall": 1,
+              "false_deep_rate": null
+            },
+            "intent_negative": {
+              "n": 198,
+              "correct": 198,
+              "accuracy": 1,
+              "deep_recall": null,
+              "false_deep_rate": 0
+            },
+            "ordinary": {
+              "n": 11,
+              "correct": 11,
+              "accuracy": 1,
+              "deep_recall": null,
+              "false_deep_rate": 0
+            }
+          },
+          "with_history": {
+            "n": 315,
+            "correct": 310,
+            "accuracy": 0.9841269841269841,
+            "deep_recall": 0.9774011299435028,
+            "false_deep_rate": 0.007246376811594203
+          },
+          "without_history": {
+            "n": 199,
+            "correct": 196,
+            "accuracy": 0.9849246231155779,
+            "deep_recall": 0.9758064516129032,
+            "false_deep_rate": 0
+          }
+        }
+      },
+      {
+        "epoch": 2,
+        "mean_loss": 0.10058406433380046,
+        "semantic": {
+          "n": 514,
+          "correct": 500,
+          "accuracy": 0.9727626459143969,
+          "deep_recall": 0.9800664451827242,
+          "false_deep_rate": 0.03755868544600939,
+          "groups": 22,
+          "macro_group_accuracy": 0.9318181818181818,
+          "by_category": {
+            "context_deep": {
+              "n": 4,
+              "correct": 4,
+              "accuracy": 1,
+              "deep_recall": 1,
+              "false_deep_rate": null
+            },
+            "context_ordinary": {
+              "n": 4,
+              "correct": 3,
+              "accuracy": 0.75,
+              "deep_recall": null,
+              "false_deep_rate": 0.25
+            },
+            "explicit_deep": {
+              "n": 294,
+              "correct": 288,
+              "accuracy": 0.9795918367346939,
+              "deep_recall": 0.9795918367346939,
+              "false_deep_rate": null
+            },
+            "implicit_complex": {
+              "n": 3,
+              "correct": 3,
+              "accuracy": 1,
+              "deep_recall": 1,
+              "false_deep_rate": null
+            },
+            "intent_negative": {
+              "n": 198,
+              "correct": 192,
+              "accuracy": 0.9696969696969697,
+              "deep_recall": null,
+              "false_deep_rate": 0.030303030303030304
+            },
+            "ordinary": {
+              "n": 11,
+              "correct": 10,
+              "accuracy": 0.9090909090909091,
+              "deep_recall": null,
+              "false_deep_rate": 0.09090909090909091
+            }
+          },
+          "with_history": {
+            "n": 315,
+            "correct": 306,
+            "accuracy": 0.9714285714285714,
+            "deep_recall": 0.9830508474576272,
+            "false_deep_rate": 0.043478260869565216
+          },
+          "without_history": {
+            "n": 199,
+            "correct": 194,
+            "accuracy": 0.9748743718592965,
+            "deep_recall": 0.9758064516129032,
+            "false_deep_rate": 0.02666666666666667
+          }
+        }
+      },
+      {
+        "epoch": 3,
+        "mean_loss": 0.09950961827800588,
+        "semantic": {
+          "n": 514,
+          "correct": 505,
+          "accuracy": 0.9824902723735408,
+          "deep_recall": 0.973421926910299,
+          "false_deep_rate": 0.004694835680751174,
+          "groups": 22,
+          "macro_group_accuracy": 0.9595959595959596,
+          "by_category": {
+            "context_deep": {
+              "n": 4,
+              "correct": 4,
+              "accuracy": 1,
+              "deep_recall": 1,
+              "false_deep_rate": null
+            },
+            "context_ordinary": {
+              "n": 4,
+              "correct": 3,
+              "accuracy": 0.75,
+              "deep_recall": null,
+              "false_deep_rate": 0.25
+            },
+            "explicit_deep": {
+              "n": 294,
+              "correct": 286,
+              "accuracy": 0.9727891156462585,
+              "deep_recall": 0.9727891156462585,
+              "false_deep_rate": null
+            },
+            "implicit_complex": {
+              "n": 3,
+              "correct": 3,
+              "accuracy": 1,
+              "deep_recall": 1,
+              "false_deep_rate": null
+            },
+            "intent_negative": {
+              "n": 198,
+              "correct": 198,
+              "accuracy": 1,
+              "deep_recall": null,
+              "false_deep_rate": 0
+            },
+            "ordinary": {
+              "n": 11,
+              "correct": 11,
+              "accuracy": 1,
+              "deep_recall": null,
+              "false_deep_rate": 0
+            }
+          },
+          "with_history": {
+            "n": 315,
+            "correct": 309,
+            "accuracy": 0.9809523809523809,
+            "deep_recall": 0.9717514124293786,
+            "false_deep_rate": 0.007246376811594203
+          },
+          "without_history": {
+            "n": 199,
+            "correct": 196,
+            "accuracy": 0.9849246231155779,
+            "deep_recall": 0.9758064516129032,
+            "false_deep_rate": 0
+          }
+        }
+      },
+      {
+        "epoch": 4,
+        "mean_loss": 0.09905718176327206,
+        "semantic": {
+          "n": 514,
+          "correct": 506,
+          "accuracy": 0.9844357976653697,
+          "deep_recall": 0.9800664451827242,
+          "false_deep_rate": 0.009389671361502348,
+          "groups": 22,
+          "macro_group_accuracy": 0.9393939393939394,
+          "by_category": {
+            "context_deep": {
+              "n": 4,
+              "correct": 4,
+              "accuracy": 1,
+              "deep_recall": 1,
+              "false_deep_rate": null
+            },
+            "context_ordinary": {
+              "n": 4,
+              "correct": 3,
+              "accuracy": 0.75,
+              "deep_recall": null,
+              "false_deep_rate": 0.25
+            },
+            "explicit_deep": {
+              "n": 294,
+              "correct": 288,
+              "accuracy": 0.9795918367346939,
+              "deep_recall": 0.9795918367346939,
+              "false_deep_rate": null
+            },
+            "implicit_complex": {
+              "n": 3,
+              "correct": 3,
+              "accuracy": 1,
+              "deep_recall": 1,
+              "false_deep_rate": null
+            },
+            "intent_negative": {
+              "n": 198,
+              "correct": 198,
+              "accuracy": 1,
+              "deep_recall": null,
+              "false_deep_rate": 0
+            },
+            "ordinary": {
+              "n": 11,
+              "correct": 10,
+              "accuracy": 0.9090909090909091,
+              "deep_recall": null,
+              "false_deep_rate": 0.09090909090909091
+            }
+          },
+          "with_history": {
+            "n": 315,
+            "correct": 310,
+            "accuracy": 0.9841269841269841,
+            "deep_recall": 0.9830508474576272,
+            "false_deep_rate": 0.014492753623188406
+          },
+          "without_history": {
+            "n": 199,
+            "correct": 196,
+            "accuracy": 0.9849246231155779,
+            "deep_recall": 0.9758064516129032,
+            "false_deep_rate": 0
+          }
+        }
+      }
+    ],
+    "calibration": {
+      "n": 334,
+      "correct": 332,
+      "accuracy": 0.9940119760479041,
+      "deep_recall": 1,
+      "false_deep_rate": 0.014184397163120567,
+      "groups": 19,
+      "macro_group_accuracy": 0.956140350877193,
+      "by_category": {
+        "context_deep": {
+          "n": 4,
+          "correct": 4,
+          "accuracy": 1,
+          "deep_recall": 1,
+          "false_deep_rate": null
+        },
+        "context_ordinary": {
+          "n": 4,
+          "correct": 3,
+          "accuracy": 0.75,
+          "deep_recall": null,
+          "false_deep_rate": 0.25
+        },
+        "explicit_deep": {
+          "n": 186,
+          "correct": 186,
+          "accuracy": 1,
+          "deep_recall": 1,
+          "false_deep_rate": null
+        },
+        "implicit_complex": {
+          "n": 3,
+          "correct": 3,
+          "accuracy": 1,
+          "deep_recall": 1,
+          "false_deep_rate": null
+        },
+        "intent_negative": {
+          "n": 126,
+          "correct": 126,
+          "accuracy": 1,
+          "deep_recall": null,
+          "false_deep_rate": 0
+        },
+        "ordinary": {
+          "n": 11,
+          "correct": 10,
+          "accuracy": 0.9090909090909091,
+          "deep_recall": null,
+          "false_deep_rate": 0.09090909090909091
+        }
+      },
+      "with_history": {
+        "n": 213,
+        "correct": 211,
+        "accuracy": 0.9906103286384976,
+        "deep_recall": 1,
+        "false_deep_rate": 0.020833333333333332
+      },
+      "without_history": {
+        "n": 121,
+        "correct": 121,
+        "accuracy": 1,
+        "deep_recall": 1,
+        "false_deep_rate": 0
+      }
+    },
+    "calibrated": {
+      "n": 334,
+      "accuracy": 0.9940119760479041,
+      "deep_recall": 1.0,
+      "false_deep_rate": 0.014184397163120567,
+      "brier": 0.002381106856953094
+    },
+    "test": {
+      "n": 106,
+      "correct": 103,
+      "accuracy": 0.9716981132075472,
+      "deep_recall": 0.9714285714285714,
+      "false_deep_rate": 0.027777777777777776,
+      "groups": 7,
+      "macro_group_accuracy": 0.8571428571428571,
+      "by_category": {
+        "context_deep": {
+          "n": 3,
+          "correct": 1,
+          "accuracy": 0.3333333333333333,
+          "deep_recall": 0.3333333333333333,
+          "false_deep_rate": null
+        },
+        "context_ordinary": {
+          "n": 3,
+          "correct": 2,
+          "accuracy": 0.6666666666666666,
+          "deep_recall": null,
+          "false_deep_rate": 0.3333333333333333
+        },
+        "explicit_deep": {
+          "n": 66,
+          "correct": 66,
+          "accuracy": 1,
+          "deep_recall": 1,
+          "false_deep_rate": null
+        },
+        "implicit_complex": {
+          "n": 1,
+          "correct": 1,
+          "accuracy": 1,
+          "deep_recall": 1,
+          "false_deep_rate": null
+        },
+        "intent_negative": {
+          "n": 30,
+          "correct": 30,
+          "accuracy": 1,
+          "deep_recall": null,
+          "false_deep_rate": 0
+        },
+        "ordinary": {
+          "n": 3,
+          "correct": 3,
+          "accuracy": 1,
+          "deep_recall": null,
+          "false_deep_rate": 0
+        }
+      },
+      "with_history": {
+        "n": 58,
+        "correct": 55,
+        "accuracy": 0.9482758620689655,
+        "deep_recall": 0.9459459459459459,
+        "false_deep_rate": 0.047619047619047616
+      },
+      "without_history": {
+        "n": 48,
+        "correct": 48,
+        "accuracy": 1,
+        "deep_recall": 1,
+        "false_deep_rate": 0
+      }
+    },
+    "elapsed_s": 386.44558987799974,
+    "observed_audio_training_rows": 1440,
+    "trained_audio_state": true,
+    "parameter_count": 102274064
+  },
+  "deployment": {
+    "backend": "onnx",
+    "precision": "fp32"
+  }
+}

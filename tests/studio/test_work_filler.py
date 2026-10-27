@@ -377,6 +377,9 @@ class FillerHandoffTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.events = []
+        self.router = types.SimpleNamespace(prefetch_filler_text=False)
+        self.enterContext(patch('studio.core.utils.reply_modes.initialize.thinking_router',
+                                return_value=self.router))
         async def send(message):
             self.events.append(message)
         agent = types.SimpleNamespace(BC_ECHO_WINDOW_S=4, MIC_RATE=24000,
@@ -389,6 +392,48 @@ class FillerHandoffTests(unittest.IsolatedAsyncioTestCase):
 
     def release(self):
         return self.session.release_buffered_reply(self.sink, self.decision, None, self.value, object(), 'fixture')
+
+    async def test_remote_text_prefetch_overlaps_wait_without_starting_speech_early(self):
+        self.router.prefetch_filler_text = True
+        self.decision.filler_after_s = .06
+        self.value.speech_end = time.monotonic()
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def prepare(*_):
+            entered.set()
+            await release.wait()
+            return '让我整理一下。'
+        async def synthesize(*_, text_task=None):
+            self.assertGreaterEqual(time.monotonic()-self.value.speech_end, .06)
+            self.assertEqual(await text_task, '让我整理一下。')
+            return '', b''
+        self.session.prepare_work_filler_text = prepare
+        self.session.synthesize_work_filler = AsyncMock(side_effect=synthesize)
+        task = asyncio.create_task(self.release())
+        await asyncio.wait_for(entered.wait(), 1)
+        self.session.synthesize_work_filler.assert_not_awaited()
+        self.assertFalse(self.events)
+        release.set()
+        await asyncio.wait_for(task, 1)
+
+    async def test_ready_main_cancels_unused_remote_text_prefetch(self):
+        self.router.prefetch_filler_text = True
+        self.decision.filler_after_s = 10
+        entered, closed = asyncio.Event(), asyncio.Event()
+        async def prepare(*_):
+            try:
+                entered.set()
+                await asyncio.Event().wait()
+            finally:
+                closed.set()
+        self.session.prepare_work_filler_text = prepare
+        self.session.synthesize_work_filler = AsyncMock()
+        task = asyncio.create_task(self.release())
+        await asyncio.wait_for(entered.wait(), 1)
+        await self.sink.send_audio(bytes(480))
+        await asyncio.wait_for(task, 1)
+        self.assertTrue(closed.is_set())
+        self.session.synthesize_work_filler.assert_not_awaited()
+        self.assertFalse(self.events)
 
     async def test_fast_main_audio_skips_filler_without_waiting_for_threshold(self):
         self.decision.filler_after_s = 10

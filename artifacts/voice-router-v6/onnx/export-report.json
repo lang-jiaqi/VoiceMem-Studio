@@ -1,0 +1,21 @@
+{
+  "graph_bytes": 409305029,
+  "dynamic_parity": [
+    {
+      "cases": 1,
+      "tokens": 13,
+      "max_abs_error": 5.602836608886719e-06
+    },
+    {
+      "cases": 2,
+      "tokens": 57,
+      "max_abs_error": 1.9073486328125e-06
+    },
+    {
+      "cases": 3,
+      "tokens": 259,
+      "max_abs_error": 3.5762786865234375e-07
+    }
+  ],
+  "calibration": "Preserves source temperature; behavior qualification still required."
+}

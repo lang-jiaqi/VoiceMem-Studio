@@ -80,3 +80,7 @@ cache/
 # Studio persistence implementation is source, not runtime memory.
 !studio/core/utils/memory/
 !studio/core/utils/memory/*.py
+
+# Curated experimental router snapshot; these weights are stored through Git LFS.
+!/artifacts/voice-router-v6/eager/model.safetensors
+!/artifacts/voice-router-v6/onnx/model.onnx

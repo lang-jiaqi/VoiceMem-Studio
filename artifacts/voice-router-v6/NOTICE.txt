@@ -1,0 +1,4 @@
+Base weights: hfl/chinese-macbert-base (Apache-2.0).
+Source: https://huggingface.co/hfl/chinese-macbert-base
+Pinned revision: a986e004d2a7f2a1c2f5a3edef4e20604a974ed1
+Fine-tuned task-specific depth encoder: VoiceMem-Studio.

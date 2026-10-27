@@ -1,0 +1,2 @@
+artifacts/voice-router-v6/eager/model.safetensors filter=lfs diff=lfs merge=lfs -text
+artifacts/voice-router-v6/onnx/model.onnx filter=lfs diff=lfs merge=lfs -text

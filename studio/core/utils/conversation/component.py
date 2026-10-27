@@ -365,12 +365,18 @@ class Conversation:
         finally:
             self.filler_waiters.pop(filler_id, None)
 
-    async def synthesize_work_filler(self, pending, memory_vm, context_space):
-        """Generate a bounded local bridge using this conversation's speech provider."""
-        from studio.core.utils.self_harness.component import speech_rate_instruction
+    async def prepare_work_filler_text(self, pending, context_space):
+        """Prepare private auxiliary wording from the captured conversation scope."""
         history = self.agent._SESSION_CONTEXT.messages(self.context_session, context_space, window=self.agent.HISTORY_TURNS)
         language = getattr(pending, 'language', '') or self.agent.space_language(context_space)
-        text = await generate_local_filler(pending.text, history=history, lang=language)
+        return await generate_local_filler(pending.text, history=history, lang=language)
+
+    async def synthesize_work_filler(self, pending, memory_vm, context_space, *, text_task=None):
+        """Synthesize the complete bridge after its private wording is available."""
+        from studio.core.utils.self_harness.component import speech_rate_instruction
+        language = getattr(pending, 'language', '') or self.agent.space_language(context_space)
+        text = (await text_task if text_task is not None
+                else await self.prepare_work_filler_text(pending, context_space))
         if not text:
             return ('', b'')
         tts = getattr(self, 'speech_provider', None)
@@ -399,6 +405,7 @@ class Conversation:
         """Bridge into an already-running buffered reply, then release it."""
         filler_task = None
         ready_task = None
+        text_task = None
         try:
             if decision.kind is HandoffKind.CACHED_ACK and ack:
                 # The acknowledgement is fire-and-forget from the reply
@@ -407,6 +414,10 @@ class Conversation:
                 await self.emit_filler(*ack)
             elif decision.kind is HandoffKind.LLM_FILLER:
                 ready_task = asyncio.create_task(sink.wait_for_output())
+                from studio.core.utils.reply_modes.initialize import thinking_router
+                if (self.turn_taking.work_filler_enabled
+                        and getattr(thinking_router(), 'prefetch_filler_text', False) is True):
+                    text_task = asyncio.create_task(self.prepare_work_filler_text(pending, context_space))
                 # Include confirmation, routing and early generation in the wait,
                 # while keeping speculative fillers private until commitment.
                 started = getattr(pending, 'speech_end', 0.0) or time.monotonic()
@@ -418,7 +429,11 @@ class Conversation:
                     print('[filler] skipped reason=main_output_ready', flush=True)
                 elif self.turn_taking.work_filler_enabled:
                     print('[filler] trigger reason=wait_elapsed', flush=True)
-                    filler_task = asyncio.create_task(self.synthesize_work_filler(pending, memory_vm, context_space))
+                    if text_task is None:
+                        filler_task = asyncio.create_task(self.synthesize_work_filler(pending, memory_vm, context_space))
+                    else:
+                        filler_task = asyncio.create_task(self.synthesize_work_filler(
+                            pending, memory_vm, context_space, text_task=text_task))
                     (done, _) = await asyncio.wait((filler_task, ready_task), return_when=asyncio.FIRST_COMPLETED)
                     if ready_task in done or sink.buffered_ms > 0:
                         print('[filler] cancelled reason=main_output_ready', flush=True)
@@ -446,10 +461,10 @@ class Conversation:
                 self.turn_taking.observe_first_audio(sink.first_audio_at - self.turn['measure_started'])
             await sink.commit(final_user_text=pending.text)
         finally:
-            for task in (filler_task, ready_task):
+            for task in (filler_task, ready_task, text_task):
                 if task is not None and (not task.done()):
                     task.cancel()
-            await asyncio.gather(*(task for task in (filler_task, ready_task) if task is not None), return_exceptions=True)
+            await asyncio.gather(*(task for task in (filler_task, ready_task, text_task) if task is not None), return_exceptions=True)
 
     async def drop_early(self, why: str='') -> None:
         t = self.early['task']
@@ -502,6 +517,8 @@ class Conversation:
             try:
                 committed_text = (await refined_text).strip() or text
                 pending = Pending(committed_text, build_memory_context(result), result, spoken=True, emotion=emotion, route=route, reply_mode=MEMORY if gate.needs_memory(route) else DIRECT, transcript_managed=True)
+                pending.audio_state = {'eot_probability': float(st.eot_score),
+                                       'silence_s': float(getattr(st, 'silence', 0.0))}
                 pending.language = detect_language(committed_text, getattr(self, 'languages', {}).get(
                     context_space, self.agent.space_language(context_space)))
                 pending.self_harness_profile = self_harness.snapshot()

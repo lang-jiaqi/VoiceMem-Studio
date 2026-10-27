@@ -542,6 +542,11 @@ class Capture:
                     else:
                         print(f"[early] 本轮 EOT 最高 {eot_peak:.2f}（下注线 {self.EARLY_EOT}）"
                               f"{'，下过注' if early_at else '，没下注'}", flush=True)
+                confirmed_audio_state = {
+                    'eot_probability': float(eot_peak), 'silence_s': float(bc_gap),
+                    **({'span_s': (voiced_end - voiced_start) / self.MIC_RATE}
+                       if voiced_start is not None and voiced_end is not None else {}),
+                }
                 eot_peak = 0.0
                 recent_emission = turn_taking.recent_agent_text()
                 _bc_echo = bool(recent_emission) and self._is_echo(
@@ -588,6 +593,7 @@ class Capture:
                                                 if voiced_start is not None else None),
                               input_audio_epoch=audio_epoch,
                               input_turn_id=input_turn_id,
+                              audio_state=confirmed_audio_state,
                               timing=dict(getattr(st.turn, 'timing', None) or {}))
                 if pending.timing and 'confirmed_at' in pending.timing:
                     captured_at = time.monotonic()

@@ -128,8 +128,12 @@ class Routing:
                 decision = ThinkingDecision(FAST, 'self-harness:quick')
             elif self._THINKING_ROUTER_ON:
                 try:
-                    decision = await thinking_router().classify_async(
-                        pending.text, history=history)
+                    router = thinking_router()
+                    options = {'history': history}
+                    if getattr(router, 'accepts_audio_state', False) is True:
+                        observed = getattr(pending, 'audio_state', None)
+                        options['audio_state'] = dict(observed) if observed is not None else None
+                    decision = await router.classify_async(pending.text, **options)
                 except Exception as exc:
                     print(f"[thinking] 深思判断不可用（{type(exc).__name__}），保留 VoiceMem 记忆资格", flush=True)
                     decision = ThinkingDecision(FAST, 'unavailable')

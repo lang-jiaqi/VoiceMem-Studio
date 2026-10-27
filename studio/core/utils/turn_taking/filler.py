@@ -42,7 +42,7 @@ def generation_prompt(task_context: str, lang: str = "zh") -> str:
 
 async def generate_local_filler(task_context: str, *, history: Sequence[dict] = (),
                                 lang: str = "zh", router=None) -> str:
-    """Generate one optional bridge with the warmed router, never the reply API."""
+    """Generate one optional bridge through the selected auxiliary text provider."""
     if not task_context.strip():
         return ""
     if router is None:
@@ -60,7 +60,7 @@ async def generate_local_filler(task_context: str, *, history: Sequence[dict] = 
     started = time.monotonic()
     text = await router.generate_short_text_async(
         generation_prompt('', lang), prompt, max_tokens=40,
-        timeout_s=WORK_FILLER_TIMEOUT_S)
+        timeout_s=getattr(router, 'filler_text_timeout_s', WORK_FILLER_TIMEOUT_S))
     from studio.core.utils.tts import control as tts_control
     tag, spoken = tts_control.split(text)
     text = (spoken if tag else text).strip().strip('“”\"')
@@ -68,7 +68,8 @@ async def generate_local_filler(task_context: str, *, history: Sequence[dict] = 
     # Reject malformed speech; semantic appropriateness still depends on the model.
     if not 4 <= len(text) <= limit or any(char in text for char in '<>|\n?？“”\"'):
         text = ''
-    print(f'[filler] local-0.6b {"ready" if text else "skipped"} '
+    label = getattr(router, 'filler_label', 'local-0.6b')
+    print(f'[filler] {label} {"ready" if text else "skipped"} '
           f'{(time.monotonic() - started) * 1000:.0f}ms', flush=True)
     return text
 

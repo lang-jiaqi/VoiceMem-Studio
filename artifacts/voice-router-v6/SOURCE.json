@@ -1,0 +1,47 @@
+{
+  "repo": "hfl/chinese-macbert-base",
+  "revision": "a986e004d2a7f2a1c2f5a3edef4e20604a974ed1",
+  "license": "apache-2.0",
+  "files": {
+    "config.json": {
+      "bytes": 659,
+      "sha256": "648c8a2b51c12551f94bae19a66c21a59c9bd8aa0ebb99f2a0af7236cdb99daa",
+      "expected_lfs_sha256": null
+    },
+    "tokenizer.json": {
+      "bytes": 268961,
+      "sha256": "53ff61207898738bbdc000f38abebef01041c8d23b6270c11855fc692d0a3ad6",
+      "expected_lfs_sha256": null
+    },
+    "tokenizer_config.json": {
+      "bytes": 19,
+      "sha256": "61785aeaba176fba6d6489f27dccfd2ddee6aee2af0e590451cab7d8b57e0874",
+      "expected_lfs_sha256": null
+    },
+    "special_tokens_map.json": {
+      "bytes": 112,
+      "sha256": "303df45a03609e4ead04bc3dc1536d0ab19b5358db685b6f3da123d05ec200e3",
+      "expected_lfs_sha256": null
+    },
+    "added_tokens.json": {
+      "bytes": 2,
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "expected_lfs_sha256": null
+    },
+    "vocab.txt": {
+      "bytes": 109540,
+      "sha256": "45bbac6b341c319adc98a532532882e91a9cefc0329aa57bac9ae761c27b291c",
+      "expected_lfs_sha256": null
+    },
+    "README.md": {
+      "bytes": 3842,
+      "sha256": "1516e1e24fff28dfeaed65f714bc676e4739d4c70e6c9f356fbf41d2712251e5",
+      "expected_lfs_sha256": null
+    },
+    "pytorch_model.bin": {
+      "bytes": 411582858,
+      "sha256": "db0506d985574b80c33eec1cf13bd4c130585568753175871095ca13dbad9e23",
+      "expected_lfs_sha256": "db0506d985574b80c33eec1cf13bd4c130585568753175871095ca13dbad9e23"
+    }
+  }
+}

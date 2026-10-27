@@ -256,6 +256,16 @@ class ConcurrentDepthTests(unittest.IsolatedAsyncioTestCase):
 
 
 class MemoryRoutingIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_opt_in_audio_observations_are_copied_without_changing_memory_policy(self):
+        self.router.accepts_audio_state = True
+        value = self.pending(route='deep', prepared=True)
+        value.audio_state = {'eot_probability': .9}
+        await self.agent.route_pending_thinking(value)
+        observed = self.router.classify_async.call_args.kwargs['audio_state']
+        self.assertEqual(observed, value.audio_state)
+        self.assertIsNot(observed, value.audio_state)
+        self.assertEqual(value.reply_mode, 'memory')
+
     def setUp(self):
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, Mock
