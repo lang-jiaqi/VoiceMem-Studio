@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from studio.harness.reply_modes.policy import SYSTEM, EXAMPLES
+from studio.harness.prompts import resolve
 
 FAST = "fast"
 MEDIUM = "medium"
@@ -208,19 +209,23 @@ class QwenThinkingRouter:
                  history=None) -> ThinkingDecision:
         """Classify depth off-loop; the legacy memory hint cannot affect this decision."""
         prompt = self._context_prompt(text, history, memory_prefetch_hint)
-        key = (text, prompt)
+        system = resolve("router", SYSTEM)
+        key = self._classification_key(text, prompt, system)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
 
         output = self._predict(
-            SYSTEM,
+            system,
             EXAMPLES,
             prompt,
         )
-        return self._remember_output(text, prompt, output)
+        return self._remember_output(text, prompt, output, system=system)
 
-    def _remember_output(self, text: str, prompt: str, output: str) -> ThinkingDecision:
+    def _classification_key(self, text, prompt, system):
+        return (text, prompt) if system == SYSTEM else (text, prompt, system)
+
+    def _remember_output(self, text: str, prompt: str, output: str, *, system=SYSTEM) -> ThinkingDecision:
         """Validate and cache a completed classification under its input context."""
         label = (output or '').strip().strip('。.!！')
         if label not in {'是', '否'}:
@@ -228,7 +233,7 @@ class QwenThinkingRouter:
         decision = ThinkingDecision(SLOW if label == '是' else FAST, raw=label)
         if len(self._cache) >= 256:
             self._cache.pop(next(iter(self._cache)))
-        self._cache[(text, prompt)] = decision
+        self._cache[self._classification_key(text, prompt, system)] = decision
         return decision
 
     async def _classify_async(self, text, memory_prefetch_hint, history):
@@ -240,7 +245,8 @@ class QwenThinkingRouter:
         """Share identical in-flight depth work without sharing turn state."""
         history = [dict(message) for message in history or []]
         loop = asyncio.get_running_loop()
-        key = (loop, text, self._context_prompt(text, history, memory_prefetch_hint))
+        key = (loop, text, self._context_prompt(text, history, memory_prefetch_hint),
+               resolve("router", SYSTEM))
         job = self._classifications.get(key)
         if job is None:
             task = asyncio.create_task(self._classify_async(text, memory_prefetch_hint, history))

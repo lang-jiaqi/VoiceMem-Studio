@@ -103,6 +103,49 @@ body[data-style=technical] .settings-page{background:#0007;color-scheme:dark}
 .component-settings [hidden]{display:none!important}
 
 .harness-controls{display:grid;gap:26px}
+.settings-scroll:has(#settingsPrompts.on){display:flex;overflow:hidden;padding:24px}
+#settingsPrompts.on{display:flex;flex:1;max-width:none}
+.harness-prompt-editor{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;overflow:hidden;border:1px solid var(--setting-edge);border-radius:12px;background:var(--setting-bg)}
+.prompt-toolbar{display:flex;flex:none;align-items:center;justify-content:space-between;gap:12px;min-height:52px;padding:0 16px;border-bottom:1px solid var(--setting-edge);background:var(--setting-card)}
+.prompt-module{display:flex;align-items:center;gap:10px;min-width:0;color:var(--setting-muted)}
+.prompt-module svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.prompt-toolbar select{box-sizing:border-box;min-width:0;max-width:100%;padding:7px 24px 7px 0;border:0;border-radius:4px;background:transparent;color:var(--setting-ink);font:inherit;font-size:.8em;font-weight:550;cursor:pointer}
+.prompt-status{min-width:0;color:var(--setting-muted);font-size:.7em;text-align:right;overflow-wrap:anywhere}
+.prompt-editors{flex:1;min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;padding:18px 0;scrollbar-width:thin;scrollbar-color:var(--setting-edge) transparent}
+.prompt-source{min-width:0}
+.prompt-source+.prompt-source{margin-top:20px;padding-top:20px;border-top:1px solid var(--setting-edge)}
+.prompt-code-line{display:flex;align-items:start;min-height:20px;padding-right:16px}
+.prompt-source code,.prompt-source textarea,.prompt-source pre,.prompt-gutter{font:12px/20px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;tab-size:4;letter-spacing:normal;font-variant-ligatures:none}
+.prompt-gutter,.prompt-line-numbers{box-sizing:border-box;width:48px;flex:none;padding:0 14px 0 4px;color:var(--setting-muted);text-align:right;user-select:none}
+.prompt-code-line code{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.prompt-variable{color:#3c628e}
+.prompt-string,.prompt-source textarea{color:#526637}
+body[data-style=technical] .prompt-variable{color:#9cdcfe}
+body[data-style=technical] .prompt-string,body[data-style=technical] .prompt-source textarea{color:#d8b995}
+.prompt-code-body{display:flex;min-width:0}
+.prompt-line-numbers{overflow:hidden;margin:0;white-space:pre}
+.prompt-line-numbers span{display:block}
+.prompt-input{position:relative;flex:1;min-width:0}
+.prompt-source .prompt-measure,.prompt-source textarea{box-sizing:border-box;width:100%;min-width:0;margin:0;padding:0 16px 0 0;border:0;border-radius:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.prompt-measure{visibility:hidden;pointer-events:none}
+.prompt-measure span{display:block;min-height:20px}
+.prompt-source textarea{position:absolute;inset:0;height:100%;display:block;overflow:hidden;resize:none;outline:0;background:transparent;caret-color:var(--setting-ink)}
+.prompt-code-body:focus-within{box-shadow:inset 2px 0 var(--vm-accent-ink)}
+.prompt-code-body:focus-within .prompt-line-numbers{color:var(--setting-ink)}
+.prompt-actions{display:flex;flex:none;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;border-top:1px solid var(--setting-edge);background:var(--setting-card)}
+.prompt-actions button,.prompt-confirm button{padding:8px 15px;border:1px solid var(--setting-edge);border-radius:8px;background:var(--setting-bg);color:var(--setting-ink);font:inherit;font-size:.8em;cursor:pointer}
+.prompt-actions .prompt-save,.prompt-confirm .prompt-confirm-save{background:var(--setting-ink);color:var(--setting-bg)}
+.prompt-actions .prompt-reset{padding-left:0;padding-right:0;border-color:transparent;background:transparent;color:var(--setting-muted)}
+.prompt-actions button:hover:not(:disabled){border-color:var(--setting-muted)}
+.prompt-actions .prompt-reset:hover:not(:disabled){border-color:transparent;color:var(--setting-ink)}
+.prompt-actions button:disabled{opacity:.45;cursor:default}
+.prompt-confirm{--setting-bg:var(--vm-surface);--setting-ink:var(--vm-ink);--setting-edge:var(--vm-border);max-width:min(440px,calc(100% - 40px));padding:24px;border:1px solid var(--setting-edge);border-radius:14px;background:var(--setting-bg);color:var(--setting-ink);box-shadow:0 18px 70px #0003;font:14px/1.5 var(--vm-font);color-scheme:light}
+body[data-style=technical] .prompt-confirm{color-scheme:dark}
+.prompt-confirm::backdrop{background:#0006}
+.prompt-confirm h2{margin:0 0 24px;font-size:18px;font-weight:550}
+.prompt-confirm form>div{display:flex;gap:8px;justify-content:flex-end}
+.reply-stage{display:block;min-height:16px;margin:6px 0;color:var(--setting-muted,var(--vm-muted));font-size:11px;line-height:1.5}
+.reply-stage[hidden]{display:none}
 .harness-group h3{margin:0 0 10px;color:var(--setting-muted);font-size:.78em;font-weight:550}
 .harness-grid{overflow:hidden;border:1px solid var(--setting-edge);border-radius:var(--vm-card-radius)}
 .harness-control{display:flex;align-items:center;flex-wrap:wrap;gap:10px 16px;min-width:0;padding:16px 18px}
@@ -114,6 +157,12 @@ body[data-style=technical] .settings-page{background:#0007;color-scheme:dark}
 .harness-option{flex:1;min-width:0;padding:6px 10px;border:0;border-radius:7px;background:transparent;color:var(--setting-muted);font:inherit;font-size:.76em;line-height:1.5;cursor:pointer}
 .harness-option[aria-pressed=true]{background:var(--setting-accent-soft);color:var(--vm-accent-ink)}
 .harness-option:hover{color:var(--setting-ink)}
+html:lang(en) .harness-control{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,240px)}
+html:lang(en) .harness-row-value{width:100%;margin-left:0}
+html:lang(en) .harness-choice select{flex:1;width:0;min-width:0}
+html:lang(en) .harness-options{flex:1;flex-wrap:wrap}
+html:lang(en) .harness-option{flex:1 0 auto;white-space:nowrap}
+html:lang(en) .harness-pending{grid-column:1/-1}
 .harness-reset{display:grid;place-items:center;width:26px;height:28px;flex:none;padding:0;border:0;border-radius:8px;background:transparent;color:var(--setting-muted);font:inherit;font-size:1.15em;line-height:1;cursor:pointer}
 .harness-reset:hover{background:var(--setting-card);color:var(--setting-ink)}
 .harness-pending{width:100%;color:#b47a35;font-size:.72em}
@@ -153,11 +202,16 @@ body[data-style=technical] .settings-page{background:#0007;color-scheme:dark}
   .settings-shell{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr);width:100%;height:100%;border:0;border-radius:0}
   .settings-sidebar{gap:0;padding:10px 12px;border-right:0;border-bottom:1px solid var(--setting-edge);overflow:visible}
   .settings-brand{display:none}
-  .settings-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
-  .settings-tabs button{flex-direction:column;justify-content:center;gap:5px;padding:8px 2px;font-size:clamp(11px,calc(11px * var(--font-scale,1)),15px);line-height:1.4;text-align:center}
+  .settings-tabs{flex-direction:row;gap:4px;overflow-x:auto;overscroll-behavior-inline:contain;scrollbar-width:thin}
+  .settings-tabs button{flex:1 0 auto;flex-direction:column;justify-content:center;gap:5px;width:auto;min-width:64px;padding:8px 10px;font-size:clamp(11px,calc(11px * var(--font-scale,1)),15px);line-height:1.4;text-align:center;white-space:nowrap}
   .settings-tabs button svg{width:17px;height:17px}
   .settings-header{min-height:54px;padding:0 18px}
   .settings-scroll{padding:22px 18px 32px}
+  .settings-scroll:has(#settingsPrompts.on){padding:16px 12px}
+  .prompt-toolbar{gap:8px;padding:0 12px}
+  .prompt-module{gap:7px;flex:1}
+  .prompt-status{max-width:45%}
+  .prompt-actions{padding:10px 12px}
   .settings-panel-copy{gap:12px;flex-wrap:wrap;margin-bottom:20px}
   .settings-modes{gap:12px}
   .component-open{gap:10px;padding:16px 12px}
@@ -175,5 +229,6 @@ body[data-style=technical] .settings-page{background:#0007;color-scheme:dark}
   .backchannel-curve{padding:14px 12px}
 
 }
+@media(max-width:520px){html:lang(en) .harness-control{grid-template-columns:minmax(0,1fr)}}
 @media(max-height:560px) and (min-width:761px){.settings-page{padding:12px}.settings-scroll{padding-top:20px}}
 @media(prefers-reduced-motion:reduce){.settings-page button{transition:none}.harness-reset:hover{transform:none}}

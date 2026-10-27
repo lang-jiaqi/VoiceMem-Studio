@@ -117,7 +117,7 @@ class TurnTakingStateMachine:
                        cached_ack_available: bool,
                        expected_wait_s: float | None = None,
                        spoken: bool = True, now: float | None = None) -> HandoffDecision:
-        """Choose direct speech, cached audio, or an LLM-generated work filler."""
+        """Choose direct speech, cached acknowledgements, or waiting speech."""
         wait = (self._expected_wait_s if expected_wait_s is None
                 else max(0.0, expected_wait_s))
         if not spoken:

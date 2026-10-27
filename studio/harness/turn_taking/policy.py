@@ -28,6 +28,21 @@ WORK_FILLER_AFTER_S = 1.5
 WORK_FILLER_COOLDOWN_S = 20.0
 WORK_FILLER_TIMEOUT_S = 1.2
 
+WORK_FILLER_PHRASES = {
+    'zh': (
+        '我先认真想一想，理清楚了再跟你说。',
+        '给我一点时间，我把这件事好好想一想。',
+        '让我稍微想一会儿，再好好回答你。',
+        '我再仔细想想，想清楚了再跟你说。',
+    ),
+    'en': (
+        'Let me think this through for a moment before I answer you.',
+        'Give me a little time to consider this carefully.',
+        'I need a moment to think about how best to answer.',
+        'Let me take a moment and give this some thought.',
+    ),
+}
+
 @dataclass(frozen=True)
 class SessionFrequencyCurve:
     """Draw one acknowledgement quota for each phase of an utterance."""

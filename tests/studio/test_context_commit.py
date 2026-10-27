@@ -360,13 +360,13 @@ class ContextCommitTests(ConversationFixture, unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(generation, 1)
         self.assertEqual(
             self.session.self_harness.profile["speaking_style"]["speech_rate"],
-            "normal")
+            "very_fast")
         self.assertEqual(
             self.session.self_harness.profile["speaking_style"]["tone"], "auto")
         await self.session.drop_early()
         self.assertEqual(
             self.session.self_harness.profile["speaking_style"]["speech_rate"],
-            "normal")
+            "very_fast")
 
     async def test_accepted_early_reply_commits_self_harness(self):
         async def model(*_):

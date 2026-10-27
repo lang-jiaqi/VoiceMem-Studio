@@ -1,11 +1,12 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, Menu, dialog, session, systemPreferences, nativeTheme, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, screen, session, systemPreferences, nativeTheme, safeStorage } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const runtime = require('./runtime.cjs');
 const { createPet } = require('./pet-window.cjs');
 const { controlConversation } = require('./pet-conversation.cjs');
 const { shouldShowPet } = require('./desktop-visibility.cjs');
+const { studioWindowLayout } = require('./window-layout.cjs');
 
 app.setName('VoiceMem Studio');
 if (process.env.VOICEMEM_DESKTOP_USER_DATA) app.setPath('userData', path.resolve(process.env.VOICEMEM_DESKTOP_USER_DATA));
@@ -139,8 +140,11 @@ async function openStudio(url, ownGeneration) {
   const previous = studio;
   const studioSession = session.fromPartition(`persist:studio-${new URL(url).host}`);
   installPermissions(studioSession);
+  const display = previous && !previous.isDestroyed()
+    ? screen.getDisplayMatching(previous.getBounds())
+    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const window = new BrowserWindow({
-    width: 680, height: 430, minWidth: 480, minHeight: 380, title: 'VoiceMem Studio',
+    ...studioWindowLayout(true, display.workArea), title: 'VoiceMem Studio',
     backgroundColor: '#f7f8fa', icon, show: false,
     webPreferences: {
       session: studioSession, preload: path.join(__dirname, 'studio-preload.cjs'),
@@ -161,9 +165,10 @@ async function openStudio(url, ownGeneration) {
     preparedMode = home;
     if (window.isFullScreen()) window.setFullScreen(false);
     if (window.isMaximized()) window.unmaximize();
-    window.setMinimumSize(home ? 480 : 1080, home ? 380 : 680);
-    window.setSize(home ? 680 : 1440, home ? 430 : 920);
-    window.center();
+    const { minWidth, minHeight, ...bounds } = studioWindowLayout(home,
+      screen.getDisplayMatching(window.getBounds()).workArea);
+    window.setMinimumSize(minWidth, minHeight);
+    window.setBounds(bounds);
   }
   window.webContents.on('will-navigate', (_event, destination) => {
     if (runtime.sameOrigin(destination, url)) prepareMode(homeOf(destination));

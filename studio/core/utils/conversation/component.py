@@ -27,19 +27,22 @@ class Conversation:
     def __init__(self, agent, sock):
         initialize(self, agent, sock)
 
-    async def publish_self_harness(self, snapshot=None, *, error: str = "") -> None:
+    async def publish_self_harness(self, snapshot=None, *, error: str = "", request_id="") -> None:
         """Send the current session controls to the owning browser only."""
         from studio.core.utils.self_harness.component import (
             public_backchannel_curve_schema, public_prompt_schema, public_schema,
         )
+        from studio.harness.prompts import catalog
         try:
             await self.sock.send_json({
                 "type": "self_harness_state",
                 "schema": public_schema(),
                 "prompt_schema": public_prompt_schema(),
+                **({"prompt_catalog": catalog(self.self_harness.prompt_language)} if snapshot is None else {}),
                 "backchannel_curve_schema": public_backchannel_curve_schema(),
                 "snapshot": snapshot or self.self_harness.snapshot(),
                 "error": error,
+                "request_id": request_id,
             })
         except Exception:
             pass
@@ -57,6 +60,53 @@ class Conversation:
             self.self_harness.set_prompt(name, value)
         except (TypeError, ValueError) as exc:
             await self.publish_self_harness(error=str(exc))
+
+    async def update_harness_prompts(self, value, request_id="", *, prompt_language=None) -> None:
+        """Apply validated explicit edits to future turns and invalidate speculation."""
+        from studio.harness.prompts import validate_overrides
+        try:
+            if prompt_language is not None and prompt_language != self.self_harness.prompt_language:
+                raise ValueError("Prompt language changed; review the current templates and save again.")
+            overrides = validate_overrides(value, language=self.self_harness.prompt_language)
+            if overrides != self.self_harness.prompt_overrides:
+                await self.drop_early("prompt settings changed")
+                self.stop_prewarm()
+                self.self_harness.set_prompt_overrides(overrides)
+            await self.publish_self_harness(request_id=request_id)
+        except (TypeError, ValueError) as exc:
+            await self.publish_self_harness(error=str(exc), request_id=request_id)
+
+    async def configure_language(self, language) -> None:
+        """Set this connection's fallback without rewriting Memory Space metadata."""
+        if not isinstance(language, str) or language not in {"zh", "en"}:
+            return
+        self.base_language = language
+        self.languages['_default'] = language
+        self.languages[self.agent.ACTIVE_SPACE] = language
+        if self.self_harness.prompt_language != language:
+            await self.drop_early("prompt language changed")
+            self.stop_prewarm()
+            self.self_harness.prompt_language = language
+        await self.publish_self_harness()
+
+    async def publish_reply_memory(self, pending, timeline, memory_vm, space) -> None:
+        """Expose confirmed retrieval before speech; speculative output stays private."""
+        if (self.prewarm['closed'] or timeline.interrupted
+                or self.turn['timeline'] is not timeline
+                or self.agent.vm is not memory_vm or self.agent.ACTIVE_SPACE != space
+                or getattr(pending, 'opening', False)):
+            return
+        from studio.web.transport import hits_payload
+        reply_config = getattr(self.agent, 'REPLY', {})
+        provider = ((reply_config.get('llm') or {}).get('provider', '')
+                    if isinstance(reply_config, dict) else '')
+        identity = {"output_id": timeline.output_id,
+                    "input_turn_id": getattr(pending, 'input_turn_id', ''), "space": space}
+        await self.sock.send_json({"type": "reply_preparing", **identity,
+                                   "reply_mode": pending.reply_mode, "provider": provider})
+        payload = hits_payload(pending.result)
+        await self.sock.send_json({"type": "memory_hits", **identity,
+                                   "route": pending.route, "stage": "retrieved", **payload})
 
     async def update_backchannel_curve(self, value) -> None:
         """Apply explicit expected quotas for the four acknowledgement phases."""
@@ -366,34 +416,36 @@ class Conversation:
             self.filler_waiters.pop(filler_id, None)
 
     async def synthesize_work_filler(self, pending, memory_vm, context_space):
-        """Generate a bounded local bridge using this conversation's speech provider."""
-        from studio.core.utils.self_harness.component import speech_rate_instruction
-        history = self.agent._SESSION_CONTEXT.messages(self.context_session, context_space, window=self.agent.HISTORY_TURNS)
+        """Reuse prepared waiting speech, honoring explicit custom prompt and voice edits."""
+        from studio.core.utils.turn_taking.filler_voice import choose_phrase, instruction, synthesize
         language = getattr(pending, 'language', '') or self.agent.space_language(context_space)
-        text = await generate_local_filler(pending.text, history=history, lang=language)
-        if not text:
-            return ('', b'')
+        from studio.harness.prompts import effective_prompts
+        state = getattr(self, 'self_harness', None)
+        snapshot = (getattr(pending, 'self_harness_profile', None)
+                    or (state.snapshot() if state is not None else None))
+        explicit = (snapshot or {}).get('prompt_overrides', {})
+        custom = bool({'filler_system', 'filler_input'}.intersection(explicit))
         tts = getattr(self, 'speech_provider', None)
         if tts is None:
             tts = memory_vm.utils.get('tts')
-        state = getattr(self, 'self_harness', None)
-        instruction = speech_rate_instruction(
-            self.agent._speak_instruction(pending.emotion, language),
-            state.snapshot() if state is not None else None, language=language)
-        print(f'[tts-prompt] filler {json.dumps(instruction, ensure_ascii=False)}', flush=True)
-        try:
-            stream = tts.stream(text, instruction)
-        except TypeError:
-            stream = tts.stream(text)
-        chunks = bytearray()
-        try:
-            async for chunk in stream:
-                chunks.extend(chunk.pcm if isinstance(chunk, TimedAudioChunk) else chunk)
-        finally:
-            close = getattr(stream, 'aclose', None)
-            if close is not None:
-                await close()
-        return (text, bytes(chunks))
+        style = instruction(self.agent, language, snapshot)
+        bc = self.turn_taking.backchannel
+        if not custom:
+            for bank in getattr(self.agent, '_WORK_FILLER_VOICES', ()):
+                if bank.matches(tts, language, style):
+                    cached = bank.choose(bc._recent, bc.rng)
+                    if cached:
+                        print('[filler] source=prepared_audio', flush=True)
+                        return cached
+            text = choose_phrase(language, bc._recent, bc.rng)
+        else:
+            history = self.agent._SESSION_CONTEXT.messages(self.context_session, context_space, window=self.agent.HISTORY_TURNS)
+            text = await generate_local_filler(pending.text, history=history, lang=language,
+                                               prompts=effective_prompts(snapshot))
+        if not text:
+            return ('', b'')
+        print(f'[filler] source={"custom_prompt" if custom else "prepared_text"}', flush=True)
+        return text, await synthesize(tts, text, style)
 
     async def release_buffered_reply(self, sink, decision, ack, pending, memory_vm, context_space) -> None:
         """Bridge into an already-running buffered reply, then release it."""
@@ -503,7 +555,7 @@ class Conversation:
                 committed_text = (await refined_text).strip() or text
                 pending = Pending(committed_text, build_memory_context(result), result, spoken=True, emotion=emotion, route=route, reply_mode=MEMORY if gate.needs_memory(route) else DIRECT, transcript_managed=True)
                 pending.language = detect_language(committed_text, getattr(self, 'languages', {}).get(
-                    context_space, self.agent.space_language(context_space)))
+                    context_space, getattr(self, 'base_language', '') or self.agent.space_language(context_space)))
                 pending.self_harness_profile = self_harness.snapshot()
                 await self.agent.route_pending_thinking(pending, memory_vm, history=routing_history)
                 self.early['text'] = committed_text
@@ -542,17 +594,27 @@ class Conversation:
             return False
         hist = self.agent._SESSION_CONTEXT.messages(self.context_session, self.agent.ACTIVE_SPACE, window=self.agent.HISTORY_TURNS)
         ctx = '' if result is None else self.agent.build_reply_context(build_memory_context(result), route=gate.DEEP, replay=self.agent._replay_id(text, result), text=text, emotion=self.owner.get('emotion', ''))
+        prompts = {}
         if hasattr(self, 'self_harness'):
             from studio.core.utils.self_harness.component import profile_context
-            self_harness_note = profile_context(self.self_harness.snapshot())
+            snapshot = self.self_harness.snapshot()
+            from studio.harness.prompts import effective_prompts
+            prompts = effective_prompts(snapshot)
+            self_harness_note = profile_context(snapshot)
             ctx = f'{ctx}\n\n{self_harness_note}' if ctx else self_harness_note
+        from studio.core.utils.prompts.component import system_prompt
+        from voicemem.reply import reply_request_options
+        prompt = (system_prompt(tagged=True, reply=getattr(self.agent, 'REPLY', None), overrides=prompts)
+                  if {'main_system', 'speaking_style', 'self_harness', 'tone_rule'}.intersection(prompts)
+                  else None)
         cancelled = threading.Event()
         self.prewarm['cancelled'] = cancelled
         model = self.agent._LOCAL_LLM
 
         async def run_prewarm():
             try:
-                await asyncio.to_thread(model.prewarm, hist, ctx, cancelled=cancelled)
+                with reply_request_options(system_prompt=prompt):
+                    await asyncio.to_thread(model.prewarm, hist, ctx, cancelled=cancelled)
             except asyncio.CancelledError:
                 cancelled.set()
                 raise
@@ -777,6 +839,7 @@ class Conversation:
 
         async def accept_early():
             try:
+                await self.publish_reply_memory(pending, timeline, memory_vm, context_space)
                 self.turn_taking.start_handoff(decision)
                 self.turn['measure_started'] = generation_started
                 await self.release_buffered_reply(sink, decision, ack, pending, memory_vm, context_space)
@@ -834,6 +897,7 @@ class Conversation:
         async def coordinate_reply():
             child_tasks = []
             try:
+                await self.publish_reply_memory(pending, timeline, memory_vm, context_space)
                 self.turn_taking.start_handoff(decision)
                 if decision.kind is not HandoffKind.DIRECT:
                     sink = ReplySink(self.sock.send_json, lambda pcm: self.send_audio(pcm, timeline))
@@ -877,7 +941,7 @@ class Conversation:
                     self.context_session, context_space, window=1)):
             return
         memory_vm = self.agent.vm
-        language = self.agent.space_language(context_space)
+        language = getattr(self, 'base_language', '') or self.agent.space_language(context_space)
         pending = Pending(opening_prompt(language), '', empty_result(),
                           spoken=False, route=gate.SHALLOW, reply_mode=DIRECT,
                           transcript_managed=True, opening=True)
@@ -926,4 +990,4 @@ class Conversation:
 
     def listen(self):
         self.languages = getattr(self, 'languages', {})
-        return self.agent._session_anticipate(self.context_session, self.sock, on_speech=self.on_user_speech, owner=self.owner, is_busy=self.hearing, said=lambda : self.turn['reply']['text'] if self.hearing() or time.monotonic() < self.turn['echo_until'] else '', on_candidate=self.pause_candidate, on_candidate_reject=self.resume_candidate, on_playback_checkpoint=self.playback_checkpoint, on_filler_done=self.filler_done, on_self_harness_get=self.publish_self_harness, on_self_harness_update=self.update_self_harness, on_harness_prompt_update=self.update_harness_prompt, on_backchannel_curve_update=self.update_backchannel_curve, on_conversation_start=self.start_opening, on_close=self.close_session, on_early=self.start_early, on_early_cancel=self.drop_early, on_speech_start=self.prewarm_local, textless_confirm_s=0.2, turn_taking=self.turn_taking, language_state=self.languages)
+        return self.agent._session_anticipate(self.context_session, self.sock, on_speech=self.on_user_speech, owner=self.owner, is_busy=self.hearing, said=lambda : self.turn['reply']['text'] if self.hearing() or time.monotonic() < self.turn['echo_until'] else '', on_candidate=self.pause_candidate, on_candidate_reject=self.resume_candidate, on_playback_checkpoint=self.playback_checkpoint, on_filler_done=self.filler_done, on_self_harness_get=self.publish_self_harness, on_self_harness_update=self.update_self_harness, on_harness_prompt_update=self.update_harness_prompt, on_harness_prompts_update=self.update_harness_prompts, on_language_config=self.configure_language, on_backchannel_curve_update=self.update_backchannel_curve, on_conversation_start=self.start_opening, on_close=self.close_session, on_early=self.start_early, on_early_cancel=self.drop_early, on_speech_start=self.prewarm_local, textless_confirm_s=0.2, turn_taking=self.turn_taking, language_state=self.languages)

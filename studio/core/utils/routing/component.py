@@ -128,8 +128,11 @@ class Routing:
                 decision = ThinkingDecision(FAST, 'self-harness:quick')
             elif self._THINKING_ROUTER_ON:
                 try:
-                    decision = await thinking_router().classify_async(
-                        pending.text, history=history)
+                    from studio.harness.prompts import effective_prompts, prompt_scope
+                    prompts = effective_prompts(getattr(pending, 'self_harness_profile', None))
+                    with prompt_scope(prompts):
+                        decision = await thinking_router().classify_async(
+                            pending.text, history=history)
                 except Exception as exc:
                     print(f"[thinking] 深思判断不可用（{type(exc).__name__}），保留 VoiceMem 记忆资格", flush=True)
                     decision = ThinkingDecision(FAST, 'unavailable')

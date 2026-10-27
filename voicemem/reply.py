@@ -23,6 +23,7 @@ class ReplyRequestOptions:
     """Provider-neutral, task-local options for one reply request."""
 
     reasoning_effort: str = "none"
+    system_prompt: str | None = None
 
 
 _REQUEST_OPTIONS: ContextVar[ReplyRequestOptions | None] = ContextVar(
@@ -30,20 +31,21 @@ _REQUEST_OPTIONS: ContextVar[ReplyRequestOptions | None] = ContextVar(
 
 
 @contextmanager
-def reply_request_options(*, reasoning_effort: str = "none"):
+def reply_request_options(*, reasoning_effort: str = "none", system_prompt: str | None = None):
     """Apply per-request options across async provider iteration."""
     if reasoning_effort not in {"none", "low", "high", "max"}:
         raise ValueError(f"unsupported reasoning_effort={reasoning_effort!r}")
-    token = _REQUEST_OPTIONS.set(ReplyRequestOptions(reasoning_effort))
+    token = _REQUEST_OPTIONS.set(ReplyRequestOptions(reasoning_effort, system_prompt))
     try:
         yield
     finally:
         _REQUEST_OPTIONS.reset(token)
 
 
-async def apply_reply_request_options(stream, *, reasoning_effort: str = "none"):
+async def apply_reply_request_options(stream, *, reasoning_effort: str = "none",
+                                     system_prompt: str | None = None):
     """Iterate a normalized reply stream with task-local provider options."""
-    with reply_request_options(reasoning_effort=reasoning_effort):
+    with reply_request_options(reasoning_effort=reasoning_effort, system_prompt=system_prompt):
         try:
             async for item in stream:
                 yield item
@@ -76,6 +78,9 @@ def compose_reply_messages(text: str, memory_context: str = "", history=None,
     not become attributed user input or replace the persona on providers that
     treat later system messages as complete prompt updates.
     """
+    options = _REQUEST_OPTIONS.get()
+    if options is not None and options.system_prompt is not None:
+        system = options.system_prompt
     prompt = (compose_system(memory_context, system) if context_as_system
               else (system or default_system()))
     messages = [{"role": "system", "content": prompt}]

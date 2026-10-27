@@ -61,6 +61,17 @@ class Startup:
                     if not voice.ready:
                         raise RuntimeError('自定义音色未生成可用附和音频')
                 self._BC_VOICE['obj'] = voice
+            if self.MODE == 'llm_tts':
+                from studio.core.utils.turn_taking.filler_voice import WorkFillerVoice, instruction
+                from studio.core.utils.self_harness.component import SelfHarnessState
+                snapshot = SelfHarnessState().snapshot()
+                banks = []
+                for lang in ('zh', 'en'):
+                    bank = WorkFillerVoice(tts, lang, instruction(self, lang, snapshot))
+                    await bank.prime()
+                    banks.append(bank)
+                self._WORK_FILLER_VOICES = banks
+                print('[startup] 等待垫话缓存已就绪 · 中文 4 条 / 英文 4 条', flush=True)
         finally:
             if provider == 'openai':
                 await tts.aclose()

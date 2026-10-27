@@ -19,6 +19,10 @@
 
 这里的评测用于观察效果与性能。自动测试通过不能替代真实设备上的语音和延迟测试。
 
+`python -m evals.work_filler_cache --out results/work-filler-cache.json`
+使用当前推荐的本地 TTS 预合成中英文等待语，检查完整音频、磁盘复用和内存命中。
+该脚本会写入忽略的等待语音缓存，但不会播放、录音或调用 API。
+
 `python evals/engine_contention.py --studio-voice --order ABBAABBA --utterances 4 --background-jobs 4`
 在同一进程交替关闭（A）和开启（B）动态后台准入，保持模型和合成参数一致。
 它使用临时合成输入，同时运行 ASR、EOT、TTS 和串行后台感知，输出生产间隔、

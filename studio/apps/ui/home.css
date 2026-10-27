@@ -8,4 +8,7 @@ h1,p{margin:0}
 .welcome-brand svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.6}
 .choice-content h1{font-size:calc(25px * var(--font-scale,1));font-weight:550;letter-spacing:-.035em;line-height:1.4}
 .choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:24px}
+.welcome-language{display:flex;align-items:center;gap:16px;margin-top:18px;color:var(--vm-muted);font-size:14px}
+.welcome-language select{padding:7px 28px 7px 11px;border:1px solid var(--vm-edge,#dedede);border-radius:8px;background:var(--vm-bg);color:var(--vm-ink);font:inherit}
 @media(max-width:480px){.welcome{padding:24px 18px}.welcome-brand{margin-bottom:24px}.choice-content h1{font-size:calc(22px * var(--font-scale,1))}.choices{gap:12px;margin-top:20px}}
+@media(max-height:480px){.welcome{padding-block:20px}.welcome-brand{margin-bottom:22px}.choices{margin-top:18px}.welcome .style-preview{height:clamp(72px,calc(100svh - 275px),140px)}}

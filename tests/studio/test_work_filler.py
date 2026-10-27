@@ -325,6 +325,7 @@ class FillerHandoffTests(unittest.IsolatedAsyncioTestCase):
 
         memory = types.SimpleNamespace(utils=types.SimpleNamespace(
             get=lambda _: types.SimpleNamespace(stream=tts)))
+        self.value.self_harness_profile = {'prompt_overrides': {'filler_system': 'Synthetic {task_context}'}}
         with patch('studio.core.utils.conversation.component.generate_local_filler',
                    new=AsyncMock(return_value='一段过长的工作垫话。')):
             result = await self.session.synthesize_work_filler(self.value, memory, 'fixture')
@@ -345,6 +346,7 @@ class FillerHandoffTests(unittest.IsolatedAsyncioTestCase):
 
         memory = types.SimpleNamespace(utils=types.SimpleNamespace(
             get=lambda _: types.SimpleNamespace(stream=tts)))
+        self.value.self_harness_profile = {'prompt_overrides': {'filler_system': 'Synthetic {task_context}'}}
         with patch('studio.core.utils.conversation.component.generate_local_filler',
                    new=AsyncMock(return_value='让我想想。')), patch(
                        'studio.harness.turn_taking.policy.WORK_FILLER_TIMEOUT_S', .01):
@@ -559,6 +561,7 @@ class FillerHandoffTests(unittest.IsolatedAsyncioTestCase):
             yield bytes(480)
         memory = types.SimpleNamespace(reply_stream=Mock(side_effect=AssertionError('no API')),
             utils=types.SimpleNamespace(get=lambda _:types.SimpleNamespace(stream=tts)))
+        self.value.self_harness_profile = {'prompt_overrides': {'filler_system': 'Synthetic {task_context}'}}
         with patch('studio.core.utils.conversation.component.generate_local_filler',
                    new=AsyncMock(return_value='嗯，让我想想。')) as local:
             text, pcm = await self.session.synthesize_work_filler(self.value, memory, 'fixture')
@@ -593,6 +596,7 @@ class FillerHandoffTests(unittest.IsolatedAsyncioTestCase):
         self.session.speech_provider = types.SimpleNamespace(stream=tts)
         memory = types.SimpleNamespace(utils=types.SimpleNamespace(
             get=Mock(side_effect=AssertionError('shared TTS must not be used'))))
+        self.value.self_harness_profile = {'prompt_overrides': {'filler_system': 'Synthetic {task_context}'}}
         with patch('studio.core.utils.conversation.component.generate_local_filler',
                    new=AsyncMock(return_value='嗯，让我想想。')):
             text, pcm = await self.session.synthesize_work_filler(self.value, memory, 'fixture')

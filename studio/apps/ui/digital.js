@@ -22,8 +22,10 @@ const memoryVersion = (kind, item) => JSON.stringify(kind === 'right'
   ? [item.raw || item.text, item.notes || []] : [item.text, item.slot, item.entities || []]);
 function memoryList(id, values, empty){
   const host=$(id); host.replaceChildren();
-  for(const value of values.slice(0,6)) host.append(el('li',null,value));
-  if(!values.length) host.append(el('li',null,empty));
+  for(const value of values.slice(0,6)) {
+    const item=el('li',null,value);item.setAttribute('data-no-i18n','');host.append(item);
+  }
+  if(!values.length) host.append(el('li',null,tr(empty)));
 }
 function watchStoredMemories(){
   trackingStored = true; storedThisTurn.clear();
@@ -35,9 +37,9 @@ window.addEventListener('memory-snapshot', event => {
   for (const [kind,item] of entries) {
     const key = memoryKey(kind,item), version = memoryVersion(kind,item);
     if (trackingStored && memoryBaselineLoaded && knownMemories.get(key) !== version)
-      storedThisTurn.set(key, `${kind === 'left' ? '事实' : '画像'} · ${item.text || item.raw || ''}`);
+      storedThisTurn.set(key, `${tr(kind === 'left' ? '事实' : '画像')} · ${item.text || item.raw || ''}`);
     else if (storedThisTurn.has(key))
-      storedThisTurn.set(key, `${kind === 'left' ? '事实' : '画像'} · ${item.text || item.raw || ''}`);
+      storedThisTurn.set(key, `${tr(kind === 'left' ? '事实' : '画像')} · ${item.text || item.raw || ''}`);
     knownMemories.set(key, version);
   }
   memoryBaselineLoaded = true;
@@ -73,7 +75,8 @@ function renderRail(){
   conversations.forEach(c=>{
     const row=el('div','session-row');
     const b=el('button','item'+(c.pinned?' pin':''));
-    b.append(el('i','dot'),el('span',null,`${c.title} · ${VMConversationSpaces.name(c.space)}`));b.title=c.title;
+    const title=!c.messages.length&&c.title==='新对话'?tr('新对话'):c.title;
+    b.append(el('i','dot'),el('span',null,`${title} · ${VMConversationSpaces.name(c.space)}`));b.title=title;
     b.setAttribute('aria-current',String(c===current));
     b.onclick=()=>{ if(c===current) return; const version=++conversationSwitch;current.busy=false;voiceInput.cancel();
       void VMConversationSpaces.use(c.space)
@@ -99,19 +102,32 @@ function toast(text){
   clearTimeout(toastTimer); toastTimer = setTimeout(()=>$('toast').hidden = true, 3000);
 }
 
-/* ── 情绪 / 说话人 / 实体 / 簇 ── */
-const KINDS = { emo:['mk-emo','情绪'], spk:['mk-spk','说话人'], ent:['mk-ent','实体'], clu:['mk-clu','簇'] };
+const KINDS = { emo:['mk-emo','情绪'], spk:['mk-spk','说话人'], ent:['mk-ent','实体'], clu:['mk-clu','领域'] };
+const SLOT_LABELS = {work:'工作',health:'健康',relationships:'关系',finance:'财务',knowledge:'知识',goals:'目标',daily_life:'日常'};
 function renderMarks(host, marks, animate){
   host.replaceChildren();
   marks.forEach(([kind,value],i) => {
     const [cls,label] = KINDS[kind];
     const chip = el('span','mk '+cls);
-    const tail = el('span',null,label); tail.style.opacity = '.62';
-    chip.append(el('i'), el('b',null,value), tail);
+    const tail = el('span',null,tr(label)); tail.style.opacity = '.62';
+    const text=el('b',null,kind==='clu'?tr(SLOT_LABELS[value]||value):value);
+    if(kind==='spk'||kind==='ent')text.setAttribute('data-no-i18n','');
+    chip.append(el('i'),text,tail);
     if(animate) chip.style.animationDelay = (0.12 + i*0.11)+'s';
     else { chip.style.animation='none'; chip.style.opacity='1'; chip.style.transform='none'; }
     host.append(chip);
   });
+}
+
+function renderTurnDetails(turn, marks){
+  let details=turn.querySelector('.turn-details');
+  if(!marks.length){details?.remove();return;}
+  if(!details){
+    details=el('details','turn-details');
+    details.append(el('summary',null,tr('详情')),el('div','marks'));
+    turn.append(details);
+  }
+  renderMarks(details.querySelector('.marks'),marks,false);
 }
 
 /* ── 聊天记录 ── */
@@ -143,8 +159,7 @@ function renderLog(){
     else if(body.textContent!==m.text) body.textContent=m.text;
     const signature=JSON.stringify(m.marks||[]);
     if(turn.marksSignature!==signature){
-      turn.querySelector('.marks')?.remove();
-      if(m.marks?.length){const marks=el('div','marks');renderMarks(marks,m.marks,false);turn.append(marks);}
+      renderTurnDetails(turn,m.marks||[]);
       turn.marksSignature=signature;
     }
   });
@@ -170,6 +185,7 @@ function speak(text){
 }
 
 function handleStudio(message) {
+  window.VMReplyStage?.onEvent(message);
   window.VMMemoryScene?.onStudioEvent(message);
   if (message.type === 'memory_store_status' && !storedThisTurn.size) {
     memoryList('storedMemories', [], message.status === 'error' ? '本轮入库未完成' : message.status === 'empty' ? '本轮暂无新入库记忆' : '正在更新记忆…');
@@ -362,7 +378,7 @@ const newChat = async () => {
 
   renderLog();
   $('said').classList.remove('on'); $('said').textContent = tr('说点什么，她在听。');
-  $('marks').replaceChildren(); speak('我在。今天想从哪里说起？');
+  $('marks').replaceChildren(); speak(tr('我在。今天想从哪里说起？'));
   requestAnimationFrame(()=>$('said').classList.add('on'));
   document.body.classList.remove('rail-open'); $('say').focus();
 };
@@ -389,6 +405,7 @@ const voiceInput=VMStudio.create({
   onFinal:send
 });
 window.VMSettings?.bindHarness(voiceInput);
+document.addEventListener('display-settings-change',renderRail);
 $('micBtn').onclick=()=>{ if(state.listening){voiceInput.toggle();return;}const selected=current;void VMConversationSpaces.use(selected.space)
   .then(()=>{if(selected===current)voiceInput.toggle();}).catch(error=>VMUI.notify(error.message)); };
 $('startTalk').onclick=()=>{$('say').focus();$('micBtn').click();};

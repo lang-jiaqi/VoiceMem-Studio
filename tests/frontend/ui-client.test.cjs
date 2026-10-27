@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../../studio/apps/ui/studio-client.js'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-function fixture({ desktop = false } = {}) {
+function fixture({ desktop = false, language = 'zh', prompts = {} } = {}) {
   const sockets = [], nodes = [], sources = [], events = [], notices = [], states = [], contexts = [], listeners = {}, documentEvents = [];
   let grant;
   class Socket {
@@ -45,6 +45,8 @@ function fixture({ desktop = false } = {}) {
     VMUI:{notify:message => notices.push(message)}, atob:text => Buffer.from(text, 'base64').toString('binary'),
   };
   context.window = {addEventListener(name, callback) {listeners[name] = callback;}};
+  context.window.VMSettings = {language};
+  context.window.VMHarnessPrompts = {saved:() => prompts};
   if (desktop) context.window.studioModelServices = {};
   vm.runInNewContext(source, context);
   const api = context.window.VMStudio;
@@ -73,7 +75,7 @@ test('text waits for session readiness and uses the existing user_text contract'
   const f = fixture(); const sent = f.client.send('hello'); await tick();
   assert.equal(f.sockets[0].sent.length, 0);
   f.sockets[0].receive({type:'session_ready',mode:'llm_tts'}); await sent;
-  assert.deepEqual(f.sockets[0].sent, [{type:'user_text',text:'hello'}]); f.client.cancel();
+  assert.deepEqual(f.sockets[0].sent, [{type:'conversation_language',language:'zh'}, {type:'user_text',text:'hello'}]); f.client.cancel();
 });
 test('chained playback enables bounded start grace while realtime keeps immediate admission', async () => {
   for (const mode of ['llm_tts', 'realtime']) {
@@ -111,6 +113,61 @@ test('Self Harness state is published to settings and explicit choices use the t
   ]);
   f.client.cancel();
 });
+test('language and saved prompts are restored before the first input', async () => {
+  const f = fixture({language:'en', prompts:{main_system:'Synthetic system'}});
+  await f.connected();
+  assert.deepEqual(f.sockets[0].sent.slice(0, 3), [
+    {type:'conversation_language',language:'en'},
+    {type:'harness_prompts_update',prompts:{main_system:'Synthetic system'}},
+    {type:'user_text',text:'fixture'},
+  ]);
+  f.client.cancel();
+});
+test('the selected base language reaches the server before microphone opening', async () => {
+  for (const language of ['zh', 'en']) {
+    const f = fixture({language});
+    const starting = f.client.start(); await tick();
+    f.sockets[0].receive({type:'session_ready'}); await tick();
+    f.grant({getTracks:() => [{stop(){}}]}); await starting;
+    const messages = f.sockets[0].sent;
+    const configured = messages.findIndex(message => message.type === 'conversation_language');
+    const opening = messages.findIndex(message => message.type === 'conversation_start');
+    assert.equal(messages[configured].language, language);
+    assert.ok(configured >= 0 && opening > configured);
+    f.client.cancel();
+  }
+});
+test('prompt saves await matching acknowledgements and reject on error or disconnect', async () => {
+  const f = fixture(); await f.connected(); const socket = f.sockets[0];
+  const first = f.client.setHarnessPrompts({main_system:'Synthetic system'}, 'en'); await tick();
+  const request = socket.sent.at(-1);
+  assert.equal(request.type, 'harness_prompts_update');
+  assert.equal(request.prompt_language, 'en');
+  let accepted = false; first.then(() => {accepted = true;});
+  socket.receive({type:'self_harness_state',request_id:'other',error:''}); await tick();
+  assert.equal(accepted, false);
+  socket.receive({type:'self_harness_state',request_id:request.request_id,error:''}); await first;
+  const invalid = f.client.setHarnessPrompts({main_system:''}); await tick();
+  socket.receive({type:'self_harness_state',request_id:socket.sent.at(-1).request_id,error:'Invalid prompt'});
+  await assert.rejects(invalid, /Invalid prompt/);
+  const disconnected = f.client.setHarnessPrompts({}); await tick();
+  f.client.cancel(); await assert.rejects(disconnected, /结束/);
+});
+test('confirmed preparation shows memory before answer start and rejects older enrichment', async () => {
+  const f = fixture(); await f.connected(); const socket = f.sockets[0];
+  socket.receive({type:'answer_start',output_id:'old'});
+  socket.receive({type:'reply_preparing',output_id:'new'});
+  socket.receive({type:'memory_hits',output_id:'new',stage:'retrieved'});
+  assert.equal(f.events.at(-1).type, 'memory_hits');
+  const count = f.events.length;
+  socket.receive({type:'memory_hits',output_id:'old'});
+  socket.receive({type:'tag_update',output_id:'old'});
+  assert.equal(f.events.length, count);
+  socket.receive({type:'answer_start',output_id:'new'});
+  socket.receive({type:'memory_hits',output_id:'new'});
+  assert.equal(f.events.at(-1).output_id, 'new');
+  f.client.cancel();
+});
 test('cancelled connection rejects pending text and ignores old socket events', async () => {
   const f = fixture(); const sent = f.client.send('hello'); await tick();
   f.client.cancel(); await assert.rejects(sent, /结束/);
@@ -134,6 +191,27 @@ test('pause/resume, drain, checkpoints and stale outputs retain output identity'
   player.port.onmessage({data:{type:'drained',outputId:'two',renderedSamples:24000,sampleRate:24000}});
   assert.equal(socket.sent.at(-1).rendered_samples, 24000); assert.equal(socket.sent.at(-1).state, 'drained');
   assert.equal(f.events.at(-1).type, 'playback_done'); f.client.cancel();
+});
+test('live orb phases follow preparation, actual playback, interruption, and cancellation', async () => {
+  const phases=[],f=fixture();
+  const client=f.api.create({onPhase:value=>phases.push(value)});
+  const connecting=client.send('Synthetic input');await tick();
+  const socket=f.sockets[0];socket.receive({type:'session_ready',mode:'llm_tts'});await connecting;
+  assert.equal(phases.at(-1),'short-thinking');
+  socket.receive({type:'reply_preparing',output_id:'one',reply_mode:'memory_cot'});
+  assert.equal(phases.at(-1),'long-thinking');
+  socket.receive({type:'answer_start',output_id:'one'});
+  assert.ok(phases.at(-1).includes('thinking'));
+  const player=f.nodes[0];
+  player.port.onmessage({data:{type:'started',outputId:'stale'}});
+  assert.ok(phases.at(-1).includes('thinking'));
+  player.port.onmessage({data:{type:'started',outputId:'one'}});
+  assert.equal(phases.at(-1),'speaking');
+  socket.receive({type:'answer_pause',output_id:'one'});assert.equal(phases.at(-1),'listening');
+  socket.receive({type:'answer_resume',output_id:'one'});
+  player.port.onmessage({data:{type:'resumed',outputId:'one'}});assert.equal(phases.at(-1),'speaking');
+  socket.receive({type:'answer_interrupt',output_id:'one'});assert.equal(phases.at(-1),'idle');
+  client.cancel();assert.equal(phases.at(-1),'idle');
 });
 test('played audio levels drive the App-owned Live2D pet without becoming checkpoints', async () => {
   const f = fixture(); await f.connected(); const socket = f.sockets[0], player = f.nodes[0];

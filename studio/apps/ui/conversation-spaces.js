@@ -63,7 +63,10 @@
         for (const space of spaces) {
           const button = document.createElement('button'); button.type = 'button';
           button.className = space.id === selected ? 'selected' : '';
-          button.textContent = `${space.name} · ${space.count} 条记忆`;
+          const title=document.createElement('span');title.setAttribute('data-no-i18n','');title.textContent=space.name;
+          const separator=document.createElement('span');separator.textContent=' · ';
+          const count=document.createElement('span');count.textContent=`${space.count} 条记忆`;
+          button.append(title,separator,count);
           button.onclick = () => { selected = space.id; render(); };
           list.append(button);
         }

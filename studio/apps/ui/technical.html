@@ -5,11 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>VoiceMem Studio · 科技风</title>
 <link rel="stylesheet" href="design.css?v=20261025-1">
-<link rel="stylesheet" href="technical.css?v=20261025-1" />
+<link rel="stylesheet" href="technical.css?v=20261027-3" />
 <link rel="stylesheet" href="vendor/katex/katex.min.css?v=0.18.10">
 <link rel="stylesheet" href="markdown.css?v=20261001-3">
 <link rel="stylesheet" href="ui.css?v=20261025-1" />
-<link rel="stylesheet" href="settings.css?v=20261026-2" />
+<link rel="stylesheet" href="settings.css?v=20261027-3" />
 </head>
 <body data-style="technical">
 <canvas id="brain-background-canvas" aria-hidden="true"></canvas>
@@ -24,7 +24,7 @@
   <main class="grid">
 
     <aside class="col col-side" id="conversationSidebar" aria-label="对话">
-      <button class="new-conv" id="newConv"><span>+</span><span>New conversation</span></button>
+      <button class="new-conv" id="newConv"><span>+</span><span>新对话</span></button>
       <div class="conversation-groups">
         <section aria-labelledby="pinnedHeading">
           <h2 class="side-label" id="pinnedHeading">Pinned</h2>
@@ -82,7 +82,7 @@
         </div>
       </div>
 
-          <div class="live-echo empty" id="liveEcho">等待你的下一句话…</div>
+          <div class="live-echo empty" id="liveEcho"><span data-ui-placeholder>等待你的下一句话…</span></div>
           <div class="live-echo prev" id="liveEchoPrev"></div>
           <div class="perception-tags" aria-live="polite">
             <span class="perception-tag emotion-tag"><span>情感</span><b id="emotionTag">待识别</b></span>
@@ -92,6 +92,7 @@
           </div>
         </section>
         <section class="topk" aria-label="左右脑记忆">
+          <span class="reply-stage" data-reply-stage role="status" hidden></span>
           <div class="topk-scope" id="topkScope">全部记忆域 · 按相似度排序</div>
           <div class="topk-cols">
             <div class="topk-col"><h3>info</h3><div class="mem-stack facts" id="stackFacts"></div></div>
@@ -101,7 +102,7 @@
       </div>
       <section class="airesp" aria-labelledby="responseHeading">
         <h2 class="label" id="responseHeading">模型回复</h2>
-        <div class="empty" id="aiEcho" aria-live="polite">回答会同步显示在这里。</div>
+        <div class="empty" id="aiEcho" aria-live="polite"><span data-ui-placeholder>回答会同步显示在这里。</span></div>
       </section>
     </section>
 
@@ -131,15 +132,17 @@
 </div>
 <script src="prism.js"></script>
 <script src="ui.js"></script>
-<script src="studio-client.js?v=20261026-1"></script>
-<script src="conversation-spaces.js?v=20261025-1"></script>
+<script src="studio-client.js?v=20261027-1"></script>
+<script src="conversation-spaces.js?v=20261027-4"></script>
 <script src="component-settings.js?v=20261026-1"></script>
-<script src="settings.js?v=20261026-2"></script>
-<script src="liquid-orb.js"></script>
+<script src="harness-prompts.js?v=20261027-2"></script>
+<script src="reply-stage.js?v=20261027-1"></script>
+<script src="settings.js?v=20261027-4"></script>
+<script src="liquid-orb.js?v=20261027-1"></script>
 <script src="vendor/katex/katex.min.js?v=0.18.10"></script>
 <script src="markdown.js?v=20261026-1"></script>
 <script src="transcript.js?v=20261025-1"></script>
-<script src="technical.js?v=20261026-1"></script>
+<script src="technical.js?v=20261027-4"></script>
 <script src="memory-scene.js?v=20261023-2"></script>
 </body>
 </html>

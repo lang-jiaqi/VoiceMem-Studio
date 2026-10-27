@@ -41,8 +41,8 @@ def generation_prompt(task_context: str, lang: str = "zh") -> str:
 
 
 async def generate_local_filler(task_context: str, *, history: Sequence[dict] = (),
-                                lang: str = "zh", router=None) -> str:
-    """Generate one optional bridge with the warmed router, never the reply API."""
+                                lang: str = "zh", router=None, prompts=None) -> str:
+    """Generate an explicitly customized bridge through the selected router adapter."""
     if not task_context.strip():
         return ""
     if router is None:
@@ -55,11 +55,13 @@ async def generate_local_filler(task_context: str, *, history: Sequence[dict] = 
             content = ' '.join(str(message.get('content') or '').split())[:80]
             context.append(f'{role}：{content}')
     language = '英语' if lang == 'en' else '中文'
-    prompt = FILLER_INPUT_PROMPT.format(
+    from studio.harness.prompts import resolve
+    prompt = resolve("filler_input", FILLER_INPUT_PROMPT, prompts).format(
         language=language, history='\n'.join(context), task_context=task_context.strip())
     started = time.monotonic()
     text = await router.generate_short_text_async(
-        generation_prompt('', lang), prompt, max_tokens=40,
+        resolve("filler_system", FILLER_PROMPT, prompts).format(task_context=''),
+        prompt, max_tokens=40,
         timeout_s=WORK_FILLER_TIMEOUT_S)
     from studio.core.utils.tts import control as tts_control
     tag, spoken = tts_control.split(text)

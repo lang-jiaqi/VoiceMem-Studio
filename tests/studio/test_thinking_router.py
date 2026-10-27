@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import asyncio
+import os
 import threading
 import unittest
 from pathlib import Path
@@ -15,6 +16,29 @@ from studio.core.utils.reply_modes.initialize import (
     ThinkingDecision,
     parse_level,
 )
+
+
+class DefaultRouterTests(unittest.TestCase):
+    def test_recommended_factory_and_startup_manifest_agree(self):
+        from studio.core.utils.cli.component import parse_args
+        from studio.core.utils.models.initialize import models
+        from studio.core.utils.reply_modes.initialize import thinking_router
+        self.addCleanup(thinking_router.cache_clear)
+        for backend, device in [('mlx', 'cpu'), ('cuda', 'cuda:1')]:
+            with self.subTest(backend=backend), patch.dict(os.environ, {
+                    'STUDIO_BACKEND': backend, 'STUDIO_DEVICE': device}, clear=True), \
+                    patch('studio.core.utils.reply_modes.mlx.MLXThinkingRouter') as mlx, \
+                    patch('studio.core.utils.reply_modes.initialize.QwenThinkingRouter') as torch:
+                thinking_router.cache_clear()
+                expected, unused = (mlx, torch) if backend == 'mlx' else (torch, mlx)
+                self.assertIs(thinking_router(), expected.return_value)
+                self.assertIs(thinking_router(), expected.return_value)
+                expected.assert_called_once_with(**({} if backend == 'mlx' else {'device': device}))
+                unused.assert_not_called()
+                args = parse_args(['--backend', backend, '--device', device])
+                routers = [item.repository for item in models(args)
+                           if item.directory.startswith('reply-router/')]
+                self.assertEqual(routers, ['Qwen/Qwen3-0.6B'])
 
 
 class ThinkingRouterTests(unittest.TestCase):

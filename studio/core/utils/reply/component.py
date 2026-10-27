@@ -148,6 +148,8 @@ class Reply:
         )
         control_enabled = self_harness_profile is not None
         active_self_harness = normalize_snapshot(self_harness_profile)
+        from studio.harness.prompts import effective_prompts
+        prompt_overrides = effective_prompts(active_self_harness)
 
         queue: asyncio.Queue = asyncio.Queue()
         text_queue: asyncio.Queue = asyncio.Queue()
@@ -174,9 +176,14 @@ class Reply:
             import json
             segment_language = detect_language(seg, speech_markdown.language, keep_short=False)
             segment_base = self._speak_base_env or self._by_lang(self._SPEAK_BASE, segment_language)
+            from studio.harness.prompts import resolve
+            segment_base = resolve(f"tts_{segment_language}", segment_base, prompt_overrides)
             selected_tone = fixed_tone(active_self_harness) or tone["tag"]
             effective = (tts_control.instruction(selected_tone, segment_base, segment_language)
-                         if selected_tone else self._speak_instruction(pending.emotion, segment_language))
+                         if selected_tone else
+                         tts_control.instruction('平静', segment_base, segment_language)
+                         if f'tts_{segment_language}' in prompt_overrides else
+                         self._speak_instruction(pending.emotion, segment_language))
             effective = effective or getattr(tts, "instruction", "") or getattr(tts, "instructions", "")
             # An explicit conversation preference wins over the model-specific
             # automatic intro arc; the general Qwen delivery hint still applies.
@@ -381,6 +388,8 @@ class Reply:
                 emotion=pending.emotion,
                 continuation=getattr(pending, "continuation_prompt", False), language=language)
             if control_enabled:
+                if "persona" in prompt_overrides:
+                    active_self_harness["prompts"]["persona"] = prompt_overrides["persona"]
                 ctx = f"{ctx}\n\n{profile_context(active_self_harness)}"
 
             hist = ([] if pending.stranger else self._SESSION_CONTEXT.messages(
@@ -388,10 +397,15 @@ class Reply:
             _lat["pre"] = (time.monotonic() - _t0) * 1000
             from voicemem.reply import apply_reply_request_options
             reply_mode = getattr(pending, "reply_mode", "")
+            from studio.core.utils.prompts.component import system_prompt
             deltas = apply_reply_request_options(
                 memory_vm.reply_stream(pending.text, ctx, hist),
                 reasoning_effort=("high" if reply_mode == MEMORY_COT
                                   else "none"),
+                system_prompt=(system_prompt(tagged=True, reply=getattr(self, "REPLY", None),
+                                              overrides=prompt_overrides)
+                               if {"main_system", "speaking_style", "self_harness", "tone_rule"}
+                               .intersection(prompt_overrides) else None),
             )
 
             def apply_self_harness_update(update):

@@ -66,12 +66,15 @@ storage semantics.
 The four policy files in `studio/harness/{persona,speaking_style,reply_modes,
 turn_taking}/policy.py` are immutable runtime defaults. Each exposes its
 pre-Self-Harness prompt as a `DEFAULT_*` value, and execution remains in the
-corresponding `studio/core/utils/` component. Studio uses one prompt per purpose
-without language variants. A shared persona rule permits natural Chinese/English
-conversation, mixed terminology and explicit user language requests. No per-turn
-system message forces a reply language. `--lang` supplies an initial UI/default
-language; stored Space language is the fallback for ambiguous first inputs and
-the opening, not a restriction on speech or stored facts.
+corresponding `studio/core/utils/` component. The editable Harness catalog has
+Chinese and English default templates with the same dialogue and control
+protocols; English defaults live in `studio/harness/prompts_en.py`. A shared
+persona rule permits natural Chinese/English conversation, mixed terminology
+and explicit user language requests. No ordinary per-turn system message forces
+a reply language. `--lang` supplies an initial UI/default
+language. The browser's base-language choice supplies the connection fallback
+for ambiguous first inputs, default Harness templates, and the opening; stored Space language remains the
+fallback for clients without that choice. Neither restricts speech or stored facts.
 
 `studio/harness/self_harness/policy.py` is the fifth, coordinating policy. It
 declares a typed overlay schema spanning persona interaction style, speech rate,
@@ -101,19 +104,26 @@ control protocol.
 
 The owning browser can read and change the same profile through
 `self_harness_get`, `self_harness_update`, and `self_harness_state` WebSocket
-messages. The server exposes only enum values and display labels, never private
-prompt or TTS instructions. Ordered enum fields are shown as discrete slider
+messages. Profile controls expose enum values and display labels. The separate
+Harness editor exposes an explicit default-prompt catalog and validated text
+overrides to the owning browser. Model control headers cannot edit these strings.
+Ordered enum fields are shown as discrete slider
 stops; unordered enums use ordinary choices. An explicit settings choice applies
 immediately, while later conflicting model changes still use the confirmation
-window. The settings page also supports a bounded, session-only Persona prompt
-through `harness_prompt_update`. It is appended as a user instruction and does
-not rewrite the immutable Persona source prompt.
+window. The legacy `harness_prompt_update` Persona supplement remains supported
+and is appended as a user instruction. Batch `harness_prompts_update` messages
+replace the session's explicit prompt overrides atomically; defaults on disk
+remain immutable. A matching request ID acknowledges acceptance or validation
+failure through `self_harness_state`.
 
 The local Qwen3-0.6B classifier selects ordinary or deep reasoning after ASR.
 Studio combines that depth with VoiceMem memory eligibility into the existing
 `fast`, `medium`, or `slow` reply modes. Missing default weights are downloaded into the
 `studio/models/reply-router/Qwen3-0.6B` directory with visible progress.
 Explicit model paths remain caller-owned.
+Default waiting speech is prepared independently; warm cache hits do not invoke
+the router or synthesize speech again. Explicit custom filler prompts retain
+the selected router's short-text generation contract.
 
 `studio/core/core.py` exposes service setup and the chronological controls:
 listen, merge continuation, stop warming, wait on unfinished speech, route,
@@ -265,16 +275,21 @@ Windows source `npm start` uses the Docker route: it validates the local named-p
 Explicit `start:remote` bypasses Docker and ignores any inherited automatic server URL. macOS uses native MLX or a remote service. Both clients share
 the same Web UI and observer contracts. The backend root serves the shared
 frontend from `studio/apps/ui/`, with assets under `/ui/`. Its first page is a style-selection homepage, with labeled
-image cards linking to the technical or digital-human visual style. Shared
-`design.css` tokens own the light and dark control palette, typography stack,
+image cards linking to the technical or digital-human visual style and a shared
+base-language selector persisted with display preferences.
+Digital conversation bubbles place per-turn perception labels in a collapsed
+native disclosure. Late label updates preserve its open state. These labels
+describe retrieval/perception metadata, not a memory-store acknowledgement.
+Shared `design.css` tokens own the light and dark control palette, typography stack,
 corner radii, and style-preview cards used by the homepage, settings, and desktop
 connection page. Settings, Space pickers, and memory dialogs inherit the active
 page theme while each conversation view retains its own scene and layout. On
 narrow screens, the technical view stacks perception above the conversation or
 memory panel and presents its conversation list as an overlay. A centered
 settings shell lives inside each style, with an icon sidebar for appearance,
-text, conversation preferences, and components. The conversation panel mirrors
-Self Harness snapshots. Persona text is edited in a collapsible section;
+text, conversation preferences, Harness prompts, and components. The conversation panel mirrors
+Self Harness snapshots, with the fastest existing speech-rate preset as the
+new-session default. The Harness panel owns free-text Persona editing;
 speech rate, tone, and waiting feedback use fixed-choice selects, while reply
 length and reasoning depth use segmented choices from the same bounded schema. Backchannel frequency uses a
 four-node curve editor whose nodes are the expected acknowledgement quotas for
@@ -315,6 +330,10 @@ replacement process starts.
 `/classic` retains the older demo. The desktop opens this same root and keeps its
 connection configuration window hidden on a successful startup; connection errors
 reveal configuration. Desktop clients require the updated backend assets.
+Electron owns the initial and style-navigation window bounds through
+`studio/apps/window-layout.cjs`. Home opens at 720×560 and conversation views
+prefer 1440×920; both are centered and constrained to the current display's work
+area. Short browser viewports use compact homepage previews and spacing.
 
 `studio-client.js` owns one page-local WebSocket and AudioContext, reuses the
 existing capture and PCM AudioWorklets, and sends rendered-sample checkpoints,
@@ -332,6 +351,9 @@ detached auto-tone snapshot. This tone neither updates Self Harness nor
 participates in the cross-turn tone smoothing used by later replies. Only its
 heard assistant text enters the session context; it creates no user transcript
 or long-term memory ingest.
+The opening explicitly uses the selected base language, even when retrieved
+facts use another language. This constraint applies only to the opening;
+subsequent replies follow actual input and explicit language requests.
 
 Interrupted replies retain only the source samples
 reported as rendered by the playback worklet. Replays do not emit playback
@@ -413,6 +435,13 @@ redraws when displayed content changes, including evidence or deletions. Its
 background canvas is redrawn on resize or view changes rather than every frame.
 
 The technical page's liquid orb owns its WebGPU device and animation loop.
+The shared client's live phases drive its actions: listening keeps the interior
+flow active even between microphone level reports; actual playback drives a
+vertical speaking rhythm. Either thinking phase lowers the orb and holds it
+there until that phase ends, then a damped spring returns it to center. Switching
+between short and long thinking preserves the lowered position. Reduced motion
+disables the travel and continuous flow. These actions use the existing render
+loop and do not affect audio, model scheduling, or reply timing.
 Transient adapter, device or rendering failures show the existing static preview
 and allow at most three delayed recovery attempts per foreground visit. Recovery
 retains the current voice state and motion parameters. Unsupported WebGPU and
@@ -1165,9 +1194,9 @@ that both paths retrieved the same memory before releasing early output.
 
 One session-scoped `TurnTakingStateMachine` then chooses the handoff. Ready
 audio is released directly. An ordinary predicted wait may use a cached
-acknowledgement, while `memory_cot` may request an LLM-generated work filler
+acknowledgement, while `memory_cot` may request prepared waiting speech
 when main audio is not ready after an actual wait threshold. The wait is measured
-from the last voiced frame, including confirmation and routing; generation and
+from the last voiced frame, including confirmation and routing; selection and
 playback of fillers begin only after the turn is confirmed. Main reply work runs
 concurrently during that wait. Ready audio, audio-free completion or an error
 releases the buffered reply without generating a filler. The harness configures
@@ -1188,14 +1217,23 @@ completion before that sink releases `answer_start` or main PCM. Generation
 remains concurrent, but spoken filler and main audio never overlap or hard-cut
 each other.
 
-Work-filler wording comes from the already-loaded Qwen3-0.6B weights, not the
-main reply API. It uses a separate non-thinking short-generation prompt, the
-complete current input and at most two bounded history messages, without
-changing depth classification or retrieving additional memory. Cold weights,
-over-budget output, invalid text, failure or a queue-inclusive generation timeout
-skip the optional bridge. Token budget and cancellation limit background work;
-native inference already in progress cannot be forcibly interrupted. The
-legacy reply-stream filler helper remains available to direct callers.
+Default work-filler wording comes from four neutral Harness phrases per language.
+`filler_voice.py` prepares both complete audio banks at startup with the selected
+TTS provider and default speech rate. Stable voice identities reuse an ignored
+disk cache keyed by identity, language, exact text and instruction; unknown
+identities retain only provider-object-scoped memory banks. Cache I/O runs
+off-loop. Failed or cancelled preparation never publishes a partial bank.
+Playback chooses from memory while avoiding the session's last three emitted
+phrases. Warm hits use no text model, TTS inference or disk access. Changed
+voice preferences use the prepared text with current captured TTS instructions
+rather than stale audio. The existing readiness race still cancels unplayed work.
+
+Explicit custom filler prompts retain non-thinking generation from complete
+current input and at most two bounded history messages. Qwen uses its local
+short-text implementation. Default cached fillers make no chat API request.
+Model/protocol failures and queue-inclusive text-generation timeouts
+skip the optional customized bridge. The legacy reply-stream filler helper
+remains available to direct callers.
 
 Work fillers preserve natural deep-reasoning transitions, including longer
 utterances. Speech preparation and playback have no additional duration cap;
@@ -1330,6 +1368,45 @@ incomplete configuration fails validation rather than changing behavior
 silently. Editing a default policy requires restart because prompt files are not
 read in the speech loop. Self Harness profile changes are in-memory overlays and
 take effect without editing or reloading those defaults.
+
+`studio/harness/prompts.py` owns the editable prompt catalog, validation, and
+task-local router prompt scope. The owning browser edits each string with line
+numbers and keeps drafts separate from accepted values. Closing or leaving the
+editor with changes offers save, discard, or continued editing. Only a successful
+server acknowledgement persists overrides in browser local storage; a new
+connection restores them before its first input. This persistence is scoped to
+the browser origin, rather than a repository file or Memory Space.
+Unmodified Harness templates follow the browser's base-language selection;
+accepted custom text and edited drafts remain verbatim. Reset uses the current
+language's defaults. The editor merges catalog changes per field and includes
+its template language in save requests so a stale-language save is rejected
+without losing the draft. Only explicit overrides are persisted. Each turn
+captures `prompt_language` separately from input language, resolving localized
+defaults before applying overrides. TTS retains separate Chinese and English
+base-instruction fields selected from actual generated speech, independently
+of template or UI language; ASR language detection is unchanged.
+
+Accepted edits affect future turn snapshots without restarting models. They
+discard private speculation and prefix warmup while an already committed reply
+keeps its captured prompt snapshot. Subsequent local prefix warmup captures the
+same override scope. The provider-neutral `ReplyRequestOptions`
+can override a request's system prompt without changing a shared adapter;
+Studio composes that prompt and request-scoped TTS instructions from its captured
+overrides. Router caches include the edited system prompt in their identity.
+Template fields and output-control markers are validated before replacing any
+session value. These editor overrides cover the text reply pipeline, router,
+work-filler templates, and TTS base instructions; Realtime's native speech prompt
+remains a separate provider contract.
+
+Confirmed reply coordination sends `reply_preparing` and raw `memory_hits`
+with the captured output, input-turn, and Space identity before releasing reply
+output. This lightweight payload does not run audio-presence checks, clustering,
+or tag enrichment. Existing enriched display work can still wait for first audio.
+Speculative retrieval remains private until confirmation. The browser accepts
+preparation events for the pending output, rejects older enrichment, and uses a
+shared stage display for retrieved memory, generation, and actual playback.
+The brief memory-status dwell changes only the label; it never gates model
+generation, audio, or memory rendering.
 
 ### Self Harness, tone and TTS
 
@@ -2077,8 +2154,9 @@ separately; `[memory]` completion continues to include actual durable work.
 | Factual and affective memory | Memory Space stores | Persistent |
 | Streaming ASR/VAD/EOT/gate state | `VoiceStream` | Input turn/session |
 | Turn-taking phase, latency estimate, and backchannel policy | `TurnTakingStateMachine` | WebSocket session |
-| Self Harness profile, Persona supplement, and confirmation state | `SelfHarnessState` | WebSocket session |
+| Self Harness profile, prompt overrides, Persona supplement, and confirmation state | `SelfHarnessState` | WebSocket session; accepted prompt edits also persist in browser storage |
 | Reply router model | `studio/core/utils/reply_modes` | Process |
+| Prepared waiting speech | `WorkFillerVoice` | Voice/language/instruction bank; stable identities also persist in ignored cache |
 | Reply mode | Confirmed `Pending` turn | Turn |
 | Recent input-language fallback | WebSocket session + Memory Space | Session |
 | Captured input language | Confirmed `Pending` and ingest context | Turn/task |

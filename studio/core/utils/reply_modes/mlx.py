@@ -58,7 +58,9 @@ class MLXThinkingRouter(QwenThinkingRouter):
         from voicemem.engine import gpu_loop
 
         prompt = self._context_prompt(text, history, memory_prefetch_hint)
-        cached = self._cache.get((text, prompt))
+        from studio.harness.prompts import resolve
+        system = resolve("router", SYSTEM)
+        cached = self._cache.get(self._classification_key(text, prompt, system))
         if cached is not None:
             return cached
         if self._download_default:
@@ -66,12 +68,12 @@ class MLXThinkingRouter(QwenThinkingRouter):
         output = ''
         submitted = time.perf_counter()
         async with aclosing(gpu_loop().aiter(
-                lambda: self._timed_prediction(SYSTEM, EXAMPLES, prompt, submitted),
+                lambda: self._timed_prediction(system, EXAMPLES, prompt, submitted),
                 label="reply_router")) as steps:
             async for value in steps:
                 if value is not None:
                     output = value
-        return self._remember_output(text, prompt, output)
+        return self._remember_output(text, prompt, output, system=system)
 
     def _timed_prediction(self, system, examples, prompt, submitted):
         started = time.perf_counter()

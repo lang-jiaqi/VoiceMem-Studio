@@ -19,7 +19,8 @@ class Capture:
                          on_playback_checkpoint=None, on_filler_done=None, on_early=None,
                          on_early_cancel=None,
                          on_self_harness_get=None, on_self_harness_update=None,
-                         on_harness_prompt_update=None,
+                         on_harness_prompt_update=None, on_harness_prompts_update=None,
+                         on_language_config=None,
                          on_backchannel_curve_update=None,
                          on_conversation_start=None,
                          on_speech_start=None, textless_confirm_s=None,
@@ -58,6 +59,8 @@ class Capture:
                     on_self_harness_get=on_self_harness_get,
                     on_self_harness_update=on_self_harness_update,
                     on_harness_prompt_update=on_harness_prompt_update,
+                    on_harness_prompts_update=on_harness_prompts_update,
+                    on_language_config=on_language_config,
                     on_backchannel_curve_update=on_backchannel_curve_update,
                     on_conversation_start=on_conversation_start,
                     on_speech_start=on_speech_start,
@@ -80,7 +83,8 @@ class Capture:
                          on_playback_checkpoint=None, on_filler_done=None, on_early=None,
                          on_early_cancel=None,
                          on_self_harness_get=None, on_self_harness_update=None,
-                         on_harness_prompt_update=None,
+                         on_harness_prompt_update=None, on_harness_prompts_update=None,
+                         on_language_config=None,
                          on_backchannel_curve_update=None,
                          on_conversation_start=None,
                          on_speech_start=None, textless_confirm_s=None,
@@ -166,6 +170,16 @@ class Capture:
                 return
             if msg.get("text"):
                 data = json.loads(msg["text"])
+                if data.get("type") == "harness_prompts_update":
+                    if on_harness_prompts_update:
+                        options = ({"prompt_language": data["prompt_language"]}
+                                   if "prompt_language" in data else {})
+                        await on_harness_prompts_update(data.get("prompts"), data.get("request_id", ""), **options)
+                    continue
+                if data.get("type") == "conversation_language":
+                    if on_language_config:
+                        await on_language_config(data.get("language"))
+                    continue
                 if data.get("type") == "conversation_start":
                     audio_epoch += 1
                     voiced_start = voiced_end = None
@@ -340,7 +354,7 @@ class Capture:
             if (not st.turn and not busy and not input_echo and bc_speech_t0
                     and (not utterance.started_busy or barged)):
                 language = detect_language(cur, language_state.get(
-                    self.ACTIVE_SPACE, self.space_language(self.ACTIVE_SPACE)))
+                    self.ACTIVE_SPACE, language_state.get('_default', self.space_language(self.ACTIVE_SPACE))))
                 voice = self._backchannel_voice(language) if _bc_mod.emitting() else None
                 token = turn_taking.offer_backchannel(
                     text=cur, silence=bc_gap, spoke=st.spoke,
@@ -602,7 +616,7 @@ class Capture:
                 async for pending in turns:
                     space = self.ACTIVE_SPACE
                     pending.language = detect_language(
-                        pending.text, languages.get(space, self.space_language(space)))
+                        pending.text, languages.get(space, languages.get('_default', self.space_language(space))))
                     languages[space] = pending.language
                     yield pending
         finally:

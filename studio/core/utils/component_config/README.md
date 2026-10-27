@@ -19,6 +19,9 @@ Restart the desktop App after updating its preload code.
 | `router` | Qwen3 0.6B | Installed adapter |
 | `speech` | Breeze MLX/CUDA | OpenAI-compatible streaming speech |
 
+See [reply routing](../reply_modes/README.md) for default model selection and
+waiting speech. Installed adapters retain the router interface listed below.
+
 Memory and reply keep separate DeepSeek, Qwen/DashScope, and OpenAI-compatible
 Chat service settings. MLX-local replies also accept an explicit model path or
 compatible model ID. Compatibility depends on the selected model's protocol;
@@ -87,8 +90,10 @@ The returned adapter must satisfy its existing Harness boundary:
 shared. Streaming ASR may expose sync `close()` to release a transport on reset
 or disconnect. `ThinkingDecision` comes from
 `studio.core.utils.reply_modes.component` and retains `fast`, `medium`, and
-`slow`; the router also supplies spoken filler generation. Speech generators
-must close network responses/native work in `finally` and propagate cancellation.
+`slow`; the router also supplies optional spoken filler generation. Studio
+uses prepared waiting speech independently of the classifier; explicit custom
+filler prompts retain the adapter's short-text generation interface.
+Speech generators must close network responses/native work in `finally` and propagate cancellation.
 Backchannel cache identity includes factory, model, endpoint and options; adapters
 may additionally expose `cache_voice_id` to distinguish internal voice versions.
 

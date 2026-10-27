@@ -152,6 +152,7 @@ class StartupInferenceTests(unittest.TestCase):
                 agent.ARGS = SimpleNamespace(backend='cuda', backchannel=False, eot=True)
                 agent._LOCAL_LLM = None
                 agent.space_language = lambda _: 'zh'
+                agent._speak_instruction = lambda emotion, language: 'Synthetic speech style'
 
                 def scene():
                     events.append('scene')
@@ -169,7 +170,7 @@ class StartupInferenceTests(unittest.TestCase):
                 async def speech(text):
                     events.append('speech')
                     if failed_step != 'speech':
-                        yield b'synthetic-pcm'
+                        yield b'\x01\x00' * 16
                     events.append('speech-complete')
 
                 agent.vm = SimpleNamespace(utils={'tts': SimpleNamespace(stream=speech)})

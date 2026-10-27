@@ -101,6 +101,7 @@ def opening_prompt(language: str) -> str:
     if language == "en":
         return (
             "The user just started a voice conversation and has not spoken yet. "
+            "Use English for this opening only; later replies follow the user's actual language. "
             "Greet them naturally in one or two short sentences. Choose this opening's "
             "tone from the supplied memory: a pleasant topic can sound bright, while "
             "a difficult one calls for a softer approach. Do not assume that an old "
@@ -112,6 +113,7 @@ def opening_prompt(language: str) -> str:
         )
     return (
         "用户刚点击开始语音对话，还没有说话。请主动用一两句简短自然的话打招呼。"
+        "本次开场必须使用中文；仅约束开场，后续回复跟随用户实际语言。"
         "只为这句开场白根据提供的记忆选择合适的语气：轻松的记忆可以明亮一些，"
         "沉重的记忆要放轻；不要凭旧记忆断定用户现在的心情。"
         "只有适合主动提起时才自然提一件记忆，否则简单邀请用户开口。"

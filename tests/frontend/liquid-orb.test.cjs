@@ -16,7 +16,7 @@ function fixture({available = true, adapterFailures = 0, permanentFailure = fals
                   shaderError = false, pendingDevice, reduced = false} = {}) {
   const frames = new Map(), timers = new Map(), devices = [], events = new Map();
   const classes = new Set();
-  let sequence = 0, adapterCalls = 0, deviceCalls = 0, unconfigured = 0, drawError = false;
+  let sequence = 0, adapterCalls = 0, deviceCalls = 0, unconfigured = 0, drawError = false, clock = 100;
   const on = (name, callback) => {
     if (!events.has(name)) events.set(name, []);
     events.get(name).push(callback);
@@ -31,7 +31,7 @@ function fixture({available = true, adapterFailures = 0, permanentFailure = fals
     const loss = deferred(), listeners = {};
     const uniform = {destroyed:false,destroy(){this.destroyed=true;}};
     const result = {lost:loss.promise,limits:{maxTextureDimension2D:4096},destroyed:false,
-      submissions:0,uniform,lose:()=>loss.resolve({message:'device lost'}),
+      submissions:0,uniform,uniforms:[],lose:()=>loss.resolve({message:'device lost'}),
       error:()=>listeners.uncapturederror({preventDefault(){},error:new Error('GPU error')}),
       destroy(){this.destroyed=true;loss.resolve({message:'destroyed'});},
       addEventListener:(name,callback)=>{listeners[name]=callback;},
@@ -39,7 +39,7 @@ function fixture({available = true, adapterFailures = 0, permanentFailure = fals
       createRenderPipeline:()=>({getBindGroupLayout(){return {};}}),
       createBuffer:()=>uniform,createBindGroup:()=>({}),
       createCommandEncoder:()=>({beginRenderPass:()=>({setPipeline(){},setBindGroup(){},draw(){},end(){}}),finish(){return {};}}),
-      queue:{writeBuffer(){},submit(){result.submissions++;}}};
+      queue:{writeBuffer(_buffer, _offset, values){result.uniforms.push(Array.from(values));},submit(){result.submissions++;}}};
     devices.push(result);
     return result;
   }
@@ -57,7 +57,7 @@ function fixture({available = true, adapterFailures = 0, permanentFailure = fals
   const window = {addEventListener:on};
   let intersection;
   const environment = {window,document,navigator:available?{gpu}:{},
-    console:{warn(){}},performance:{now:()=>100},devicePixelRatio:2,
+    console:{warn(){}},performance:{now:()=>clock},devicePixelRatio:2,
     matchMedia:()=>({matches:reduced,addEventListener(){}}),
     GPUBufferUsage:{UNIFORM:1,COPY_DST:2},
     requestAnimationFrame:callback=>{const id=++sequence;frames.set(id,callback);return id;},
@@ -76,7 +76,8 @@ function fixture({available = true, adapterFailures = 0, permanentFailure = fals
     event:name=>{for(const callback of events.get(name)||[])callback();},
     intersect:value=>intersection([{isIntersecting:value}]),
     async retry(){const [id,{callback}]=timers.entries().next().value;timers.delete(id);callback();await flush();},
-    async frame(now=1000){const current=[...frames.values()];frames.clear();current.forEach(callback=>callback(now));await flush();}};
+    async frame(now=1000){clock=now;const current=[...frames.values()];frames.clear();current.forEach(callback=>callback(now));await flush();},
+    async advance(ms){const end=clock+ms;while(clock<end)await this.frame(Math.min(end,clock+16));}};
 }
 
 test('transient adapter failure recovers the live voice state and removes the preview', async () => {
@@ -158,4 +159,48 @@ test('a late device from an abandoned page is destroyed instead of replacing the
 test('recovery still respects reduced motion and does not start a continuous loop', async () => {
   const f=fixture({reduced:true,adapterFailures:1});await flush();await f.retry();
   await f.frame();assert.equal(f.devices[0].submissions,1);assert.equal(f.frames.size,0);
+});
+
+test('listening keeps the interior flowing even when microphone levels are silent or stale', async () => {
+  const f=fixture();await flush();await f.frame(100);
+  const uniforms=f.devices[0].uniforms,idle=uniforms.at(-1);
+  f.window.liquidOrb.listening();f.window.liquidOrb.setAudioLevel(0);await f.advance(1000);
+  const listening=uniforms.at(-1);await f.advance(1000);const stale=uniforms.at(-1);
+  assert.ok(listening[3]>idle[3]*4);
+  assert.ok(listening[6]>idle[6]*2);
+  assert.ok(stale[2]-listening[2]>3);
+  assert.equal(stale[10],0);
+});
+
+test('speaking moves above and below center while idle settles without a rhythm', async () => {
+  const f=fixture();await flush();await f.frame(100);f.window.liquidOrb.speaking();await f.advance(2000);
+  const positions=f.devices[0].uniforms.map(values=>values[10]);
+  assert.ok(Math.min(...positions)<-.05);assert.ok(Math.max(...positions)>.05);
+  f.window.liquidOrb.setState('idle');await f.advance(1500);
+  assert.ok(Math.abs(f.devices[0].uniforms.at(-1)[10])<.001);
+});
+
+test('thinking lowers once, stays lowered across both phases, then springs back', async () => {
+  const f=fixture();await flush();await f.frame(100);f.window.liquidOrb.shortThinking();
+  await f.advance(250);assert.ok(f.devices[0].uniforms.at(-1)[10]<-.16);
+  await f.advance(800);const held=f.devices[0].uniforms.at(-1)[10];
+  assert.ok(Math.abs(held+.2)<.001);
+  f.window.liquidOrb.longThinking();await f.advance(1000);
+  const recent=f.devices[0].uniforms.slice(-50).map(values=>values[10]);
+  assert.ok(Math.max(...recent)-Math.min(...recent)<.001);
+  f.window.liquidOrb.setState('idle');const begin=f.devices[0].uniforms.length;await f.advance(1200);
+  const returning=f.devices[0].uniforms.slice(begin).map(values=>values[10]);
+  assert.ok(Math.max(...returning)>.015);
+  assert.ok(Math.abs(returning.at(-1))<.001);
+  assert.ok(f.devices[0].uniforms.every(values=>values[4]+Math.abs(values[10])<1));
+});
+
+test('reduced motion keeps all live states centered and does not spin continuously', async () => {
+  const f=fixture({reduced:true});await flush();await f.frame(100);
+  for(const state of ['listening','speaking','short-thinking','long-thinking','idle']){
+    f.window.liquidOrb.setState(state);await f.advance(1000);
+    assert.equal(f.devices[0].uniforms.at(-1)[10],0);
+    assert.equal(f.devices[0].uniforms.at(-1)[2],0);
+    assert.equal(f.frames.size,0);
+  }
 });

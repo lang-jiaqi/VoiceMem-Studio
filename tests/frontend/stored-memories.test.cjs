@@ -4,15 +4,16 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {Node} = require('../helpers/dom.cjs');
 
 const source = fs.readFileSync(path.join(__dirname, '../../studio/apps/ui/digital.js'), 'utf8');
 
 test('stored panel follows every committed snapshot and ignores portrait-only rewrites', () => {
   const events = new Map(), rows = [];
-  const host = {replaceChildren(){rows.length=0;},append(item){rows.push(item);}};
+  const host = {replaceChildren(){rows.length=0;},append(item){rows.push(item.textContent);}};
   const context = {
     window:{addEventListener:(name,callback)=>events.set(name,callback)},
-    $:()=>host,el:(tag,className,text)=>text,
+    $:()=>host,tr:text=>text,el:(tag,className,text)=>new Node(tag,text),
   };
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('let knownMemories'), source.indexOf('const reduced =')), context);

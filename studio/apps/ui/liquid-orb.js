@@ -11,16 +11,29 @@ const aliases={responding:'speaking',thinking:'short-thinking',shortThinking:'sh
 // Compact layout: size/time/speed, radius/zoom/warp/shade, exposure/glow/padding.
 const idle=[1,1,0,.45,.78,.282,1.456,.1,.7616,0,0,0];
 const thinking=[1,1,0,1.5,.78,.64,4.75,.35,1.08,.26,0,0];
-const seeds={idle,listening:[...idle],speaking:[...thinking],'short-thinking':thinking,'long-thinking':[...thinking]};
-seeds.listening[8]=1.08;seeds.speaking[3]=15;
-// Both thinking interfaces keep the supplied thinking material and motion.
+const seeds={idle,listening:[...thinking],speaking:[...thinking],'short-thinking':thinking,'long-thinking':[...thinking]};
+seeds.listening[3]=4.2;seeds.speaking[3]=1.8;
 let state='idle',from=new Float32Array(idle),target=new Float32Array(idle),values=new Float32Array(idle);
 let transitionAt=0,duration=0,phase=0,previous=0,scale=1,audio=0,audioAt=-Infinity,listeningAt=0;
 let device,context,pipeline,buffer,group,format,raf=0,visible=true,failed=false;
 let generation=0,initializing=false,pageHidden=false,retryTimer=0,retries=0,retryable=true;
 const maxRetries=3;
 let demo=false,demoRAF=0,demoStarted=0;
-let floatPhase=0,floatAmplitude=0,floatSpeed=2.8,settingsOpen=false;
+let speakingPhase=0,speakingAmplitude=0,verticalOffset=0,verticalVelocity=0,settingsOpen=false;
+function motion(dt){
+ if(reduced.matches){speakingAmplitude=verticalOffset=verticalVelocity=0;return 0;}
+ const thinking=state.includes('thinking');
+ const destination=thinking?-.2:0, damping=thinking?1:.48, frequency=17;
+ // Substeps keep the spring stable after a delayed frame without replaying hidden time.
+ const steps=Math.max(1,Math.ceil(dt*120)),step=dt/steps;
+ for(let i=0;i<steps;i++){
+  verticalVelocity+=((destination-verticalOffset)*frequency**2-2*damping*frequency*verticalVelocity)*step;
+  verticalOffset+=verticalVelocity*step;
+ }
+ speakingAmplitude+=((state==='speaking'?.065:0)-speakingAmplitude)*(1-Math.exp(-dt/.16));
+ speakingPhase+=dt*5.2;
+ return verticalOffset+Math.sin(speakingPhase)*speakingAmplitude;
+}
 function sample(now){
  const raw=duration?Math.min(1,Math.max(0,(now-transitionAt)/duration)):1;
  const k=state.includes('thinking')?1-(1-raw)**3:raw*raw*(3-2*raw);
@@ -103,7 +116,8 @@ struct V {@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
  let ballA=1.-smoothstep(.985,1.015,pd);col=clamp(col*u.exposure,vec3<f32>(0.),vec3<f32>(1.))*ballA;
  col=clamp(col+halo(r,rad),vec3<f32>(0.),vec3<f32>(1.));alpha=clamp(max(ballA,max(col.r,max(col.g,col.b))),0.,1.);
  }
- let q=(2.*fc-u.size)/u.size;let fit=1.-smoothstep(min((rad+1.)*.5,1.-2./minSize),1.,max(abs(q.x),abs(q.y)));
+ let q=(2.*fc-u.size)/u.size;let edge=min((rad+1.)*.5+abs(u.pad.x),1.-2./minSize);
+ let fit=1.-smoothstep(edge,1.,max(abs(q.x),abs(q.y)));
  return vec4<f32>(col*fit,alpha*fit);
 }`;
 function active(){return !pageHidden&&!document.hidden&&visible&&!settingsOpen;}
@@ -134,13 +148,7 @@ function draw(now){
  if(state==='listening'&&!reduced.matches){const elapsed=(now-listeningAt)/1000;const level=audioAt>=listeningAt?(now-audioAt<180?audio:0):.28+.22*Math.sin(elapsed*7.2)*Math.sin(elapsed*4.1);desired+=.12*Math.pow(Math.max(0,(level-.025)/.975),.65);}
  scale+=(desired-scale)*(1-Math.exp(-dt/(desired>scale?.065:.18)));
  if(!reduced.matches)phase+=dt*Math.max(values[3],0);
- const thinking=state.includes('thinking');
- const amp=!reduced.matches&&thinking?(state==='long-thinking'?.085:.035):0;
- const ease=1-Math.exp(-dt/.35);
- floatAmplitude+=(amp-floatAmplitude)*ease;
- floatSpeed+=((state==='long-thinking'?1.5:2.8)-floatSpeed)*ease;
- if(!reduced.matches)floatPhase+=dt*floatSpeed;
- const frameValues=new Float32Array(values);frameValues[0]=w;frameValues[1]=h;frameValues[2]=phase;frameValues[4]*=scale;frameValues[10]=reduced.matches?0:Math.sin(floatPhase)*floatAmplitude;
+ const frameValues=new Float32Array(values);frameValues[0]=w;frameValues[1]=h;frameValues[2]=phase;frameValues[4]*=scale;frameValues[10]=motion(dt);
  device.queue.writeBuffer(buffer,0,frameValues);
  const encoder=device.createCommandEncoder();const pass=encoder.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});
  pass.setPipeline(pipeline);pass.setBindGroup(0,group);pass.draw(3);pass.end();device.queue.submit([encoder.finish()]);

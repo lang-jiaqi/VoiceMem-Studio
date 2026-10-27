@@ -503,7 +503,7 @@ class SelfHarnessTests(unittest.TestCase):
     def test_public_schema_contains_only_safe_enum_metadata(self):
         schema = public_schema()
         speed = schema["speaking_style"]["speech_rate"]
-        self.assertEqual(speed["default"], "normal")
+        self.assertEqual(speed["default"], "very_fast")
         self.assertEqual(speed["labels"]["slow"], "稍慢")
         self.assertNotIn("tts", speed)
         self.assertNotIn(

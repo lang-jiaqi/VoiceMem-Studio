@@ -7,11 +7,11 @@
 <meta name="description" content="数字人对话与双脑记忆空间。">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%23232228'/%3E%3Ccircle cx='20' cy='20' r='9.5' fill='none' stroke='white' stroke-width='2'/%3E%3Ccircle cx='20' cy='20' r='3.4' fill='white'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="design.css?v=20261025-1">
-<link rel="stylesheet" href="digital.css?v=20261025-4">
+<link rel="stylesheet" href="digital.css?v=20261027-5">
 <link rel="stylesheet" href="vendor/katex/katex.min.css?v=0.18.10">
 <link rel="stylesheet" href="markdown.css?v=20261001-3">
 <link rel="stylesheet" href="ui.css?v=20261025-1">
-<link rel="stylesheet" href="settings.css?v=20261026-2">
+<link rel="stylesheet" href="settings.css?v=20261027-3">
 </head>
 <body data-style="digital">
 
@@ -59,10 +59,11 @@
     <div class="human">
       <div class="scene">
         <div class="asr-actions"><span>本轮感知 · ASR</span><button class="start-talk" id="startTalk" type="button" aria-pressed="false">开始对话</button></div>
-        <p class="said on" id="said"><em>说点什么，她在听。</em></p>
+        <p class="said on" id="said"><em data-ui-placeholder>说点什么，她在听。</em></p>
         <div class="marks" id="marks" aria-live="polite"></div>
+        <span class="reply-stage" data-reply-stage role="status" hidden></span>
         <div class="glass">
-          <div class="voice" id="voice">我在。今天想从哪里说起？</div>
+          <div class="voice" id="voice"><span data-ui-placeholder>我在。今天想从哪里说起？</span></div>
           <form class="ask" id="ask">
             <label class="sr" for="say">对 Echo 说</label>
             <input id="say" autocomplete="off" placeholder="说点什么…">
@@ -114,14 +115,16 @@
 <div id="toast" class="toast" role="status" hidden></div>
 
 <script src="ui.js"></script>
-<script src="studio-client.js?v=20261026-1"></script>
-<script src="conversation-spaces.js?v=20261025-1"></script>
+<script src="studio-client.js?v=20261027-1"></script>
+<script src="conversation-spaces.js?v=20261027-4"></script>
 <script src="component-settings.js?v=20261026-1"></script>
-<script src="settings.js?v=20261026-2"></script>
+<script src="harness-prompts.js?v=20261027-2"></script>
+<script src="reply-stage.js?v=20261027-1"></script>
+<script src="settings.js?v=20261027-4"></script>
 <script src="vendor/katex/katex.min.js?v=0.18.10"></script>
 <script src="markdown.js?v=20261026-1"></script>
 <script src="transcript.js?v=20261025-1"></script>
-<script src="digital.js?v=20261026-1"></script>
+<script src="digital.js?v=20261027-4"></script>
 <script src="memory-scene.js?v=20261023-2"></script>
 </body>
 </html>

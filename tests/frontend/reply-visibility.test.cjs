@@ -36,17 +36,20 @@ function fixture(style) {
   const context = {
     window:{}, current:conversation, CONVERSATIONS:[conversation], activeConv:conversation.id,
     state:{get messages(){return conversation.messages;}}, replyMessage:null, now:()=>'', clearTimeout(){}, typeTimer:null,
-    messageBodies, messageNodes:new Map(), document:{createElement:()=>new Element(),createTextNode:text=>new Node('#text',text)}, requestAnimationFrame:callback=>{callback();return 0;}, matchMedia:()=>({matches:true}),
+    messageBodies, messageNodes:new Map(), document:{createElement:tag=>new Element(tag),createTextNode:text=>new Node('#text',text)}, requestAnimationFrame:callback=>{callback();return 0;}, matchMedia:()=>({matches:true}),
     VMMarkdown:{render(element, text){element.textContent = text; rendered.push(text);}}, $,
-    el(_tag, className, text){const node = new Element(); node.className = className; node.textContent = text || ''; return node;},
-    renderMarks(){}, syncSend(){},
+    el(tag, className, text){const node = new Element(tag); node.className = className; node.textContent = text || ''; return node;},
+    tr:text=>text, syncSend(){},
     renderRail(){}, renderPerception(){}, renderConvList(){}, memoryList(){}, watchStoredMemories(){},
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../studio/apps/ui/studio-client.js'), 'utf8'),context);
   context.VMStudio = context.window.VMStudio;
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../studio/apps/ui/transcript.js'), 'utf8'),context);
   context.VMTranscript=context.window.VMTranscript;
-  if (style === 'digital') vm.runInNewContext(`${implementation('messageNode')}\n${implementation('renderLog')}`,context);
+  if (style === 'digital') {
+    const labels=source.slice(source.indexOf('const KINDS ='),source.indexOf('function renderMarks('));
+    vm.runInNewContext(`${labels}\n${implementation('renderMarks')}\n${implementation('renderTurnDetails')}\n${implementation('messageNode')}\n${implementation('renderLog')}`,context);
+  }
   else vm.runInNewContext(`${implementation('esc')}\n${implementation('messageNode')}\n${implementation('renderThread')}`,context);
   vm.runInNewContext(implementation('handleStudio'),context);
   const body = index => style === 'digital'
@@ -54,6 +57,33 @@ function fixture(style) {
     : $('thread').children[0].children[index].querySelector('.msg-body');
   return {context, conversation, rendered, body, handle:context.handleStudio};
 }
+
+test('digital bubble details start collapsed and retain their state across late perception updates', () => {
+  const f=fixture('digital'), input=f.conversation.messages[0];
+  input.marks=[['clu','work']];
+  f.context.renderLog();
+  const body=f.body(0), turn=body.parentNode, details=turn.querySelector('.turn-details');
+  assert.equal(details.tag,'details');
+  assert.ok(!details.open);
+  assert.equal(details.textContent,'详情工作领域');
+  details.open=true;
+  input.marks.push(['ent','synthetic entity']);
+  f.handle({type:'answer_start',output_id:'one'});
+  f.handle({type:'answer_delta',output_id:'one',text:'synthetic response'});
+  assert.equal(f.body(0),body);
+  assert.equal(turn.querySelector('.turn-details'),details);
+  assert.equal(details.open,true);
+  assert.match(details.textContent,/synthetic entity实体/);
+  details.open=false;
+  input.marks=[['emo','平静']];
+  f.context.renderLog();
+  assert.equal(turn.querySelector('.turn-details'),details);
+  assert.equal(details.open,false);
+  assert.equal(body.textContent,'synthetic input');
+  input.marks=[];
+  f.context.renderLog();
+  assert.equal(turn.querySelector('.turn-details'),null);
+});
 
 for (const style of ['technical','digital']) {
   test(`${style} targets its answer after a user acknowledgement arrives before held text`, () => {

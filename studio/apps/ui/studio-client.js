@@ -54,6 +54,7 @@
     let run = null;
     let replayRun = null;
     let replaySamples = 0;
+    let promptSequence = 0;
     const recordings = new Map();
     const active = owner => !!owner && run === owner && !owner.closed;
     const emit = (owner, event) => { if (active(owner)) onEvent(event); };
@@ -194,6 +195,10 @@
       run = null;
       clearTimeout(owner.timeout);
       clearTimeout(owner.thinking);
+      for (const request of owner.promptRequests?.values() || []) {
+        clearTimeout(request.timeout); request.reject(new Error('会话已结束'));
+      }
+      owner.promptRequests?.clear();
       owner.reject?.(new Error('会话已结束'));
       owner.socket?.close();
       owner.clips.forEach(source => { source.onended = null; try { source.stop(); } catch {} });
@@ -271,21 +276,38 @@
     function handle(owner, message) {
       if (!active(owner)) return;
       if (message.type === 'self_harness_state') {
+        const request = owner.promptRequests?.get(message.request_id);
+        if (request) {
+          clearTimeout(request.timeout); owner.promptRequests.delete(message.request_id);
+          if (message.error) request.reject(new Error(message.error)); else request.resolve(message);
+        }
         document.dispatchEvent(new CustomEvent('self-harness-state', { detail: message }));
       }
-      if (message.output_id && message.type !== 'answer_start' && message.output_id !== owner.output) return;
+      if (message.type === 'reply_preparing') owner.preparingOutput = message.output_id;
+      const preparation = ['reply_preparing', 'memory_hits', 'tag_update'].includes(message.type)
+        && message.output_id === owner.preparingOutput;
+      if (owner.preparingOutput && ['memory_hits', 'tag_update'].includes(message.type)
+          && message.output_id && !preparation) return;
+      if (message.output_id && message.type !== 'answer_start' && message.output_id !== owner.output && !preparation) return;
       switch (message.type) {
         case 'session_ready':
           owner.player.port.postMessage({
             type: 'config', prebuffer: message.mode === 'realtime' ? .08 : .16,
             startGrace: message.mode === 'realtime' ? 0 : .04,
           });
+          sendJSON(owner, {type:'conversation_language', language:window.VMSettings?.language === 'en' ? 'en' : 'zh'});
+          const prompts = window.VMHarnessPrompts?.saved();
+          if (prompts && Object.keys(prompts).length) sendJSON(owner, {type:'harness_prompts_update', prompts});
           clearTimeout(owner.timeout); owner.resolve(owner); break;
         case 'user_transcript':
+          owner.preparingOutput = '';
           phase(owner, 'short-thinking'); break;
+        case 'reply_preparing':
+          phase(owner, message.reply_mode === 'memory_cot' ? 'long-thinking' : 'short-thinking'); break;
         case 'answer_start':
           stopReplay();
           owner.output = message.output_id || '';
+          owner.preparingOutput = '';
           owner.replyStarted = false;
           owner.replyEvents = [];
           owner.caption = message.caption_sync === 'playback'
@@ -380,6 +402,7 @@
           });
           if (data.outputId !== owner.output) return;
           if (data.type === 'started') owner.replyStarted = true;
+          if (data.type === 'started') emit(owner, {type:'playback_started', output_id:owner.output});
           if (data.type === 'started' || data.type === 'resumed') {
             flushReply(owner);
             if (owner.replyStarted && !owner.paused) phase(owner, 'speaking');
@@ -497,6 +520,20 @@
       if (!active(owner)) throw new Error('会话已结束');
       sendJSON(owner, { type: 'harness_prompt_update', name, value });
     }
+    async function setHarnessPrompts(prompts, promptLanguage) {
+      const owner = await connect();
+      if (!active(owner)) throw new Error('会话已结束');
+      const request_id = `prompts-${++promptSequence}`;
+      owner.promptRequests ||= new Map();
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          owner.promptRequests.delete(request_id); reject(new Error('Prompt 保存超时，请重试。'));
+        }, 10000);
+        owner.promptRequests.set(request_id, {resolve, reject, timeout});
+        sendJSON(owner, {type:'harness_prompts_update', prompts, request_id,
+          ...(promptLanguage ? {prompt_language:promptLanguage} : {})});
+      });
+    }
     async function setBackchannelCurve(values) {
       const owner = await connect();
       if (!active(owner)) throw new Error('会话已结束');
@@ -511,11 +548,12 @@
       const next = window.VMSettings?.language || 'zh-CN';
       if (next === language) return;
       language = next;
+      if (run) sendJSON(run, {type:'conversation_language', language:next === 'en' ? 'en' : 'zh'});
       fetch('/api/lang', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lang: next === 'en' ? 'en' : 'zh' }) })
         .then(response => { if (!response.ok) throw new Error('语言切换失败'); })
         .catch(error => VMUI.notify(error.message));
     });
-    return { send, start, toggle, pause, getHarness, setHarness, setHarnessPrompt, setBackchannelCurve, replay, stopReplay, cancel: end, stop: end };
+    return { send, start, toggle, pause, getHarness, setHarness, setHarnessPrompt, setHarnessPrompts, setBackchannelCurve, replay, stopReplay, cancel: end, stop: end };
   }
   function applyUser(messages, event, role) {
     const id = event.input_turn_id;

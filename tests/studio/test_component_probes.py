@@ -83,11 +83,13 @@ class SelectedProbeTests(unittest.TestCase):
 class SpeechWarmupTests(unittest.IsolatedAsyncioTestCase):
     async def test_defaults_use_reviewed_cache_and_custom_voice_primes_two_clips(self):
         for provider in ('recommended','openai','adapter'):
-            async def stream(text):
+            async def stream(text, instruction=None):
                 yield b'\0\0'
             tts = SimpleNamespace(stream=stream,aclose=AsyncMock())
             voice = SimpleNamespace(prime=AsyncMock(),ready=True)
             agent = Startup()
+            agent.MODE = 'llm_tts'
+            agent._speak_instruction = lambda *args: 'Synthetic voice style'
             agent.vm = SimpleNamespace(utils={'tts':tts})
             agent.ARGS = SimpleNamespace(backchannel=True)
             agent.ACTIVE_SPACE = 'synthetic'

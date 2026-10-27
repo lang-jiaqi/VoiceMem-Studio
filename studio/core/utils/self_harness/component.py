@@ -269,6 +269,8 @@ def normalize_snapshot(value=None) -> dict:
     prompts = value.get("prompts", {}) if isinstance(value, dict) else {}
     return {
         "profile": profile,
+        "prompt_language": "en" if isinstance(value, dict) and value.get("prompt_language") == "en" else "zh",
+        "prompt_overrides": dict(value.get("prompt_overrides", {})) if isinstance(value, dict) else {},
         "recent": list(recent),
         "pending": dict(pending) if isinstance(pending, dict) else {},
         "prompts": {
@@ -370,6 +372,8 @@ class SelfHarnessState:
         self.prompts = {
             name: spec["default"] for name, spec in PROMPT_SCHEMA.items()
         }
+        self.prompt_overrides = {}
+        self.prompt_language = "zh"
         self.backchannel_curve: list[float] | None = None
         self.turn = 0
         self.last_changed: dict[str, int] = {}
@@ -387,6 +391,8 @@ class SelfHarnessState:
             "pending": {path: selected
                         for path, (selected, _) in self.pending.items()},
             "prompts": dict(self.prompts),
+            "prompt_language": self.prompt_language,
+            "prompt_overrides": dict(self.prompt_overrides),
             "backchannel_curve": (
                 list(self.backchannel_curve)
                 if self.backchannel_curve is not None else None),
@@ -457,6 +463,12 @@ class SelfHarnessState:
             self.on_change(self.snapshot())
         return update
 
+    def set_prompt_overrides(self, value) -> None:
+        """Replace explicit prompt edits atomically, separately from model controls."""
+        from studio.harness.prompts import validate_overrides
+        self.prompt_overrides = validate_overrides(value, language=self.prompt_language)
+        self.prompts['persona'] = self.prompt_overrides.get('persona', '')
+
     def set_prompt(self, name: str, value: str) -> str:
         """Set one explicit user prompt for this conversation only."""
         spec = PROMPT_SCHEMA.get(name)
@@ -469,6 +481,10 @@ class SelfHarnessState:
             raise ValueError(
                 f"Harness prompt exceeds {spec['max_length']} characters")
         self.prompts[name] = value
+        if value:
+            self.prompt_overrides[name] = value
+        else:
+            self.prompt_overrides.pop(name, None)
         if self.on_change is not None:
             self.on_change(self.snapshot())
         return value

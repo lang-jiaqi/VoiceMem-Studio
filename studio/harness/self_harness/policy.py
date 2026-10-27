@@ -25,7 +25,7 @@ PROFILE_SCHEMA = {
     },
     "speaking_style": {
         "speech_rate": {
-            "default": "normal",
+            "default": "very_fast",
             "values": ("very_slow", "slow", "normal", "fast", "very_fast"),
             "labels": {
                 "very_slow": "很慢", "slow": "稍慢", "normal": "正常",

@@ -8,8 +8,8 @@ const vm = require('node:vm');
 test('conversations select one of the backend Memory Spaces and retain its identity', async () => {
   const calls = [], events = [];
   let active = 'studio-zh', dialog;
-  const spaces = [{id:'studio-zh',name:'studio-zh',count:3}, {id:'project',name:'project',count:2}];
-  const element = () => ({children:[], append(...items){this.children.push(...items);}, setAttribute(){},
+  const spaces = [{id:'studio-zh',name:'工作',count:3}, {id:'project',name:'project',count:2}];
+  const element = () => ({children:[], attrs:{}, append(...items){this.children.push(...items);}, setAttribute(name,value){this.attrs[name]=value;},
     replaceChildren(...items){this.children=items;}, addEventListener(){}, close(){}, remove(){}, showModal(){},
     focus(){}});
   const context = {
@@ -29,6 +29,9 @@ test('conversations select one of the backend Memory Spaces and retain its ident
   const choice = api.choose('studio-zh');
   await new Promise(resolve => setImmediate(resolve));
   const list = dialog.children[2];
+  assert.equal(list.children[0].children[0].textContent,'工作');
+  assert.equal(list.children[0].children[0].attrs['data-no-i18n'],'');
+  assert.equal(list.children[0].children[2].textContent,'3 条记忆');
   list.children[1].onclick();
   assert.equal(list.children.length, spaces.length);
   const footer = dialog.children.at(-1);

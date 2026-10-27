@@ -156,9 +156,10 @@ function renderConvList() {
     li.className = 'conv' + (c.id === activeConv ? ' active' : '');
     const select = document.createElement('button');
     select.className = 'conv-select';
-    select.title = `${c.title} · ${VMConversationSpaces.name(c.space)}`;
     select.setAttribute('aria-current', c.id === activeConv ? 'true' : 'false');
-    select.innerHTML = `<span class="conv-title">${esc(c.title)} · ${esc(VMConversationSpaces.name(c.space))}</span><span class="dot"></span>`;
+    const title=!c.messages.length&&c.title==='New conversation'?tr('新对话'):c.title;
+    select.title = `${title} · ${VMConversationSpaces.name(c.space)}`;
+    select.innerHTML = `<span class="conv-title">${esc(title)} · ${esc(VMConversationSpaces.name(c.space))}</span><span class="dot"></span>`;
     select.onclick = async () => {
       if (c.id === activeConv) return;
       const version = ++conversationSwitch;
@@ -212,6 +213,7 @@ function now() {
 }
 
 function handleStudio(message) {
+  window.VMReplyStage?.onEvent(message);
   window.VMMemoryScene?.onStudioEvent(message);
   const conv = CONVERSATIONS.find(c => c.id === activeConv);
   if (message.type === 'partial_transcript') {
@@ -369,6 +371,7 @@ const voice = VMStudio.create({
   onFinal(text) {if(send(text))$('composer').value='';}
 });
 window.VMSettings?.bindHarness(voice);
+document.addEventListener('display-settings-change',renderConvList);
 $('mic').onclick=()=>{ if(voiceActive){voice.toggle();return;}const selected=activeConv;void VMConversationSpaces.use(CONVERSATIONS.find(c=>c.id===selected).space)
   .then(()=>{if(selected===activeConv)voice.toggle();}).catch(error=>VMUI.notify(error.message)); };
 $('startTalk').onclick=()=>{ $('composer').focus();$('mic').click(); };
