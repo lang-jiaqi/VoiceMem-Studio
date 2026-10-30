@@ -102,11 +102,12 @@ class SpeechFeedback:
 
 
 class ResourceAdmission:
-    """Delay background native stages while foreground speech lacks headroom.
+    """Share foreground headroom and paging feedback at native boundaries.
 
     Deferral is bounded per stage so confirmed persistence can progress during
     continuous speech. This is admission between calls, never device-wide
-    serialization or preemption of an already running model.
+    serialization or preemption of an already running model. Cache pressure
+    applies only to reclaimable allocator buffers, not active model state.
     """
 
     def __init__(self, *, max_defer_s=6.0, clock=time.monotonic):
@@ -117,6 +118,9 @@ class ResourceAdmission:
         self._devices = {}
         self._cost = {}
         self._paging = (0.0, 0.0)
+        self._cache_constrained = False
+        self._paging_candidate = None
+        self._paging_candidate_since = 0.0
         self._pressure = {}
         self._aged_at = {}
         self.max_defer_s = max_defer_s
@@ -247,8 +251,28 @@ class ResourceAdmission:
     def paging(self, mib_per_s):
         """Publish fresh swap traffic; allocated swap alone is not pressure."""
         with self._condition:
-            self._paging = (max(0.0, mib_per_s), self.clock())
+            now = self.clock()
+            if now - self._paging[1] >= 3:
+                self._cache_constrained = False
+                self._paging_candidate = None
+            high = mib_per_s > 8
+            if high != self._paging_candidate:
+                self._paging_candidate = high
+                self._paging_candidate_since = now
+            if now - self._paging_candidate_since >= (2 if high else 5):
+                self._cache_constrained = high
+            self._paging = (max(0.0, mib_per_s), now)
             self._condition.notify_all()
+
+    def cache_pressure(self):
+        """Report sustained paging for reclaimable allocator caches only.
+
+        Two seconds of fresh pressure activate the budget; five quiet seconds
+        restore it. Missing samples expire after three seconds. Native owners
+        consume this metadata without inspecting another framework's allocator.
+        """
+        with self._condition:
+            return self._cache_constrained and self.clock() - self._paging[1] < 3
 
     def device_pressure(self, device, constrained):
         """Publish device-local free-memory pressure from its native owner."""

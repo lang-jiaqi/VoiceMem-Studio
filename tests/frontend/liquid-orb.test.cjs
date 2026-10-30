@@ -13,7 +13,7 @@ function deferred() {
   return {promise, resolve};
 }
 function fixture({available = true, adapterFailures = 0, permanentFailure = false,
-                  shaderError = false, pendingDevice, reduced = false} = {}) {
+                  shaderError = false, pendingDevice, pendingGPU, reduced = false} = {}) {
   const frames = new Map(), timers = new Map(), devices = [], events = new Map();
   const classes = new Set();
   let sequence = 0, adapterCalls = 0, deviceCalls = 0, unconfigured = 0, drawError = false, clock = 100;
@@ -39,7 +39,8 @@ function fixture({available = true, adapterFailures = 0, permanentFailure = fals
       createRenderPipeline:()=>({getBindGroupLayout(){return {};}}),
       createBuffer:()=>uniform,createBindGroup:()=>({}),
       createCommandEncoder:()=>({beginRenderPass:()=>({setPipeline(){},setBindGroup(){},draw(){},end(){}}),finish(){return {};}}),
-      queue:{writeBuffer(_buffer, _offset, values){result.uniforms.push(Array.from(values));},submit(){result.submissions++;}}};
+      queue:{writeBuffer(_buffer, _offset, values){result.uniforms.push(Array.from(values));},submit(){result.submissions++;},
+        onSubmittedWorkDone:()=>pendingGPU?.promise || Promise.resolve()}};
     devices.push(result);
     return result;
   }
@@ -70,7 +71,7 @@ function fixture({available = true, adapterFailures = 0, permanentFailure = fals
   window.IntersectionObserver=environment.IntersectionObserver;
   window.ResizeObserver=environment.ResizeObserver;
   vm.runInNewContext(source, environment);
-  return {canvas,support,classes,document,window,frames,timers,devices,device,
+  return {canvas,support,label,classes,document,window,frames,timers,devices,device,
     get adapterCalls(){return adapterCalls;},get unconfigured(){return unconfigured;},
     set drawError(value){drawError=value;},
     event:name=>{for(const callback of events.get(name)||[])callback();},
@@ -185,8 +186,9 @@ test('thinking lowers once, stays lowered across both phases, then springs back'
   await f.advance(250);assert.ok(f.devices[0].uniforms.at(-1)[10]<-.16);
   await f.advance(800);const held=f.devices[0].uniforms.at(-1)[10];
   assert.ok(Math.abs(held+.2)<.001);
+  const switched=f.devices[0].uniforms.length;
   f.window.liquidOrb.longThinking();await f.advance(1000);
-  const recent=f.devices[0].uniforms.slice(-50).map(values=>values[10]);
+  const recent=f.devices[0].uniforms.slice(switched).map(values=>values[10]);
   assert.ok(Math.max(...recent)-Math.min(...recent)<.001);
   f.window.liquidOrb.setState('idle');const begin=f.devices[0].uniforms.length;await f.advance(1200);
   const returning=f.devices[0].uniforms.slice(begin).map(values=>values[10]);
@@ -203,4 +205,40 @@ test('reduced motion keeps all live states centered and does not spin continuous
     assert.equal(f.devices[0].uniforms.at(-1)[2],0);
     assert.equal(f.frames.size,0);
   }
+});
+
+test('rendering has a bounded frame and pixel budget on a high refresh Retina display', async () => {
+  const f=fixture();await flush();f.window.liquidOrb.listening();
+  for(let time=100;time<=1100;time+=1000/120)await f.frame(time);
+  assert.ok(f.devices[0].submissions<=31);
+  assert.equal(f.canvas.width,350);assert.equal(f.canvas.height,350);
+  f.window.liquidOrb.setState('idle');await f.advance(2000);
+  const before=f.devices[0].submissions;await f.advance(1000);
+  assert.ok(f.devices[0].submissions-before<=13);
+  f.canvas.clientWidth=f.canvas.clientHeight=1200;await f.advance(100);
+  assert.equal(f.canvas.width,384);assert.equal(f.canvas.height,384);
+});
+
+test('a busy GPU never accumulates orb submissions and resumes the latest state', async () => {
+  const pending=deferred(),f=fixture({pendingGPU:pending});await flush();await f.frame(100);
+  f.window.liquidOrb.listening();await f.advance(500);
+  assert.equal(f.devices[0].submissions,1);assert.equal(f.frames.size,0);
+  pending.resolve();await flush();await f.frame(700);
+  assert.equal(f.devices[0].submissions,2);
+  assert.equal(f.window.liquidOrb.getState(),'listening');
+});
+
+test('live phase labels follow the interface language', async () => {
+  const f=fixture();await flush();f.window.VMSettings={language:'en'};
+  f.window.liquidOrb.listening();assert.equal(f.label.textContent,'Listening');
+  f.window.VMSettings.language='zh-CN';f.event('display-settings-change');
+  assert.equal(f.label.textContent,'倾听');
+});
+
+test('completion of abandoned GPU work cannot restart a departed page', async () => {
+  const pending=deferred(),f=fixture({pendingGPU:pending});await flush();await f.frame(100);
+  f.event('pagehide');pending.resolve();await flush();
+  assert.equal(f.frames.size,0);assert.equal(f.devices[0].destroyed,true);
+  f.event('pageshow');await flush();await f.frame(200);
+  assert.equal(f.devices[1].submissions,1);
 });

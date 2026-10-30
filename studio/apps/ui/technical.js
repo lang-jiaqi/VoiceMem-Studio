@@ -371,7 +371,12 @@ const voice = VMStudio.create({
   onFinal(text) {if(send(text))$('composer').value='';}
 });
 window.VMSettings?.bindHarness(voice);
-document.addEventListener('display-settings-change',renderConvList);
+document.addEventListener('display-settings-change',()=>{
+  renderConvList();
+  if($('liveEcho').classList.contains('empty'))$('liveEcho').textContent=tr('等待你的下一句话…');
+  if($('aiEcho').classList.contains('empty')&&!CONVERSATIONS.find(c=>c.id===activeConv)?.busy)
+    VMMarkdown.render($('aiEcho'),tr('回答会同步显示在这里。'));
+});
 $('mic').onclick=()=>{ if(voiceActive){voice.toggle();return;}const selected=activeConv;void VMConversationSpaces.use(CONVERSATIONS.find(c=>c.id===selected).space)
   .then(()=>{if(selected===activeConv)voice.toggle();}).catch(error=>VMUI.notify(error.message)); };
 $('startTalk').onclick=()=>{ $('composer').focus();$('mic').click(); };

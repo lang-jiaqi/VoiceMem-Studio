@@ -93,6 +93,8 @@ def build_app(agent):
         pet_port=agent.ARGS.port,
         memory_changes=agent.memory_changes,
         full_snapshot=lambda: agent.memory_snapshot(include_all=True),
+        localized_snapshot=lambda language, include_all=False: agent.memory_snapshot(
+            language=language, include_all=include_all),
     )
     app.router.add_event_handler('shutdown', agent.drain_memory)
     from voicemem.engine import observer

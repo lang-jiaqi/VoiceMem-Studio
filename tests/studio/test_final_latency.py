@@ -187,13 +187,13 @@ class WarmupTests(unittest.TestCase):
             with self.subTest(fail=fail):
                 events = []
 
-                async def speech(text):
+                async def speech(text, instruction=None):
                     events.append('speech-first')
-                    yield b'first'
+                    yield b'\x01\x00' * 16
                     if fail:
                         raise RuntimeError('synthetic codec failure')
                     events.append('speech-complete')
-                    yield b'last'
+                    yield b'\x02\x00' * 16
 
                 agent = Startup()
                 agent.MODE, agent.ACTIVE_SPACE = 'llm_tts', 'synthetic-space'
@@ -202,6 +202,7 @@ class WarmupTests(unittest.TestCase):
                     get=lambda _: types.SimpleNamespace(stream=speech)))
                 agent._LOCAL_LLM = None
                 agent.space_language = lambda _: 'zh'
+                agent._speak_instruction = lambda emotion, language: 'Synthetic speech style'
                 agent._warm_final_asr = lambda _: events.append('final-asr')
                 agent._sensevoice = lambda: types.SimpleNamespace(
                     run_with_emotion=lambda _: events.append('sensevoice'))

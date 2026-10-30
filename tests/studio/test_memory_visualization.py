@@ -161,6 +161,46 @@ class MemoryVisualizationTests(unittest.TestCase):
                 ("zh", "Fixture Owner", self.trait.claim): self.label,
             })
 
+    def test_request_language_does_not_change_space_or_original_memory(self):
+        original = self.trait.claim = '喜欢简短回答'
+        self.repo._vector_store.list_entries.return_value = [{
+            'id': 'fixture-fact', 'text': '保留原始事实', 'date': '2026-01-01',
+        }]
+        app = build_app('llm_tts', None, None, snapshot=self.agent.memory_snapshot,
+                        localized_snapshot=lambda language, include_all=False: self.agent.memory_snapshot(
+                            language=language, include_all=include_all))
+        client = TestClient(app)
+        self.addCleanup(client.close)
+        with self.controlled_rewrite() as rewrite:
+            pending = client.get('/api/memories?lang=en').json()
+            self.assertEqual(pending['language'], 'en')
+            self.assertTrue(rewrite.started.wait(1))
+            request = rewrite.create.call_args.kwargs['messages'][0]['content']
+            self.assertIn('Write every display label in English', request)
+            rewrite.release.set()
+            self.assertTrue(rewrite.finished.wait(1))
+            english = client.get('/api/memories?lang=en').json()
+            self.assertEqual(english['right'][0]['text'], self.label)
+            self.assertEqual(english['right'][0]['raw'], original)
+            self.assertEqual(english['left'][0]['text'], '保留原始事实')
+            full = client.get('/api/memories?all=true&lang=en').json()
+            self.assertEqual(full['right'][0]['text'], self.label)
+        with self.controlled_rewrite(content='喜欢简短回答的展示标签') as rewrite:
+            chinese = client.get('/api/memories?lang=zh').json()
+            self.assertEqual(chinese['right'][0]['text'], original)
+            self.assertTrue(rewrite.started.wait(1))
+            self.assertIn('每条展示标签用简洁自然的中文', rewrite.create.call_args.kwargs['messages'][0]['content'])
+        self.assertEqual(self.agent.SPACE_LANG, 'zh')
+        self.assertEqual(self.trait.claim, original)
+        self.assertEqual(client.get('/api/memories?lang=invalid').status_code, 400)
+
+    def test_language_parameter_keeps_legacy_snapshot_injection(self):
+        read = Mock(return_value={'left': [], 'right': []})
+        client = TestClient(build_app('llm_tts', None, None, snapshot=read))
+        self.addCleanup(client.close)
+        self.assertEqual(client.get('/api/memories?lang=en').status_code, 200)
+        read.assert_called_once_with()
+
     def test_recall_keeps_name_rewriting_and_original_evidence(self):
         payload = {"emotion": "平静", "right_brain_hits": [
             {"claim": self.trait.claim, "content": f"{self.trait.claim}｜他说过：Keep it brief."},

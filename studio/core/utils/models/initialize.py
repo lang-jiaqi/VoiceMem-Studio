@@ -36,7 +36,17 @@ def models(args, stage="all"):
     if not recommended('asr_final'):
         shared = [model for model in shared if model.name != 'SenseVoice 最终转写']
     if recommended('asr'):
-        shared.append(Model('中英双语流式 ASR',
+        from studio.core.utils.asr.profile import (
+            XASR, XASR_FILES, XASR_REPOSITORY, ZIPFORMER, ZIPFORMER_FILES, local_backend)
+        if local_backend() == 'xasr':
+            from studio.core.utils.asr.artifacts import XASRModel
+            shared.append(XASRModel('中英双语流式 ASR', 'asr/' + XASR,
+                                    XASR_REPOSITORY, XASR_FILES))
+        elif local_backend() == 'sherpa':
+            shared.append(Model('中英双语流式 ASR', 'asr/' + ZIPFORMER,
+                                'csukuangfj/' + ZIPFORMER, ZIPFORMER_FILES, ZIPFORMER_FILES))
+        else:
+            shared.append(Model('中英双语流式 ASR',
                         'asr/funasr-paraformer-zh-streaming',
                         'funasr/paraformer-zh-streaming',
                         ('config.yaml', 'model.pt', 'tokens.json', 'am.mvn', 'seg_dict')))

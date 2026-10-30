@@ -52,6 +52,7 @@ markupsafe==3.0.3
 mdurl==0.1.2
 mem0ai==2.0.20
 miniaudio==1.71
+ml-dtypes==0.6.0
 mlx==0.32.2
 mlx-audio==0.5.1
 mlx-lm==0.31.3
@@ -65,6 +66,7 @@ networkx==3.6.1
 numba==0.67.0
 numpy==2.5.3
 omegaconf==2.3.1
+onnx==1.23.2
 onnxruntime==1.30.0
 openai==3.13.0
 oss2==2.19.1

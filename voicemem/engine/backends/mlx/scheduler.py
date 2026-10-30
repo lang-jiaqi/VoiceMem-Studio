@@ -92,6 +92,9 @@ class GpuLoop:
         if cache_limit < 0:
             raise ValueError("MLX cache limit must not be negative")
         self.cache_limit = cache_limit
+        self._effective_cache_limit = cache_limit
+        self._cache_budget_sampled = float('-inf')
+        self._cache_budget_error = None
         self._jobs = queue.Queue()
         self._thread = None
         self._lock = threading.Lock()
@@ -108,7 +111,34 @@ class GpuLoop:
         return {**self._state, **self._memory, "active": self.active_count,
                 "model": self._step_model,
                 "queued": self._jobs.qsize(), "cache_limit": self.cache_limit,
+                "effective_cache_limit": self._effective_cache_limit,
+                "cache_budget_error": self._cache_budget_error,
                 "native_step_ms": (time.perf_counter() - started) * 1000 if started else 0}
+
+    def _update_cache_budget(self, mx, now):
+        """Adjust free-cache capacity between native steps on this owner thread."""
+        if now - self._cache_budget_sampled < 1:
+            return
+        self._cache_budget_sampled = now
+        from ...scheduling.admission import resources
+        limit = min(self.cache_limit, 134217728) if resources.cache_pressure() else self.cache_limit
+        if limit == self._effective_cache_limit:
+            self._cache_budget_error = None
+            return
+        try:
+            # MLX reclaims excess free buffers on the next allocation. Active
+            # weights, compiled functions and provider-owned KV stay intact.
+            mx.set_cache_limit(limit)
+        except Exception as exc:
+            reason = type(exc).__name__
+            if reason != self._cache_budget_error:
+                import logging
+                logging.getLogger(__name__).warning('[mlx-cache] budget_unavailable=%s', reason)
+            self._cache_budget_error = reason
+        else:
+            self._cache_budget_error = None
+            self._effective_cache_limit = limit
+            print(f'[mlx-cache] free_cache_limit_mib={limit / 1048576:.0f}', flush=True)
 
     def _ensure(self):
         with self._lock:
@@ -283,6 +313,7 @@ class GpuLoop:
                      min(aged, key=lambda e: e.last_step) if aged else
                      min(ready, key=lambda e: e.runtime))
             virtual_time = max(virtual_time, min(e.runtime for e in ready))
+            self._update_cache_budget(mx, now)
             self._step_started = time.perf_counter()
             self._step_model = entry.job.label
             try:

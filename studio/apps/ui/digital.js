@@ -405,7 +405,15 @@ const voiceInput=VMStudio.create({
   onFinal:send
 });
 window.VMSettings?.bindHarness(voiceInput);
-document.addEventListener('display-settings-change',renderRail);
+document.addEventListener('display-settings-change',()=>{
+  renderRail();
+  if(state.busy||state.listening)return;
+  if(!current.messages.some(m=>m.role==='me')&&!$('say').value)$('said').textContent=tr('说点什么，她在听。');
+  if(!current.messages.some(m=>m.role==='her')){
+    clearTimeout(typeTimer);document.body.classList.remove('talking');
+    VMMarkdown.render($('voice'),tr('我在。今天想从哪里说起？'));
+  }
+});
 $('micBtn').onclick=()=>{ if(state.listening){voiceInput.toggle();return;}const selected=current;void VMConversationSpaces.use(selected.space)
   .then(()=>{if(selected===current)voiceInput.toggle();}).catch(error=>VMUI.notify(error.message)); };
 $('startTalk').onclick=()=>{$('say').focus();$('micBtn').click();};

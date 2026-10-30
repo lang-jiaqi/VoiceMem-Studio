@@ -66,6 +66,9 @@ def inspect(args, stage="all"):
         'funasr', 'modelscope', 'sherpa-onnx', 'soundfile', 'scipy',
         'huggingface-hub', 'onnxruntime', 'accelerate')}
     packages['python-dotenv'] = None
+    from studio.core.utils.asr.profile import local_backend
+    if selection('asr')['provider'] == 'recommended' and local_backend() == 'xasr':
+        packages.update({'onnx': '1.23.2', 'filelock': None})
     packages['transformers'] = '4.57.3' if args.backend == 'cuda' else '5.16.1'
     if args.backend == 'cuda':
         if platform.system() != 'Linux':

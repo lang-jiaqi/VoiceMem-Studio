@@ -116,7 +116,7 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         tts = BreezeMLXTTS.__new__(BreezeMLXTTS)
         tts.__dict__.update(_lock=asyncio.Lock(), model_name="test-model", instruction="默认情绪",
                             ref_audio="/test/reference.wav", ref_text="参考原文", cfg_scale=1,
-                            seed=42, max_tokens=750)
+                            seed=42, max_tokens=750, repetition_penalty=1.1)
         async def empty_stream(*args, **kwargs):
             for chunk in ():
                 yield chunk
@@ -129,6 +129,8 @@ class JournalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request["instruct"], "语速平稳")
         self.assertEqual(request["text"], "第一段")
         self.assertEqual(request["ref_text"], "参考原文")
+        self.assertEqual(request['repetition_penalty'], 1.1)
+        self.assertGreaterEqual(request['audio_limit_s'], 6)
 
     async def test_unscoped_synthesis_and_disabled_trace(self):
         trace.record_request("tts", "breeze_mlx", {"text": "嗯嗯"})

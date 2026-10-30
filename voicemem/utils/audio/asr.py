@@ -83,24 +83,32 @@ class StreamingASR:
                 "跑 scripts/download_models.sh")
         return str(cands[0])
 
-    def __init__(self, asr_dir: str, *, prefer_int8: bool = False) -> None:
+    def __init__(self, asr_dir: str, *, prefer_int8: bool = False,
+                 num_threads: int = 2, model_type: str = "") -> None:
         import sherpa_onnx          # 惰性：默认走 FunASR 时不拉 sherpa
         self.rec = sherpa_onnx.OnlineRecognizer.from_transducer(
             tokens=f"{asr_dir}/tokens.txt",
             encoder=self._pick(asr_dir, "encoder", prefer_int8),
             decoder=self._pick(asr_dir, "decoder", prefer_int8),
             joiner=self._pick(asr_dir, "joiner", prefer_int8),
-            num_threads=2, sample_rate=SAMPLE_RATE, feature_dim=80,
+            num_threads=num_threads, sample_rate=SAMPLE_RATE, feature_dim=80,
             decoding_method="greedy_search",
+            model_type=model_type,
         )
         self.reset()
 
     def feed(self, samples):
         self._flushed = False
         self.stream.accept_waveform(SAMPLE_RATE, samples)
-        while self.rec.is_ready(self.stream):
-            self.rec.decode_stream(self.stream)
-        return _normal_case(self.rec.get_result(self.stream))
+        if self.rec.is_ready(self.stream):
+            from voicemem.engine import Service, inference_call
+            with inference_call('streaming_asr', 'onnx', service=Service.AUDIO, device='cpu'):
+                while self.rec.is_ready(self.stream):
+                    self.rec.decode_stream(self.stream)
+        return self._format_text(self.rec.get_result(self.stream))
+
+    def _format_text(self, text: str) -> str:
+        return _normal_case(text)
 
     def flush(self) -> str:
         """Release trailing tokens once without closing a resumable decoder stream."""
@@ -108,7 +116,7 @@ class StreamingASR:
             result = self.feed(np.zeros(self.FINAL_PAD_SAMPLES, dtype=np.float32))
             self._flushed = True
             return result
-        return _normal_case(self.rec.get_result(self.stream))
+        return self._format_text(self.rec.get_result(self.stream))
 
     def reset(self) -> None:
         self._flushed = False

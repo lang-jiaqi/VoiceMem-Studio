@@ -11,6 +11,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 async function portraitScene(style, initialData, live = false) {
   let data = initialData, nextId = 0, fetchCount = 0;
   const timers = new Map(), frames = new Map(), windowEvents = new Map(), documentEvents = new Map();
+  const requested = [];
   const elements = new Map(), rounded = [], warnings = [];
   const context = new Proxy({
     measureText: value => ({width: value.length * 8}),
@@ -52,7 +53,7 @@ async function portraitScene(style, initialData, live = false) {
     cancelAnimationFrame:id=>frames.delete(id),
     setTimeout:(callback,ms)=>{const id=++nextId;timers.set(id,{callback,ms});return id;},
     clearTimeout:id=>timers.delete(id),
-    fetch:(...args)=>{fetchCount++;return fetcher(...args);},
+    fetch:(...args)=>{fetchCount++;requested.push(args[0]);return fetcher(...args);},
     innerWidth:800,innerHeight:600,devicePixelRatio:1,
     console:{warn:(...args)=>warnings.push(args)},
     CustomEvent:class {constructor(type,options){this.type=type;this.detail=options?.detail;}},
@@ -65,7 +66,8 @@ async function portraitScene(style, initialData, live = false) {
     frames.delete(id);callback(0);
   };
   return {
-    scene:environment.window.VMMemoryScene, timers, warnings, sockets, elements,
+    scene:environment.window.VMMemoryScene, timers, warnings, sockets, elements, requested,
+    setLanguage(value){environment.window.VMSettings={language:value,t:text=>text,graphLabel:text=>text};documentEvents.get('display-settings-change')();},
     setData:value=>{data=value;},setFetch:value=>{fetcher=value || defaultFetch;},
     get fetchCount(){return fetchCount;},
     setHidden:value=>{environment.document.hidden=value;documentEvents.get('visibilitychange')();},
@@ -105,6 +107,33 @@ test('both styles refresh prepared portraits regardless of page-open order', asy
     assert.equal(first.timers.size, 0);
     assert.equal(second.timers.size, 0);
   }
+});
+
+test('language switches refetch localized labels and reject an earlier language response', async () => {
+  for(const style of ['digital','technical']){
+    const f=await portraitScene(style,portrait('原来的画像',false));
+    let resolve;
+    f.setFetch(()=>new Promise(done=>{resolve=done;}));
+    const old=f.scene.refresh();
+    f.setLanguage('en');
+    resolve({ok:true,json:async()=>portrait('迟到的中文画像',false)});
+    await old;
+    assert.equal(f.portraitTitle(),'原来的画像');
+    f.setFetch(null);f.setData(portrait('English portrait',false));
+    await f.tick(0);
+    assert.equal(f.requested.at(-1),'/api/memories?lang=en');
+    assert.equal(f.portraitTitle(),'English portrait');
+    assert.equal(f.elements.get('memory-node-card__kind').textContent,'Right brain · Portraits');
+  }
+});
+
+test('an open full-list dialog accepts its new-language response without waiting for the graph', async () => {
+  const f=await portraitScene('technical',portrait('旧画像',false));
+  f.elements.get('memory-all-button').events.click();await flush();
+  f.setData(portrait('English portrait',false));f.setLanguage('en');await flush();
+  assert.equal(f.requested.at(-1),'/api/memories?all=true&lang=en');
+  const rows=f.elements.get('memory-all-body').children;
+  assert.ok(rows.some(row=>row.children?.some(child=>child.textContent==='English portrait')));
 });
 
 test('both styles keep observing late writes, edits and deletions after portraits are ready', async () => {
@@ -159,7 +188,7 @@ test('full-list dialog loads uncapped records and closes on a Space switch', asy
   ui.setFetch(async url=>{urls.push(url);return {ok:true,json:async()=>full};});
   ui.elements.get('memory-all-button').events.click();
   await flush();
-  assert.deepEqual(urls, ['/api/memories?all=true']);
+  assert.deepEqual(urls, ['/api/memories?all=true&lang=zh']);
   assert.equal(ui.elements.get('memory-all-body').children.filter(row=>row.children.length).length, 60);
   assert.equal(ui.elements.get('memory-all-dialog').open, true);
   ui.setFetch(null);

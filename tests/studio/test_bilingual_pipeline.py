@@ -215,10 +215,10 @@ class BilingualAdapterTests(unittest.TestCase):
             selected_models.append(selected[0])
         self.assertEqual(selected_models[0], selected_models[1])
         model = selected_models[0]
-        self.assertEqual(model.directory, 'asr/funasr-paraformer-zh-streaming')
-        self.assertEqual(model.repository, 'funasr/paraformer-zh-streaming')
-        self.assertEqual(model.required,
-                         ('config.yaml', 'model.pt', 'tokens.json', 'am.mvn', 'seg_dict'))
+        from studio.core.utils.asr.profile import XASR, XASR_FILES, XASR_REPOSITORY
+        self.assertEqual(model.directory, 'asr/' + XASR)
+        self.assertEqual(model.repository, XASR_REPOSITORY)
+        self.assertEqual(model.required, XASR_FILES)
 
     def test_default_streaming_uses_prepared_funasr_weights_on_both_backends(self):
         from studio.core.utils.asr import initialize
@@ -226,7 +226,8 @@ class BilingualAdapterTests(unittest.TestCase):
         self.addCleanup(initialize._streaming_model.cache_clear)
         for backend, device in (('mlx', 'cpu'), ('cuda', 'cuda:0')):
             with self.subTest(backend=backend), \
-                    patch.dict('os.environ', {'STUDIO_BACKEND': backend, 'STUDIO_DEVICE': 'cuda:0'}), \
+                    patch.dict('os.environ', {'STUDIO_BACKEND': backend, 'STUDIO_DEVICE': 'cuda:0',
+                                              'VOICEMEM_ASR': 'funasr'}), \
                     patch('voicemem.utils.audio.asr.pick_device', return_value='cpu'), \
                     patch.object(initialize, 'FunASRStreamingASR') as funasr, \
                     patch.object(initialize, 'StreamingASR') as sherpa:
@@ -234,6 +235,36 @@ class BilingualAdapterTests(unittest.TestCase):
                 self.assertIs(initialize.streaming(), funasr.return_value.new_stream.return_value)
                 funasr.assert_called_once_with(model=model_path, device=device)
                 sherpa.assert_not_called()
+
+    def test_default_xasr_shares_weights_and_keeps_bilingual_streams_private(self):
+        from studio.core.utils.asr import initialize
+        from studio.core.utils.asr.profile import XASR
+        self.addCleanup(initialize._streaming_model.cache_clear)
+        for backend in ('mlx', 'cuda'):
+            with self.subTest(backend=backend), \
+                    patch.dict('os.environ', {'STUDIO_BACKEND': backend, 'STUDIO_DEVICE': 'cuda:0'}, clear=True), \
+                    patch.object(initialize, 'XASRStreamingASR') as create, \
+                    patch.object(initialize, 'FunASRStreamingASR') as funasr:
+                initialize._streaming_model.cache_clear()
+                create.return_value.new_stream.side_effect = [object(), object()]
+                chinese = initialize.streaming('zh')
+                english = initialize.streaming('en')
+                create.assert_called_once_with(str(initialize.MODELS / 'asr' / XASR))
+                funasr.assert_not_called()
+                self.assertIsNot(chinese, english)
+
+    def test_local_asr_override_matches_acquisition_and_rejects_unknown_values(self):
+        from studio.core.utils.models.initialize import models
+        from studio.core.utils.asr.profile import local_backend
+        args = SimpleNamespace(eot=False, mode='realtime', backend='mlx', llm='deepseek')
+        with patch.dict('os.environ', {'VOICEMEM_ASR': 'funasr'}, clear=True):
+            selected = [model for model in models(args) if '流式 ASR' in model.name]
+            self.assertEqual(selected[0].directory, 'asr/funasr-paraformer-zh-streaming')
+        with patch.dict('os.environ', {'VOICEMEM_ASR': 'unknown'}, clear=True):
+            with self.assertRaises(ValueError):
+                local_backend()
+            with self.assertRaises(ValueError):
+                models(args)
 
     def test_shared_recognizer_keeps_decoding_streams_private(self):
         from voicemem.utils.audio.asr import StreamingASR
@@ -268,9 +299,9 @@ class BilingualAdapterTests(unittest.TestCase):
         self.assertEqual(system_prompt('zh', tagged=True), system_prompt('en', tagged=True))
         self.assertIn('自然跟随用户表达和对话上下文', system_prompt('zh'))
 
-    def test_memory_display_rewriting_preserves_the_claim_language(self):
+    def test_memory_display_rewriting_has_an_explicit_display_language(self):
         from studio.harness.speaking_style.policy import RB_HUMANIZE_PROMPT, RB_HUMANIZE_EXAMPLES
-        self.assertIn('保留原判断的语言和自然混用', RB_HUMANIZE_PROMPT)
+        self.assertIn('{language_rule}', RB_HUMANIZE_PROMPT)
         self.assertIn('A little recognition makes them light up.', RB_HUMANIZE_EXAMPLES)
 
     def test_background_memory_uses_captured_instance_and_input_language(self):

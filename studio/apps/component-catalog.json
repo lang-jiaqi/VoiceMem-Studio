@@ -3,7 +3,7 @@
     "title": "流式识别",
     "contract": "16 kHz 音频 · 累计转写 · 独立会话",
     "providers": {
-      "recommended": {"label": "FunASR · 推荐"},
+      "recommended": {"label": "X-ASR · 推荐"},
       "deepgram": {"label": "Deepgram", "model": "nova-3", "baseUrl": "https://api.deepgram.com/v1", "language": "zh"},
       "adapter": {"label": "自定义适配器"}
     }

@@ -1,8 +1,9 @@
 """Initialize the existing recognizers from verified local weights."""
-from .component import FunASRStreamingASR, StreamingASR, OfflineASR
+from .component import FunASRStreamingASR, StreamingASR, OfflineASR, XASRStreamingASR
 from studio.paths import MODELS
 import os
 from functools import lru_cache
+from .profile import XASR, ZIPFORMER, local_backend
 
 
 @lru_cache(maxsize=4)
@@ -12,10 +13,14 @@ def _streaming_model(kind, device):
             model=str(MODELS / "asr/funasr-paraformer-zh-streaming"), device=device)
         print(f"[asr] 流式识别设备：{device}", flush=True)
         return model
-    return StreamingASR(str(MODELS / "asr/sherpa-onnx-streaming-zipformer-en-2023-06-26"))
+    if kind == 'xasr':
+        print('[asr] X-ASR zh-en · 480ms · CPU · int8 · 1 thread', flush=True)
+        return XASRStreamingASR(str(MODELS / 'asr' / XASR))
+    print('[asr] Zipformer bilingual · CPU · int8', flush=True)
+    return StreamingASR(str(MODELS / 'asr' / ZIPFORMER), prefer_int8=True)
 
 def streaming(language="auto"):
-    """Default to bilingual FunASR; retain the explicit English adapter."""
+    """Share bilingual weights; UI language never restricts recognized speech."""
     from studio.core.utils.component_config.component import selection
     value = selection('asr')
     if value['provider'] == 'deepgram':
@@ -26,7 +31,7 @@ def streaming(language="auto"):
         return _custom_streaming().new_stream()
     from voicemem.utils.audio.asr import pick_device
     from voicemem.engine import device_lock
-    kind = "funasr" if language in {"auto", "zh"} else "sherpa"
+    kind = local_backend()
     configured = (os.environ.get('STUDIO_ASR_DEVICE')
                   or os.environ.get('VOICEMEM_ASR_DEVICE')
                   or (os.environ.get('STUDIO_DEVICE')

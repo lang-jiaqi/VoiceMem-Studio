@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import time
 from contextlib import aclosing
@@ -12,6 +13,7 @@ import numpy as np
 
 from voicemem.utils.audio.stream_io import resample
 from studio.prompt_config import tts_prompts
+from .safety import SpeechGuard, speech_budget_seconds
 
 SAMPLE_RATE = 24000
 
@@ -21,7 +23,7 @@ class BreezeMLXTTS:
 
     def __init__(self, model=None, ref_audio=None, ref_text=None, instruction=None,
                  cfg_scale=1.0, seed=42, chunk_frames=2, max_tokens=750,
-                 depth_mode="cached", first_frames=None):
+                 depth_mode="cached", first_frames=None, repetition_penalty=1.1):
         self.model_name = model or self.DEFAULT_MODEL
         self.ref_audio = ref_audio
         self.ref_text = ref_text
@@ -37,6 +39,9 @@ class BreezeMLXTTS:
         self.instruction = (instruction or tts_prompts()['breeze_default_instruction'])
         self.cfg_scale = float(cfg_scale)
         self.seed = int(seed)
+        self.repetition_penalty = float(repetition_penalty)
+        if not math.isfinite(self.repetition_penalty) or self.repetition_penalty <= 0:
+            raise ValueError('repetition_penalty must be finite and positive')
         self.chunk_frames = int(chunk_frames)
         # Match the first codec batch to the browser's admission buffer. A
         # one-frame server chunk cannot start 160 ms playback by itself, so it
@@ -57,7 +62,7 @@ class BreezeMLXTTS:
         self.voice = "breeze:" + (Path(self.ref_audio).stem if self.ref_audio else "female-design")
         import hashlib
         digest = hashlib.sha256()
-        digest.update(f"{self.model_name}|{self.ref_text}|{self.instruction}|{self.cfg_scale}|{self.seed}".encode())
+        digest.update(f"{self.model_name}|{self.ref_text}|{self.instruction}|{self.cfg_scale}|{self.seed}|{self.repetition_penalty}".encode())
         if self.ref_audio:
             digest.update(Path(self.ref_audio).read_bytes())
         self.cache_voice_id = self.voice + ":" + digest.hexdigest()[:16]
@@ -122,8 +127,10 @@ class BreezeMLXTTS:
             text=text, instruct=instruction or self.instruction,
             ref_audio=self.ref_audio, ref_text=self.ref_text,
             cfg_scale=self.cfg_scale, seed=self.seed, max_tokens=self.max_tokens,
+            repetition_penalty=self.repetition_penalty,
             stream=True, streaming_interval=self.interval,
         )
+        guard = SpeechGuard(text, m.sample_rate)
         def to_bytes(pcm):
             if m.sample_rate != SAMPLE_RATE:
                 pcm = resample(pcm, src=m.sample_rate, dst=SAMPLE_RATE)
@@ -139,6 +146,7 @@ class BreezeMLXTTS:
                 pcm = np.array(result.audio.astype(mx.float32), copy=True)
                 if pcm.ndim != 1 or not pcm.size or not np.isfinite(pcm).all():
                     raise RuntimeError("Breeze returned invalid PCM")
+                guard.accept(pcm.size)
                 if first:
                     first = False
                     yield to_bytes(pcm)
@@ -214,6 +222,8 @@ class BreezeMLXTTS:
                 "ref_audio": self.ref_audio, "ref_text": self.ref_text,
                 "cfg_scale": self.cfg_scale, "seed": self.seed,
                 "max_tokens": self.max_tokens,
+                "repetition_penalty": self.repetition_penalty,
+                "audio_limit_s": speech_budget_seconds(text),
             })
             submitted = time.perf_counter()
             request_id = uuid4().hex[:8]

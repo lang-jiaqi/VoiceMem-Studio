@@ -6,7 +6,7 @@ if(!canvas)return;
 const reduced=matchMedia('(prefers-reduced-motion: reduce)');
 const buttons=[...document.querySelectorAll('[data-orb-state]')];
 const label=document.getElementById('orbPhase');
-const names={idle:'待机',listening:'倾听',speaking:'说话','short-thinking':'短思考','long-thinking':'长思考'};
+const names={idle:['待机','Idle'],listening:['倾听','Listening'],speaking:['说话','Speaking'],'short-thinking':['短思考','Thinking'],'long-thinking':['长思考','Thinking deeply']};
 const aliases={responding:'speaking',thinking:'short-thinking',shortThinking:'short-thinking',longThinking:'long-thinking'};
 // Compact layout: size/time/speed, radius/zoom/warp/shade, exposure/glow/padding.
 const idle=[1,1,0,.45,.78,.282,1.456,.1,.7616,0,0,0];
@@ -17,6 +17,7 @@ let state='idle',from=new Float32Array(idle),target=new Float32Array(idle),value
 let transitionAt=0,duration=0,phase=0,previous=0,scale=1,audio=0,audioAt=-Infinity,listeningAt=0;
 let device,context,pipeline,buffer,group,format,raf=0,visible=true,failed=false;
 let generation=0,initializing=false,pageHidden=false,retryTimer=0,retries=0,retryable=true;
+let nextFrameAt=0,inFlight=false,dirty=true;
 const maxRetries=3;
 let demo=false,demoRAF=0,demoStarted=0;
 let speakingPhase=0,speakingAmplitude=0,verticalOffset=0,verticalVelocity=0,settingsOpen=false;
@@ -43,12 +44,13 @@ function sample(now){
 function setState(next){
  next=aliases[next]||next;
  if(!(next in seeds))throw new TypeError('Unknown orb state: '+next);
- if(next!==state){const now=performance.now();sample(now);from=new Float32Array(values);target=new Float32Array(seeds[next]);transitionAt=now;duration=next.includes('thinking')?220:650;state=next;if(next==='listening'){listeningAt=now;audioAt=-Infinity;}}
+ if(next!==state){const now=performance.now();sample(now);from=new Float32Array(values);target=new Float32Array(seeds[next]);transitionAt=now;duration=next.includes('thinking')?220:650;state=next;nextFrameAt=0;if(next==='listening'){listeningAt=now;audioAt=-Infinity;}}
  canvas.dataset.state=state;
  buttons.forEach(b=>b.setAttribute('aria-pressed',String(demo&&b.dataset.orbState===state)));
- label.textContent=(demo?'演示 · ':'')+names[state];
+ updateLabel();
  sync();
 }
+function updateLabel(){const en=window.VMSettings?.language==='en';label.textContent=(demo?(en?'Preview · ':'演示 · '):'')+names[state][en?1:0];}
 function setAudioLevel(level){if(!Number.isFinite(level))throw new TypeError('Audio level must be finite');audio=Math.min(1,Math.max(0,level));audioAt=performance.now();}
 function stopDemo(){demo=false;cancelAnimationFrame(demoRAF);demoRAF=0;}
 function demoState(next){
@@ -124,7 +126,7 @@ function active(){return !pageHidden&&!document.hidden&&visible&&!settingsOpen;}
 function cancelRetry(){clearTimeout(retryTimer);retryTimer=0;}
 function release(){
  // Invalidate callbacks before destroying the device: destroy also resolves device.lost.
- generation++;initializing=false;cancelAnimationFrame(raf);raf=0;previous=0;
+ generation++;initializing=false;cancelAnimationFrame(raf);raf=0;previous=nextFrameAt=0;inFlight=false;dirty=true;
  context?.unconfigure();buffer?.destroy();device?.destroy();
  device=context=pipeline=buffer=group=undefined;
 }
@@ -139,10 +141,16 @@ function fallback(error){
 }
 function draw(now){
  raf=0;if(!device||failed||initializing||!active())return;
+ if(inFlight)return;
+ if(now+.5<nextFrameAt){raf=requestAnimationFrame(draw);return;}
  try{
- const dpr=Math.min(devicePixelRatio||1,2);const limit=device.limits.maxTextureDimension2D;
+ // Bound pixel work independently of Retina density and the display refresh rate.
+ const limit=Math.min(device.limits.maxTextureDimension2D,384);
+ const dpr=Math.min(devicePixelRatio||1,1.25,limit/Math.max(1,canvas.clientWidth,canvas.clientHeight));
  const w=Math.min(limit,Math.max(1,Math.round(canvas.clientWidth*dpr))),h=Math.min(limit,Math.max(1,Math.round(canvas.clientHeight*dpr)));
  if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
+ const interval=1000/(state==='idle'&&now-transitionAt>1500?12:30);
+ nextFrameAt=nextFrameAt?now+interval-Math.max(0,now-nextFrameAt)%interval:now+interval;dirty=false;
  const dt=previous?Math.min(.1,(now-previous)/1000):0;previous=now;sample(now);
  let desired=1;
  if(state==='listening'&&!reduced.matches){const elapsed=(now-listeningAt)/1000;const level=audioAt>=listeningAt?(now-audioAt<180?audio:0):.28+.22*Math.sin(elapsed*7.2)*Math.sin(elapsed*4.1);desired+=.12*Math.pow(Math.max(0,(level-.025)/.975),.65);}
@@ -152,22 +160,30 @@ function draw(now){
  device.queue.writeBuffer(buffer,0,frameValues);
  const encoder=device.createCommandEncoder();const pass=encoder.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});
  pass.setPipeline(pipeline);pass.setBindGroup(0,group);pass.draw(3);pass.end();device.queue.submit([encoder.finish()]);
- if(!reduced.matches||now-transitionAt<duration)raf=requestAnimationFrame(draw);
+ if(device.queue.onSubmittedWorkDone){
+  const current=generation;inFlight=true;
+  device.queue.onSubmittedWorkDone().then(()=>{
+   if(current!==generation)return;
+   inFlight=false;
+   if(dirty||!reduced.matches||performance.now()-transitionAt<duration)sync();
+  },error=>{if(current===generation)fallback(error);});
+ }else if(!reduced.matches||now-transitionAt<duration)raf=requestAnimationFrame(draw);
  }catch(error){fallback(error);}
 }
 function sync(){
- if(!active()){cancelAnimationFrame(raf);raf=0;previous=0;cancelRetry();return;}
+ dirty=true;
+ if(!active()){cancelAnimationFrame(raf);raf=0;previous=nextFrameAt=0;cancelRetry();return;}
  if(initializing)return;
  if(failed){scheduleRecovery();return;}
  if(!device){void init();return;}
- if(!raf)raf=requestAnimationFrame(draw);
+ if(!raf&&!inFlight)raf=requestAnimationFrame(draw);
 }
 async function init(){
  if(initializing||!active())return;
  const current=++generation;initializing=true;
  try{
  if(!navigator.gpu){retryable=false;throw new Error('WebGPU unavailable');}
- const adapter=await navigator.gpu.requestAdapter();if(!adapter)throw new Error('WebGPU adapter unavailable');
+ const adapter=await navigator.gpu.requestAdapter({powerPreference:'low-power'});if(!adapter)throw new Error('WebGPU adapter unavailable');
  if(current!==generation)return;
  const acquired=await adapter.requestDevice();
  if(current!==generation){acquired.destroy();return;}
@@ -192,6 +208,7 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)stopDemo();
 window.addEventListener('pagehide',()=>{pageHidden=true;stopDemo();cancelRetry();release();});
 document.addEventListener('settings-open',()=>{settingsOpen=true;stopDemo();sync();});
 document.addEventListener('settings-close',()=>{settingsOpen=false;sync();});
+document.addEventListener('display-settings-change',updateLabel);
 window.addEventListener('pageshow',()=>{pageHidden=false;retries=0;sync();});
 reduced.addEventListener('change',()=>{stopDemo();sync();});
 setState('idle');

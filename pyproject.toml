@@ -63,6 +63,9 @@ studio-cuda = [
     "scipy==1.17.1",
     "huggingface-hub>=0.34,<1",
     "onnxruntime",
+    "onnx==1.23.2",
+    "ml-dtypes>=0.5.4,<0.6",
+    "filelock>=3",
 ]
 
 studio = [
@@ -71,6 +74,8 @@ studio = [
     "mlx-audio==0.5.1",
     "mlx-lm",
     "onnxruntime",
+    "onnx==1.23.2",
+    "filelock>=3",
     "huggingface-hub>=1.5,<2",
 ]
 

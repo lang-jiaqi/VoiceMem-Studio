@@ -108,9 +108,11 @@ class Visualization:
         try:
             from openai import OpenAI
             from voicemem.llm_config import resolve_model
-            who = name or "他"
+            from studio.harness.speaking_style.policy import RB_HUMANIZE_LANGUAGE_RULES
+            who = name or ('the user' if lang == 'en' else '他')
             sysmsg = self._RB_HUMANIZE_PROMPT.format(
                 who=who,
+                language_rule=RB_HUMANIZE_LANGUAGE_RULES[lang],
 
                 name_rule=(f"· **每条都直接叫他「{name}」**，别用「他」代替——"
                            "页面上每条是独立一行，点名是在说「这是关于谁的」。\n"
@@ -255,14 +257,16 @@ class Visualization:
             if mid:
                 self._LAST_HIT_IDS.add(str(mid))
 
-    def memory_snapshot(self, limit: int = 48, *, include_all: bool = False) -> dict:
-        """Read a captured Space; include_all bypasses graph caps and label preparation."""
+    def memory_snapshot(self, limit: int = 48, *, include_all: bool = False, language=None) -> dict:
+        """Read a captured Space with request-local labels, preserving stored facts."""
         from voicemem.leftbrain.cognitive_graph.types import SlotV2
 
         from voicemem.utils.common.memory_changes import for_space
         space = self.ACTIVE_SPACE
         vm = getattr(self, "_SPACES", {}).get(space) or self.vm
-        language = self.space_language(space) if hasattr(self, "space_language") else self.SPACE_LANG
+        language = language or (self.space_language(space) if hasattr(self, "space_language") else self.SPACE_LANG)
+        if language not in {'en', 'zh'}:
+            raise ValueError('Display language must be en or zh')
         directory, _ = self.space_dir(space)
         feed = for_space(directory)
         revision, recent = feed.state()
@@ -336,5 +340,6 @@ class Visualization:
             total_right = vm._o._right._traits().counts(uid)[0]
         except Exception as e:
             print(f"[web] 右脑快照读取失败：{e}", flush=True)
-        return {"left": left, "right": right, "space": space, "epoch": feed.epoch, "revision": revision,
+        return {"left": left, "right": right, "space": space, "language": language,
+                "epoch": feed.epoch, "revision": revision,
                 "total": {"left": total_left, "right": total_right}}

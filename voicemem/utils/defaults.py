@@ -50,7 +50,7 @@ def default_utils(base_url, memory_root):
 
         Chinese Spaces default to FunASR; English Spaces default to Zipformer.
         ``VOICEMEM_ASR=bilingual`` selects the bilingual Zipformer adapter.
-        Studio injects its own shared bilingual FunASR provider independently.
+        Studio injects its own shared bilingual provider independently.
         This selection does not restrict the language of stored memory text.
         """
         from voicemem.utils.common.paths import model_path

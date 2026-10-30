@@ -49,7 +49,8 @@ class DecoderOwnershipTests(unittest.TestCase):
         self.addCleanup(initialize._streaming_model.cache_clear)
         with patch.object(initialize, 'FunASRStreamingASR', side_effect=lambda **_: prototype()) as load, \
                 patch('voicemem.utils.audio.asr.pick_device', return_value='cpu'), \
-                patch.dict('os.environ', {'STUDIO_BACKEND': 'mlx', 'VOICEMEM_ASR_DEVICE': 'cpu'}):
+                patch.dict('os.environ', {'STUDIO_BACKEND': 'mlx', 'VOICEMEM_ASR_DEVICE': 'cpu',
+                                          'VOICEMEM_ASR': 'funasr'}):
             with ThreadPoolExecutor(max_workers=4) as workers:
                 models = list(workers.map(lambda _: initialize.streaming(), range(4)))
         self.assertEqual(load.call_count, 1)

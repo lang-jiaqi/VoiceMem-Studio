@@ -191,7 +191,7 @@ def hits_payload(result, has_audio=None, cluster_of=None):
 
 def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None,
               set_lang=None, title=None, components=None, pet_port=8787,
-              memory_changes=None, full_snapshot=None):
+              memory_changes=None, full_snapshot=None, localized_snapshot=None):
     """Build the browser API and WebSocket routes using injected session callbacks."""
     app = FastAPI()
     desktop_instance = os.environ.get('VOICEMEM_DESKTOP_INSTANCE', '')
@@ -310,6 +310,12 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
 
     @app.get("/api/memories")
     async def api_memories(request: Request) -> dict:
+        language = request.query_params.get('lang')
+        if language is not None and language not in {'en', 'zh'}:
+            raise HTTPException(status_code=400, detail='Display language must be en or zh')
+        if localized_snapshot and language:
+            return await asyncio.to_thread(localized_snapshot, language,
+                                           include_all=request.query_params.get('all') == 'true')
         read = full_snapshot if request.query_params.get("all") == "true" and full_snapshot else snapshot
         return await asyncio.to_thread(read) if read else {"left": [], "right": []}
 

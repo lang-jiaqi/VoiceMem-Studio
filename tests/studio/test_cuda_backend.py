@@ -88,7 +88,7 @@ class BackendConfigTests(unittest.TestCase):
         for requested, expected in (('auto', 'mps'), ('cpu', 'cpu'), ('mps', 'mps')):
             with self.subTest(requested=requested), patch.dict(os.environ, {
                     'STUDIO_BACKEND': 'mlx', 'STUDIO_DEVICE': 'cpu',
-                    'STUDIO_ASR_DEVICE': requested}, clear=True), \
+                    'STUDIO_ASR_DEVICE': requested, 'VOICEMEM_ASR': 'funasr'}, clear=True), \
                     patch('voicemem.utils.audio.asr.pick_device', return_value='mps'), \
                     patch.object(initialize, '_streaming_model') as create:
                 initialize.streaming()

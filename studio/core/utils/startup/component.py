@@ -42,14 +42,40 @@ class Startup:
         provider = selection('speech')['provider']
         tts = self.vm.utils.get('tts')
         language = self.space_language(self.ACTIVE_SPACE)
-        text = '你好，我在这里。' if language == 'zh' else 'Hello, I am here.'
         try:
-            produced_audio = False
-            async with aclosing(tts.stream(text)) as chunks:
-                async for chunk in chunks:
-                    produced_audio |= bool(getattr(chunk, 'pcm', chunk))
-            if not produced_audio:
-                raise RuntimeError('TTS 未输出音频')
+            from studio.core.utils.turn_taking.filler_voice import WorkFillerVoice, instruction
+            from studio.core.utils.self_harness.component import SelfHarnessState
+            snapshot = SelfHarnessState().snapshot()
+            probes = [(language, '你好，我在这里。' if language == 'zh' else 'Hello, I am here.')]
+            if provider == 'recommended':
+                # Exercise both supported languages with the configured speech
+                # instructions, leaving the active language warm last.
+                texts = {'zh': '你好，我在这里，准备好听你说话了。',
+                         'en': 'Hello, I am here and ready to listen.'}
+                order = ('en', 'zh') if language == 'zh' else ('zh', 'en')
+                probes = [(lang, texts[lang]) for lang in order]
+            for lang, text in probes:
+                started = time.monotonic()
+                first = None
+                samples = 0
+                source = (tts.stream(text, instruction(self, lang, snapshot))
+                          if provider == 'recommended' else tts.stream(text))
+                async with aclosing(source) as chunks:
+                    async for chunk in chunks:
+                        pcm = getattr(chunk, 'pcm', chunk)
+                        if pcm:
+                            if provider == 'recommended' and (not isinstance(pcm, bytes) or len(pcm) % 2):
+                                raise ValueError('TTS 预热需要完整的 PCM16 音频')
+                            if first is None:
+                                first = time.monotonic() - started
+                            samples += len(pcm) // 2
+                if first is None:
+                    raise RuntimeError(f'TTS 未输出音频 ({lang})')
+                if provider == 'recommended':
+                    elapsed = time.monotonic() - started
+                    audio_s = samples / 24000
+                    print(f'[startup-tts] lang={lang} first_pcm_ms={first*1000:.0f}'
+                          f' audio_ms={audio_s*1000:.0f} rtf={elapsed/audio_s:.3f}', flush=True)
             if self.ARGS.backchannel:
                 from studio.core.utils.turn_taking.initialize import BackchannelVoice
                 voice = BackchannelVoice(tts, lang=language)
@@ -62,9 +88,6 @@ class Startup:
                         raise RuntimeError('自定义音色未生成可用附和音频')
                 self._BC_VOICE['obj'] = voice
             if self.MODE == 'llm_tts':
-                from studio.core.utils.turn_taking.filler_voice import WorkFillerVoice, instruction
-                from studio.core.utils.self_harness.component import SelfHarnessState
-                snapshot = SelfHarnessState().snapshot()
                 banks = []
                 for lang in ('zh', 'en'):
                     bank = WorkFillerVoice(tts, lang, instruction(self, lang, snapshot))

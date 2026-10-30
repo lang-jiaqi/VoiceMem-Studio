@@ -17,9 +17,15 @@
   cardHead.append(cardDot, cardKind);
   const cardTitle = document.createElement('div'); cardTitle.className = 'memory-node-card__title';
   const cardBody = document.createElement('div'); cardBody.className = 'memory-node-card__body';
+  cardTitle.setAttribute('data-no-i18n','');cardBody.setAttribute('data-no-i18n','');
   const cardFoot = document.createElement('div'); cardFoot.className = 'memory-node-card__foot';
   card.append(cardHead, cardTitle, cardBody, cardFoot); document.body.append(card);
   const tr = text => window.VMSettings?.t(text) || text;
+  const displayLanguage = () => window.VMSettings?.language === 'en' ? 'en' : 'zh';
+  const ui = (zh, en) => displayLanguage() === 'en' ? en : zh;
+  const emotions = {'中性':'Neutral','平静':'Calm','开心':'Happy','悲伤':'Sad','委屈':'Upset',
+    '焦虑':'Anxious','疲惫':'Tired','恐惧':'Afraid','愤怒':'Angry','厌恶':'Disgusted','惊讶':'Surprised'};
+  const emotionLabel = value => displayLanguage() === 'en' ? emotions[value] || value : value;
   const allButton = document.createElement('button');
   allButton.className = 'memory-all-button'; allButton.type = 'button';
   allButton.textContent = tr('全部记忆'); stage.append(allButton);
@@ -34,12 +40,12 @@
   allClose.addEventListener('click', () => allDialog.close());
   allButton.addEventListener('click', () => { allBody.textContent = tr('读取中…'); allDialog.showModal(); void loadAll(); });
   async function loadAll() {
-    const generation = spaceGeneration, request = ++allRequest;
+    const generation = spaceGeneration, request = ++allRequest, language = displayLanguage();
     try {
-      const response = await fetch('/api/memories?all=true', {cache:'no-store'});
+      const response = await fetch(`/api/memories?all=true&lang=${language}`, {cache:'no-store'});
       if (!response.ok) throw new Error(String(response.status));
       const data = await response.json();
-      if (!allDialog.open || generation !== spaceGeneration || request !== allRequest ||
+      if (!allDialog.open || language !== displayLanguage() || generation !== spaceGeneration || request !== allRequest ||
           (activeSpace && data.space && data.space !== activeSpace)) return;
       if (snapshot && data.epoch === snapshot.epoch && data.revision < snapshot.revision) return;
       allBody.replaceChildren();
@@ -52,7 +58,7 @@
           const text = document.createElement('p'); text.textContent = item.text || item.raw || '';
           row.append(text);
           const details = [item.desc && item.desc !== item.text ? item.desc : '',
-            ...(item.notes || []).map(note => [note.emotion, note.text, note.cause].filter(Boolean).join(' · ')),
+            ...(item.notes || []).map(note => [emotionLabel(note.emotion), note.text, note.cause].filter(Boolean).join(' · ')),
             item.date || ''].filter(Boolean);
           if (details.length) {
             const detail = document.createElement('small'); detail.textContent = details.join('\n'); row.append(detail);
@@ -92,6 +98,7 @@
   const glowSprites = {};
   let glowScale = -1, previousTime = null;
   let signature = '', snapshot = null, spaceGeneration = 0, activeSpace = '';
+  let lastDisplayLanguage = displayLanguage();
   let labelTimer = 0, refreshRequest = 0, pageActive = true;
   let observer = null, reconnectTimer = 0, changeTimer = 0, wantedRevision = -1, activeEpoch = '';
   const signatureOf = data => JSON.stringify({
@@ -215,11 +222,11 @@
   }
 
   async function refresh(generation = spaceGeneration) {
-    const request = ++refreshRequest;
-    const response = await fetch('/api/memories', {cache: 'no-store'});
+    const request = ++refreshRequest, language = displayLanguage();
+    const response = await fetch(`/api/memories?lang=${language}`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`记忆快照读取失败 (${response.status})`);
     const data = await response.json();
-    if (generation !== spaceGeneration || request !== refreshRequest) return false;
+    if (language !== displayLanguage() || generation !== spaceGeneration || request !== refreshRequest) return false;
     if (activeSpace && data.space && data.space !== activeSpace) return false;
     if (activeEpoch && data.epoch && data.epoch !== activeEpoch) { scheduleRefresh(100); return false; }
     if (snapshot && data.epoch === snapshot.epoch && data.revision < snapshot.revision) return false;
@@ -308,24 +315,24 @@
     if (cardNode !== node) {
       cardNode = node;
       cardDot.style.background = colors[node.k];
-      cardKind.textContent = node.k === 'label' ? '记忆域' : node.k === 'user' ? '记忆中心' :
-        node.side === 'L' ? '左脑 · 事实' : '右脑 · 画像';
-      cardTitle.textContent = node.memory ? node.w : node.k === 'label' ? domainLabel(node.domain) : '你 · 所有者';
+      cardKind.textContent = node.k === 'label' ? ui('记忆域','Memory domain') : node.k === 'user' ? ui('记忆中心','Memory center') :
+        node.side === 'L' ? ui('左脑 · 事实','Left brain · Facts') : ui('右脑 · 画像','Right brain · Portraits');
+      cardTitle.textContent = node.memory ? node.w : node.k === 'label' ? domainLabel(node.domain) : ui('你 · 所有者','You · Owner');
       if (node.memory) {
         const item = node.memory;
         const lines = [];
         if (item.desc && item.desc !== item.text) lines.push(item.desc);
         const notes = (item.notes || []).filter(note => note.text || note.cause);
-        notes.slice(0, 2).forEach(note => lines.push(`${note.emotion ? `【${note.emotion}】` : ''}${note.text || note.cause}`));
-        if (notes.length > 2) lines.push(`还有 ${notes.length - 2} 条记录`);
+        notes.slice(0, 2).forEach(note => lines.push(`${note.emotion ? `【${emotionLabel(note.emotion)}】` : ''}${note.text || note.cause}`));
+        if (notes.length > 2) lines.push(ui(`还有 ${notes.length - 2} 条记录`,`${notes.length - 2} more records`));
         cardBody.textContent = lines.join('\n');
         cardBody.hidden = !lines.length;
         cardFoot.textContent = domainLabel(node.domain);
       } else {
         const count = graph.nodes.filter(item => item.memory && item.domain === node.domain).length;
-        cardBody.textContent = node.k === 'label' ? `这个记忆域中有 ${count} 条记忆。` : '所有记忆从这里连接。';
+        cardBody.textContent = node.k === 'label' ? ui(`这个记忆域中有 ${count} 条记忆。`,`${count} memories in this domain.`) : ui('所有记忆从这里连接。','All memories connect here.');
         cardBody.hidden = false;
-        cardFoot.textContent = node.k === 'label' ? `${node.domain === 'emotion' || node.domain === 'preference' || node.domain === 'personality' ? '右脑' : '左脑'} · ${count} 条` : 'Memory Space';
+        cardFoot.textContent = node.k === 'label' ? `${['emotion','preference','personality'].includes(node.domain) ? ui('右脑','Right brain') : ui('左脑','Left brain')} · ${count}` : 'Memory Space';
       }
       cardSize = {width: card.offsetWidth || 236, height: card.offsetHeight || 110};
     }
@@ -655,6 +662,9 @@
   document.addEventListener('display-settings-change',()=>{
     cardNode=null;layoutNodes();requestDraw();updateAllCount();
     allTitle.textContent=tr('全部记忆');allClose.textContent=tr('关闭');
+    if(lastDisplayLanguage!==displayLanguage()){
+      lastDisplayLanguage=displayLanguage();refreshRequest+=1;allRequest+=1;scheduleRefresh();
+    }
     if(allDialog.open)void loadAll();
   });
   image.onload=redrawForView;

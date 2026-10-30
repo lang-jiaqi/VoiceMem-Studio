@@ -12,7 +12,7 @@ Restart the desktop App after updating its preload code.
 
 | Role | Recommended implementation | Optional built-in API |
 | --- | --- | --- |
-| `asr` | FunASR streaming | Deepgram Listen v1 WebSocket |
+| `asr` | X-ASR-zh-en 480ms (CPU, INT8, one thread) | Deepgram Listen v1 WebSocket |
 | `asr_final` | SenseVoice | Installed adapter |
 | `vad` | Silero | Installed adapter |
 | `eot` | Smart Turn | Installed adapter |
@@ -21,6 +21,12 @@ Restart the desktop App after updating its preload code.
 
 See [reply routing](../reply_modes/README.md) for default model selection and
 waiting speech. Installed adapters retain the router interface listed below.
+
+The recommended ASR downloads a pinned official ONNX revision on first launch,
+then converts it locally and caches INT8 weights before warmup. This startup
+step does not run in the live audio worker. Set `VOICEMEM_ASR=funasr` to retain
+Paraformer or `VOICEMEM_ASR=sherpa` for the previous bilingual Zipformer. Neither
+override affects Deepgram or an installed ASR adapter.
 
 Memory and reply keep separate DeepSeek, Qwen/DashScope, and OpenAI-compatible
 Chat service settings. MLX-local replies also accept an explicit model path or

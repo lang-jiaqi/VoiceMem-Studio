@@ -13,6 +13,7 @@ import numpy as np
 
 from studio.paths import MODELS, ROOT
 from studio.prompt_config import tts_prompts
+from .safety import SpeechGuard, speech_budget_seconds
 
 
 def source_directory() -> Path:
@@ -129,6 +130,7 @@ class BreezeCUDATTS:
                 return
             set_all_seeds(self.seed)
             chunks = self._runtime.iter_audio_chunks(inputs, request_id=request['id'], seed=self.seed)
+            guard = SpeechGuard(text, self.sample_rate)
             pending, frames, target = [], 0, self.first_frames
             try:
                 for chunk in chunks:
@@ -139,6 +141,7 @@ class BreezeCUDATTS:
                         raise ValueError('Invalid Breeze CUDA PCM format')
                     if not audio.size:
                         continue
+                    guard.accept(audio.size)
                     pending.append((np.clip(audio, -1, 1) * 32767).astype('<i2').tobytes())
                     frames += int(chunk.codec_frames)
                     if frames >= target:
@@ -170,6 +173,8 @@ class BreezeCUDATTS:
             'ref_audio': self.ref_audio, 'ref_text': self.ref_text,
             'cfg_scale': self.cfg_scale, 'seed': self.seed,
             'max_tokens': self.max_tokens,
+            'repetition_penalty': 1.1,
+            'audio_limit_s': speech_budget_seconds(text),
         })
         started = time.monotonic()
         byte_count = 0

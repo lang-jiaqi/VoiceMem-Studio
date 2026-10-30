@@ -167,7 +167,7 @@ class StartupInferenceTests(unittest.TestCase):
                     self.assertTrue(path.is_file())
                     events.append('emotion')
 
-                async def speech(text):
+                async def speech(text, instruction=None):
                     events.append('speech')
                     if failed_step != 'speech':
                         yield b'\x01\x00' * 16

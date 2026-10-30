@@ -1,4 +1,4 @@
-"""Studio selects validated MLX decoding without changing speech parameters."""
+"""Studio selects verified decoding and consistent local repetition control."""
 import os
 import sys
 from types import ModuleType, SimpleNamespace
@@ -12,14 +12,15 @@ from studio.core.utils.tts.cache import FastDepth
 
 
 class SpeechFactoryTests(unittest.TestCase):
-    def test_mlx_default_selects_verified_compilation_and_existing_parameters(self):
+    def test_mlx_default_selects_verified_compilation_and_repetition_control(self):
         with patch.dict(os.environ, {'STUDIO_BACKEND': 'mlx'}, clear=True), \
                 patch('studio.core.utils.tts.component.BreezeMLXTTS') as create:
             result = initialize._create.__wrapped__()
         self.assertIs(result, create.return_value)
         create.assert_called_once_with(model=str(initialize.MODEL),
             ref_audio=str(initialize.REFERENCE), cfg_scale=1.0, seed=42,
-            chunk_frames=2, first_frames=2, max_tokens=750, depth_mode='compiled')
+            chunk_frames=2, first_frames=2, max_tokens=750, depth_mode='compiled',
+            repetition_penalty=1.1)
 
     def test_cuda_uses_its_existing_provider_and_device(self):
         with patch.dict(os.environ, {'STUDIO_BACKEND': 'cuda', 'STUDIO_TTS_DEVICE': 'cuda:1'},

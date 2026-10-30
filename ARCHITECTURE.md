@@ -409,7 +409,16 @@ prefix without requiring closing formatting markers.
 The brain backdrop remains an illustration, while graph nodes are rebuilt from
 the current Space's `/api/memories` snapshot. Both visual styles share the
 server's asynchronously prepared portrait labels, including the existing
-owner-name policy. Right-brain items retain the stored claim in `raw` and expose
+owner-name policy. The shared renderer supplies `lang=en|zh` to `/api/memories`,
+including its full-list form. The transport's optional `localized_snapshot`
+callback captures this display language without changing the Space or process
+language; legacy snapshot injections keep their no-argument contract. Label
+preparation captures the owner and display language, requests that output language
+explicitly, and caches the result by language, owner and claim. UI domain labels,
+canonical emotion labels and card chrome are localized; original facts, evidence,
+proper names and stored claims remain unchanged. Language switches invalidate
+in-flight graph/full-list reads and refresh the localized projection.
+Right-brain items retain the stored claim in `raw` and expose
 `label_pending` alongside `text`. The server captures label text and readiness
 together and deduplicates concurrent preparation; a failed rewrite resolves to
 the stored claim for that process. The shared graph renderer refreshes pending
@@ -448,8 +457,13 @@ retains the current voice state and motion parameters. Unsupported WebGPU and
 shader compilation errors do not retry. Hidden, offscreen and settings views
 pause frames and pending retries. Page departure releases the device and uniform
 buffer, invalidates asynchronous initialization callbacks, and a restored page
-reinitializes on demand. Healthy rendering keeps its existing shader, resolution
-and animation cadence.
+reinitializes on demand. The shader and voice-state motions are unchanged, but
+rendering is capped at 30 frames per second during active states/transitions and
+12 when settled at idle. Render density is capped at 1.25 and dimensions at 384
+pixels. A queue-completion fence permits only one outstanding submission from
+the orb; stalled GPU work does not accumulate animation frames. Stale completion
+callbacks cannot restart an abandoned device or hidden view. Adapter selection
+requests low power, and phase text follows the UI language.
 
 The panels show real per-turn recall results without demo records or rule replies. A local
 configuration page owns connection IPC. The Studio renderer has only the model-service
@@ -851,18 +865,37 @@ session. This is a per-page guard, not a cross-client or server-wide session lim
 
 ### ASR and final refinement
 
-Studio defaults to FunASR `paraformer-zh-streaming`, which supports Chinese and
-English independently of UI or Space language. Acquisition and strict warmup
-use the same local FunASR artifact manifest. Each connection owns a decoder
-cache, input buffer and cumulative text. Studio caches model prototypes by
-backend/device and clones their stream state; accounts and Spaces reuse weights
-instead of loading another FunASR model. Cold construction and inference follow
-`TORCH_LOCK`. Stateless final-ASR weights are reused as well.
-`--asr-device` / `STUDIO_ASR_DEVICE` selects streaming ASR independently.
-CUDA's `--device` supplies its fallback; Mac keeps automatic ASR selection
-independently of the Torch router device. Startup reports the requested ASR device and
-the factory reports its actual device, separately from MLX routing and TTS.
-Explicit English adapter calls retain the reusable Zipformer path. FunASR
+Studio defaults to X-ASR-zh-en's 480 ms bilingual Zipformer2 transducer,
+using locally quantized INT8 weights and one CPU ONNX thread on both platforms.
+Chinese, English and mixed speech use the same model independently of UI or
+Space language, including explicit language calls to the Studio factory.
+Acquisition and strict warmup use the same local profile and required artifacts.
+`studio/core/utils/asr/profile.py` pins the official repository revision and
+quantization recipe. Its ASR-owned artifact loader downloads FP32 components
+and converts constant MatMul weights to signed INT8 in a startup-only subprocess.
+A per-profile file lock serializes preparation; isolated temporary builds and
+a provenance/size receipt published last prevent incomplete weights from being
+accepted. Downloads and successful conversions are cached under the model root.
+Conversion dependencies and native session artifacts stay out of the serving
+process and working directory. Failures remain visible rather than silently
+selecting another model or FP32 runtime.
+The Studio adapter preserves natural casing and removes Chinese token spacing.
+Flush supplies up to 800 ms of zero-valued right context immediately, crediting
+only exact-zero trailing input already fed; it adds no wall-clock silence wait.
+It remains idempotent and never closes the decoder, allowing speech to resume
+on the same stream. Reset and new connections clear all private tail state.
+Each connection owns its decoder stream and cumulative text; model prototypes
+are shared across accounts and Spaces. Native streaming decodes report CPU ONNX
+runtime through the engine's audio service. Stateless final-ASR weights are
+reused as well. Deepgram and injected provider contracts remain independent.
+`VOICEMEM_ASR=funasr` explicitly retains the previous Paraformer path, including
+its artifact acquisition and shared prototypes. `VOICEMEM_ASR=sherpa` retains
+the previous CPU INT8 bilingual Zipformer and its two-thread defaults. For FunASR,
+`--asr-device` / `STUDIO_ASR_DEVICE` selects streaming ASR independently;
+CUDA's `--device` supplies its fallback. Cold construction and inference follow
+the existing device lock. Startup reports the requested ASR device and the
+factory reports its actual backend/device, separately from MLX routing and TTS.
+FunASR
 buffers 600 ms chunks and appends 50 ms of zero-valued right context at flush.
 Resumed input starts a fresh decoder cache while retaining the utterance text;
 reset clears that text and cache for the next utterance.
@@ -1466,6 +1499,20 @@ same `stream(text, instruction)` contract. Optional `preconnect` and `aclose` ho
 remain at the server lifecycle boundary. New adapters can use these existing
 contracts without adding vendor-specific branches to routing or dialogue policy.
 
+Both local Breeze adapters use a repetition penalty of 1.1. MLX passes it
+explicitly to the acoustic generator and includes it in the synthesized-voice
+cache identity. Existing reference audio, tone/rate instructions, sampler seed,
+codec batches, and verified depth execution remain provider-owned.
+`studio/core/utils/tts/safety.py` owns a per-segment generated-audio ceiling,
+scaled by syllabic characters, words, acronym expansion, digits and punctuation
+with slack for slow delivery. This ceiling counts samples rather than elapsed
+wall time; resource contention cannot expire an otherwise valid segment.
+Each adapter checks it before PCM delivery. An overrun raises through the existing
+speech-failure path, closing the generator and resetting native codec/cache state;
+it never silently marks a truncated segment or its reply complete. Remote and
+injected providers retain their own policies. Effective repetition and audio
+limits are recorded in the existing opt-in TTS request journal.
+
 `studio/core/utils/tts/segmentation.py` owns sentence-first text boundaries and
 the pending text buffer. A reply-local segmenter consumes plain text after tone
 parsing, independently of LLM iteration, so a stalled token stream cannot prevent
@@ -1587,8 +1634,14 @@ last prompt token for the existing sampler. Synchronous prefix warmup uses
 and prompt/cache invalidation discard private partial state, and only a complete
 warmup publishes reusable caches under a short metadata lock. Model execution
 never holds that metadata lock. Progress yields remain private to the provider.
-Startup completes a short TTS utterance after other model warmups, exercising
-continuous codec generation and cleanup before accepting conversations.
+Startup completes continuous TTS utterances after other model warmups, exercising
+codec generation and cleanup before accepting conversations. The recommended
+local speech provider probes both Chinese and English with the configured tone
+and rate instructions, finishing with the active language. Disk hits in the
+waiting-speech cache do not replace these native probes. Each probe reports first
+PCM, audio duration and delivery RTF; these are readiness measurements, not a
+promise of live playback throughput. Custom and API providers retain one speech
+probe and their existing cache preparation and client cleanup.
 Startup also runs disposable synthetic inputs through ASR feed/flush, VAD,
 AST scene inference, speaker embedding, SenseVoice emotion, emotion2vec,
 enabled EOT scoring, semantic Gate banks, and Studio semantic-emotion prototypes.
@@ -1894,6 +1947,17 @@ owner. The latter also includes other frameworks, including MLX, and must not be
 treated as Torch's unused cache or added again to the MLX allocation. Darwin
 sampling uses `host_statistics64` through `engine/telemetry/darwin.py`; it never forks a
 process containing active model runtimes.
+The same paging feedback controls reclaimable MLX allocator capacity. More than
+8 MiB/s of swap plus decompression for two seconds reduces the free-cache budget
+to the smaller of its configured limit and 128 MiB. Five quiet seconds restore
+the configured budget; samples older than three seconds disable the reduction.
+The MLX owner applies changes between native steps, at most once per second;
+the next allocation reclaims excess free buffers. Active weights, KV entries,
+compiled functions, sampling and audio chunk sizes remain unchanged. This is a
+free-cache budget, not a process-memory cap or a CUDA allocator policy. Snapshots
+report configured and effective limits; update failures are visible and leave
+the worker serving with its previous budget. No per-utterance cache flush or
+weight eviction is introduced.
 Unsupported or failed sampling is visible and does not stop dialogue. Imports
 start no samplers or model runtimes. Readiness still does not guarantee physical
 memory residency. `evals/engine_contention.py` provides an offline ABBA native
