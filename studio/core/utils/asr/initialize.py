@@ -1,23 +1,14 @@
 """Initialize the existing recognizers from verified local weights."""
-from .component import FunASRStreamingASR, StreamingASR, OfflineASR, XASRStreamingASR
+from .component import OfflineASR, XASRStreamingASR
 from studio.paths import MODELS
-import os
 from functools import lru_cache
-from .profile import XASR, ZIPFORMER, local_backend
+from .profile import XASR
 
 
-@lru_cache(maxsize=4)
-def _streaming_model(kind, device):
-    if kind == "funasr":
-        model = FunASRStreamingASR(
-            model=str(MODELS / "asr/funasr-paraformer-zh-streaming"), device=device)
-        print(f"[asr] 流式识别设备：{device}", flush=True)
-        return model
-    if kind == 'xasr':
-        print('[asr] X-ASR zh-en · 480ms · CPU · int8 · 1 thread', flush=True)
-        return XASRStreamingASR(str(MODELS / 'asr' / XASR))
-    print('[asr] Zipformer bilingual · CPU · int8', flush=True)
-    return StreamingASR(str(MODELS / 'asr' / ZIPFORMER), prefer_int8=True)
+@lru_cache(maxsize=1)
+def _streaming_model():
+    print('[asr] X-ASR zh-en · 480ms · CPU · int8 · 1 thread', flush=True)
+    return XASRStreamingASR(str(MODELS / 'asr' / XASR))
 
 def streaming(language="auto"):
     """Share bilingual weights; UI language never restricts recognized speech."""
@@ -29,19 +20,9 @@ def streaming(language="auto"):
                            api_key=value['apiKey'], language=value['language'])
     if value['provider'] == 'adapter':
         return _custom_streaming().new_stream()
-    from voicemem.utils.audio.asr import pick_device
     from voicemem.engine import device_lock
-    kind = local_backend()
-    configured = (os.environ.get('STUDIO_ASR_DEVICE')
-                  or os.environ.get('VOICEMEM_ASR_DEVICE')
-                  or (os.environ.get('STUDIO_DEVICE')
-                      if os.environ.get('STUDIO_BACKEND') == 'cuda' else None)
-                  or 'auto')
-    device = (pick_device() if configured == 'auto' else configured) if kind == "funasr" else "cpu"
-    lock = device_lock(device)
-    device = lock.device or device
-    with lock:
-        return _streaming_model(kind, device).new_stream()
+    with device_lock('cpu'):
+        return _streaming_model().new_stream()
 
 
 @lru_cache(maxsize=1)

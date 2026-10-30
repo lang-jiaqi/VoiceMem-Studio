@@ -888,17 +888,14 @@ Each connection owns its decoder stream and cumulative text; model prototypes
 are shared across accounts and Spaces. Native streaming decodes report CPU ONNX
 runtime through the engine's audio service. Stateless final-ASR weights are
 reused as well. Deepgram and injected provider contracts remain independent.
-`VOICEMEM_ASR=funasr` explicitly retains the previous Paraformer path, including
-its artifact acquisition and shared prototypes. `VOICEMEM_ASR=sherpa` retains
-the previous CPU INT8 bilingual Zipformer and its two-thread defaults. For FunASR,
-`--asr-device` / `STUDIO_ASR_DEVICE` selects streaming ASR independently;
-CUDA's `--device` supplies its fallback. Cold construction and inference follow
-the existing device lock. Startup reports the requested ASR device and the
-factory reports its actual backend/device, separately from MLX routing and TTS.
-FunASR
-buffers 600 ms chunks and appends 50 ms of zero-valued right context at flush.
-Resumed input starts a fresh decoder cache while retaining the utterance text;
-reset clears that text and cache for the next utterance.
+X-ASR is Studio's only built-in streaming model. No local fallback or model
+selection is driven by `VOICEMEM_ASR`, `STUDIO_ASR_DEVICE` or
+`VOICEMEM_ASR_DEVICE`. The legacy `--asr-device` flag remains accepted for
+launcher compatibility and normalizes to CPU. Startup reports the selected
+component's actual placement and does not validate unused ASR CUDA devices.
+Prototype construction retains the existing CPU device-lock boundary. The
+reusable VoiceMem SDK's adapters remain separate from Studio's injected provider;
+FunASR dependencies used by SenseVoice and emotion perception are still required.
 
 Streaming ASR runs in a dedicated serial worker so chunk inference does not
 block WebSocket input. At turn end, full-audio ASR refinement may run in a

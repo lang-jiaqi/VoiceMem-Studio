@@ -64,7 +64,7 @@ const en=new Map(pairs),zh=new Map(pairs.map(([a,b])=>[b,a]));
  ['首次启用此音色会合成 2 段附和音频。','This voice generates 2 acknowledgement clips on first use.'],
  ['此服务由外部管理，请在服务器端修改配置。','This service is managed externally. Configure it on the server.'],
  ['此服务版本不支持组件配置。','This server version does not support component settings.'],['读取失败，请重试。','Could not load. Please retry.'],['重试','Retry'],
- ['X-ASR · 推荐','X-ASR · Recommended'],['Zipformer · 推荐','Zipformer · Recommended'],['FunASR · 推荐','FunASR · Recommended'],['SenseVoice · 推荐','SenseVoice · Recommended'],['Silero VAD · 推荐','Silero VAD · Recommended'],['Smart Turn · 推荐','Smart Turn · Recommended'],['Qwen3 0.6B · 推荐','Qwen3 0.6B · Recommended'],['Breeze · 推荐','Breeze · Recommended'],['DeepSeek · 推荐','DeepSeek · Recommended'],
+ ['X-ASR · 推荐','X-ASR · Recommended'],['SenseVoice · 推荐','SenseVoice · Recommended'],['Silero VAD · 推荐','Silero VAD · Recommended'],['Smart Turn · 推荐','Smart Turn · Recommended'],['Qwen3 0.6B · 推荐','Qwen3 0.6B · Recommended'],['Breeze · 推荐','Breeze · Recommended'],['DeepSeek · 推荐','DeepSeek · Recommended'],
  ['外观','Appearance'],['文字','Text'],['对话偏好','Conversation'],['聊天','Chat'],['声音','Voice'],['回答','Answers'],['接话','Turn taking'],['垫话','Backchannels'],
  ['返回组件','Back to components'],['角色设定','Persona prompt'],['角色','Persona'],['选择记忆空间','Choose a Memory Space'],['创建对话','Create conversation'],['当前','Current'],['保存','Save'],['例如：多听我说，别急着给建议。','For example: listen first and do not rush to give advice.'],
  ['选择你喜欢的对话画面。','Choose the conversation view you prefer.'],['调整语言和字号。','Adjust language and text size.'],['查看运行状态或调整布局。','View runtime status or adjust the layout.'],

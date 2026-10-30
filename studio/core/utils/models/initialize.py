@@ -36,20 +36,10 @@ def models(args, stage="all"):
     if not recommended('asr_final'):
         shared = [model for model in shared if model.name != 'SenseVoice 最终转写']
     if recommended('asr'):
-        from studio.core.utils.asr.profile import (
-            XASR, XASR_FILES, XASR_REPOSITORY, ZIPFORMER, ZIPFORMER_FILES, local_backend)
-        if local_backend() == 'xasr':
-            from studio.core.utils.asr.artifacts import XASRModel
-            shared.append(XASRModel('中英双语流式 ASR', 'asr/' + XASR,
-                                    XASR_REPOSITORY, XASR_FILES))
-        elif local_backend() == 'sherpa':
-            shared.append(Model('中英双语流式 ASR', 'asr/' + ZIPFORMER,
-                                'csukuangfj/' + ZIPFORMER, ZIPFORMER_FILES, ZIPFORMER_FILES))
-        else:
-            shared.append(Model('中英双语流式 ASR',
-                        'asr/funasr-paraformer-zh-streaming',
-                        'funasr/paraformer-zh-streaming',
-                        ('config.yaml', 'model.pt', 'tokens.json', 'am.mvn', 'seg_dict')))
+        from studio.core.utils.asr.profile import XASR, XASR_FILES, XASR_REPOSITORY
+        from studio.core.utils.asr.artifacts import XASRModel
+        shared.append(XASRModel('中英双语流式 ASR', 'asr/' + XASR,
+                                XASR_REPOSITORY, XASR_FILES))
     if args.eot and recommended('eot'):
         shared.append(Model('Smart Turn EOT', 'eot', 'pipecat-ai/smart-turn-v3',
                             ('smart-turn-v3.2-cpu.onnx',), ('smart-turn-v3.2-cpu.onnx',)))

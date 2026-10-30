@@ -12,7 +12,7 @@ import numpy as np
 from studio.core.utils.asr.artifacts import XASRModel
 from studio.core.utils.asr.component import XASRStreamingASR
 from studio.core.utils.asr.profile import (
-    XASR, XASR_FILES, XASR_REPOSITORY, XASR_REVISION, XASR_SOURCE, local_backend)
+    XASR, XASR_FILES, XASR_REPOSITORY, XASR_REVISION, XASR_SOURCE)
 
 
 class StreamingTests(unittest.TestCase):
@@ -61,22 +61,50 @@ class StreamingTests(unittest.TestCase):
         self.assertEqual(make.call_args.kwargs['model_type'], 'zipformer2')
         self.assertEqual(asr._format_text('API AND NASA'), 'API AND NASA')
 
-    def test_zipformer_fallback_matches_manifest_and_runtime(self):
+    def test_legacy_model_overrides_cannot_change_studio_acquisition_or_runtime(self):
         from studio.core.utils.asr import initialize
-        from studio.core.utils.asr.profile import ZIPFORMER
         from studio.core.utils.models.initialize import models
         args = SimpleNamespace(mode='realtime', backend='mlx', eot=False)
         self.addCleanup(initialize._streaming_model.cache_clear)
-        with patch.dict('os.environ', {'VOICEMEM_ASR': 'sherpa'}, clear=True), \
-                patch.object(initialize, 'StreamingASR') as make:
-            initialize._streaming_model.cache_clear()
-            model = next(m for m in models(args) if '流式 ASR' in m.name)
-            self.assertEqual(model.directory, 'asr/' + ZIPFORMER)
-            initialize.streaming('en')
-            make.assert_called_once_with(str(initialize.MODELS / model.directory), prefer_int8=True)
-        for value in ('', 'auto', 'bilingual', 'xasr', 'en', 'zh'):
-            with self.subTest(value=value), patch.dict('os.environ', {'VOICEMEM_ASR': value}):
-                self.assertEqual(local_backend(), 'xasr')
+        for value in ('', 'auto', 'bilingual', 'xasr', 'funasr', 'sherpa', 'zipformer', 'unknown'):
+            with self.subTest(value=value), \
+                    patch.dict('os.environ', {'VOICEMEM_ASR': value}, clear=True), \
+                    patch.object(initialize, 'XASRStreamingASR') as make:
+                initialize._streaming_model.cache_clear()
+                selected = [m for m in models(args) if '流式 ASR' in m.name]
+                self.assertEqual(len(selected), 1)
+                self.assertEqual(selected[0].directory, 'asr/' + XASR)
+                initialize.streaming('en')
+                make.assert_called_once_with(str(initialize.MODELS / selected[0].directory))
+
+    def test_missing_xasr_fails_without_loading_another_local_model(self):
+        from studio.core.utils.asr import initialize
+        initialize._streaming_model.cache_clear()
+        self.addCleanup(initialize._streaming_model.cache_clear)
+        with patch.object(initialize, 'XASRStreamingASR', side_effect=FileNotFoundError('synthetic')), \
+                patch('voicemem.utils.audio.asr.FunASRStreamingASR') as legacy:
+            with self.assertRaises(FileNotFoundError):
+                initialize.streaming()
+            legacy.assert_not_called()
+
+    def test_external_component_bindings_bypass_local_model_selection(self):
+        from studio.core.utils.asr import initialize
+        for provider in ('deepgram', 'adapter'):
+            with self.subTest(provider=provider), \
+                    patch('studio.core.utils.component_config.component.selection', return_value={
+                        'provider': provider, 'model': 'synthetic', 'baseUrl': 'https://api.example/v1',
+                        'apiKey': 'synthetic', 'language': 'en'}), \
+                    patch('studio.core.utils.asr.deepgram.DeepgramASR') as remote, \
+                    patch.object(initialize, '_custom_streaming') as custom, \
+                    patch.object(initialize, '_streaming_model') as local:
+                result = initialize.streaming()
+                local.assert_not_called()
+                if provider == 'adapter':
+                    self.assertIs(result, custom.return_value.new_stream.return_value)
+                    remote.assert_not_called()
+                else:
+                    self.assertIs(result, remote.return_value)
+                    custom.assert_not_called()
 
 
 class AcquisitionTests(unittest.TestCase):

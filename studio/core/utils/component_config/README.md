@@ -24,9 +24,10 @@ waiting speech. Installed adapters retain the router interface listed below.
 
 The recommended ASR downloads a pinned official ONNX revision on first launch,
 then converts it locally and caches INT8 weights before warmup. This startup
-step does not run in the live audio worker. Set `VOICEMEM_ASR=funasr` to retain
-Paraformer or `VOICEMEM_ASR=sherpa` for the previous bilingual Zipformer. Neither
-override affects Deepgram or an installed ASR adapter.
+step does not run in the live audio worker. X-ASR is Studio's only built-in
+streaming model, fixed to one CPU thread. Legacy `VOICEMEM_ASR` and device
+environment options cannot select another built-in model. Deepgram and installed
+ASR adapters retain their independent component bindings.
 
 Memory and reply keep separate DeepSeek, Qwen/DashScope, and OpenAI-compatible
 Chat service settings. MLX-local replies also accept an explicit model path or

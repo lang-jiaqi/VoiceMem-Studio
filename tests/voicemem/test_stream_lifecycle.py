@@ -7,7 +7,7 @@ import unittest
 import weakref
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import numpy as np
 
@@ -45,17 +45,18 @@ class DecoderOwnershipTests(unittest.TestCase):
         self.assertEqual(a._cache, {'state': [1]})
 
     def test_parallel_account_loads_construct_the_model_once(self):
+        from studio.core.utils.asr.component import XASRStreamingASR
+        recognizer = types.SimpleNamespace(create_stream=Mock(side_effect=lambda: object()))
+        model = XASRStreamingASR.from_recognizer(recognizer)
         initialize._streaming_model.cache_clear()
         self.addCleanup(initialize._streaming_model.cache_clear)
-        with patch.object(initialize, 'FunASRStreamingASR', side_effect=lambda **_: prototype()) as load, \
-                patch('voicemem.utils.audio.asr.pick_device', return_value='cpu'), \
-                patch.dict('os.environ', {'STUDIO_BACKEND': 'mlx', 'VOICEMEM_ASR_DEVICE': 'cpu',
-                                          'VOICEMEM_ASR': 'funasr'}):
+        with patch.object(initialize, 'XASRStreamingASR', return_value=model) as load:
             with ThreadPoolExecutor(max_workers=4) as workers:
                 models = list(workers.map(lambda _: initialize.streaming(), range(4)))
         self.assertEqual(load.call_count, 1)
         self.assertEqual(len({id(model) for model in models}), 4)
-        self.assertEqual(len({id(model.model) for model in models}), 1)
+        self.assertEqual(len({id(model.rec) for model in models}), 1)
+        self.assertEqual(len({id(model.stream) for model in models}), 4)
 
 
 class StreamLifecycleTests(unittest.IsolatedAsyncioTestCase):
