@@ -9,6 +9,7 @@
 | MLX 深度解码编译 | `mlx_tts_decode.py`（Apple Silicon，缓存/校验编译 ABBA 对照） |
 | 分块预填充 | `mlx_prefill.py`（Apple Silicon，合成小模型，原生调度和缓存数值对照） |
 | 稳定输入的 EOT 计算复用 | `eot_stable_input.py`（CPU，校验追加静音前后分数逐值一致） |
+| ASR CPU 运行时 | `asr_runtime.py`（CPU，流式与最终复核的推理耗时、推理后空转 ABBA 对照） |
 | 回合结束与打断 | `eot_turn_end.py`、`echo_barge.py` |
 | 向量编码与检索 | `embed_latency.py`、`query_embedding_latency.py`、`embed_ab.py`、`embed_locomo.py` |
 | 检索排序和相关性 | `topk_relevance.py`、`recency_ab.py`、`recency_rerank.py` |
@@ -18,6 +19,13 @@
 每个脚本文件顶部说明其参数和所需数据。它们可能需要模型、API、音频样本或专用 Memory Space，并非全部可以在干净环境中直接运行。不要使用个人正在使用的记忆库做实验；运行会写入数据的模式前，先阅读对应参数说明。
 
 这里的评测用于观察效果与性能。自动测试通过不能替代真实设备上的语音和延迟测试。
+
+`python -m evals.asr_runtime sample-zh.wav sample-en.wav --component both --order ABBA`
+使用已有权重和非个人合成音频，对比默认 CPU 会话（A）与 Studio 的推理后停止忙等配置（B）。
+两组保留相同的模型、线程数、解码参数和完整输入，输出转写摘要、识别耗时、主进程 CPU 累计
+用时和推理后 80 ms 内的 CPU 空耗。不会播放、录音、下载、请求 API 或访问 Memory Space。
+CPU 用时不是温度或功耗；识别调用耗时不包含判停、网络、字幕和播放，不能代替长时间真人对话。
+运行时不要同时执行其他性能评测。
 
 `python -m evals.work_filler_cache --out results/work-filler-cache.json`
 使用当前推荐的本地 TTS 预合成中英文等待语，检查完整音频、磁盘复用和内存命中。

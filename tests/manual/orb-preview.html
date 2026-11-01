@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoiceMem Studio · Orb preview</title>
+<link rel="stylesheet" href="../../studio/apps/ui/technical.css">
+<style>
+  body { display:grid; place-items:center; min-height:100dvh; margin:0; }
+  main { display:grid; justify-items:center; gap:18px; padding:24px; }
+  .orb-visual { width:min(320px,70vw); }
+</style>
+<main>
+  <div class="orb-visual"><canvas id="liquidOrb" aria-label="Voice state animation"></canvas></div>
+  <div class="orb-demo" role="group" aria-label="Animation preview">
+    <button type="button" data-orb-state="listening" aria-pressed="false">Listening</button>
+    <button type="button" data-orb-state="speaking" aria-pressed="false">Speaking</button>
+    <button type="button" data-orb-state="short-thinking" aria-pressed="false">Short thinking</button>
+    <button type="button" data-orb-state="long-thinking" aria-pressed="false">Long thinking</button>
+  </div>
+  <span id="orbPhase" class="orb-phase" role="status"></span>
+  <span id="orbSupport" class="orb-support" hidden>Static preview</span>
+</main>
+<script>window.VMSettings = {language:'en'};</script>
+<script src="../../studio/apps/ui/liquid-orb.js"></script>
+</html>

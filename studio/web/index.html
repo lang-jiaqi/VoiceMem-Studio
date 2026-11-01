@@ -1325,20 +1325,31 @@ function relayout(){
   const $ = id => document.getElementById(id);
   window.vm = {
     setVoiceState,
-    setInput: t => { $('liveInput').innerHTML = t + '<span class="caret"></span>'; },
+    setInput: t => {
+      const caret = document.createElement('span'); caret.className = 'caret';
+      $('liveInput').replaceChildren(document.createTextNode(String(t ?? '')), caret);
+    },
     setReply: t => { $('reply').textContent = t; },
     setTags: tags => {
-      $('tags').innerHTML = tags.map(t => `<span class="tag ${t.k}"><b>${t.b}</b>${t.v}</span>`).join('');
-      // 标签一变，就按其中的 schema / 类型点亮脑图对应节点
+      $('tags').replaceChildren(...tags.map(t => {
+        const tag = document.createElement('span'); tag.className = `tag ${t.k || ''}`;
+        const label = document.createElement('b'); label.textContent = String(t.b ?? '');
+        tag.append(label, document.createTextNode(String(t.v ?? '')));
+        return tag;
+      }));
       const schemas = tags.filter(t=>t.k==='sch').map(t=>t.v);
       const kinds = tags.some(t=>t.k==='ent') ? ['entity'] : [];
       if(tags.some(t=>t.k==='emo')) kinds.push('emotion');
       window.brainActivate && window.brainActivate({schemas, kinds});
     },
-    setRecall: (side, items) => { $(side==='r'?'recallR':'recallL').innerHTML = items.map(
-      it => `<li><span>${it.text}</span>` +
-
-            `<span class="sc">${it.score}</span></li>`).join(''); },
+    setRecall: (side, items) => {
+      $(side==='r'?'recallR':'recallL').replaceChildren(...items.map(it => {
+        const row = document.createElement('li');
+        const text = document.createElement('span'); text.textContent = String(it.text ?? '');
+        const score = document.createElement('span'); score.className = 'sc'; score.textContent = String(it.score ?? '');
+        row.append(text, score); return row;
+      }));
+    },
     activate: o => window.brainActivate && window.brainActivate(o),
     clear:   () => window.brainClear && window.brainClear(),
   };

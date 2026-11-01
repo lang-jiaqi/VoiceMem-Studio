@@ -2,6 +2,7 @@
 (() => {
   'use strict';
   let spaces = [], active = '', fixed = false;
+  let useTail = Promise.resolve();
   const request = async (url, options) => {
     const response = await fetch(url, options);
     if (!response.ok) {
@@ -21,16 +22,20 @@
   }
   const ready = refresh();
   ready.catch(() => {});
-  async function use(space) {
-    await ready;
-    space = space || active;
-    if (!space || !spaces.some(item => item.id === space)) throw new Error('Memory Space 不存在，请重新选择。');
-    if (fixed && space === active) return active;
-    const result = await request(`/api/spaces/${encodeURIComponent(space)}/use`, { method: 'POST' });
-    const changed = active !== result.active;
-    active = result.active;
-    if (changed) window.dispatchEvent(new CustomEvent('memory-space-change', { detail: { space: active } }));
-    return active;
+  function use(space) {
+    const operation = useTail.then(async () => {
+      await ready;
+      space = space || active;
+      if (!space || !spaces.some(item => item.id === space)) throw new Error('Memory Space 不存在，请重新选择。');
+      if (fixed && space === active) return active;
+      const result = await request(`/api/spaces/${encodeURIComponent(space)}/use`, { method: 'POST' });
+      const changed = active !== result.active;
+      active = result.active;
+      if (changed) window.dispatchEvent(new CustomEvent('memory-space-change', { detail: { space: active } }));
+      return active;
+    });
+    useTail = operation.catch(() => {});
+    return operation;
   }
   async function choose(preferred) {
     await refresh();
@@ -79,7 +84,7 @@
         try {
           const created = await request('/api/spaces', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: value }),
+            body: JSON.stringify({ name: value, language: window.VMSettings?.language === 'en' ? 'en' : 'zh' }),
           });
           await refresh(); selected = created.id; name.value = ''; render();
         } catch (error) { window.VMUI?.notify(error.message); }

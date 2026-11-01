@@ -74,8 +74,10 @@ class Reply:
                                memory_vm=None, self_harness_profile=None,
                                on_self_harness_update=None, speech_provider=None):
         """Stream with an optional conversation-owned TTS instead of the shared factory."""
-        memory_vm = memory_vm or self.vm
-        context_space = context_space or self.ACTIVE_SPACE
+        from studio.core.utils.spaces.component import capture_space
+        selected_space, selected_vm = capture_space(self)
+        memory_vm = memory_vm or selected_vm
+        context_space = context_space or selected_space
         ready = asyncio.Event()
         display = asyncio.create_task(self._send_reply_display(
             pending, send, ready, timeline.output_id, context_space, memory_vm))
@@ -121,8 +123,10 @@ class Reply:
                                memory_vm=None, first_audio_ready=None,
                                self_harness_profile=None,
                                on_self_harness_update=None, speech_provider=None):
-        memory_vm = memory_vm or self.vm
-        context_space = context_space or self.ACTIVE_SPACE
+        from studio.core.utils.spaces.component import capture_space
+        selected_space, selected_vm = capture_space(self)
+        memory_vm = memory_vm or selected_vm
+        context_space = context_space or selected_space
         _entry = time.monotonic()
         if not getattr(pending, "transcript_managed", False):
             from studio.core.utils.contracts.component import input_transcript_event

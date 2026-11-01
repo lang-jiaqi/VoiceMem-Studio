@@ -19,10 +19,12 @@ class RealtimeSession:
                 "prefix_padding_ms": 200, "silence_duration_ms": 320}
 
     async def start_realtime_turn(self, pending, conn, send, timeline,
-                                  context_session="", context_space="", is_current=None):
+                                  context_session="", context_space="", is_current=None, memory_vm=None):
         """Send the confirmed turn context and start realtime generation."""
-        memory_vm = self.vm
-        space = context_space or self.ACTIVE_SPACE
+        from studio.core.utils.spaces.component import capture_space
+        selected_space, selected_vm = capture_space(self)
+        memory_vm = memory_vm or selected_vm
+        space = context_space or selected_space
         if not getattr(pending, "transcript_managed", False):
             from studio.core.utils.contracts.component import input_transcript_event
             await send(input_transcript_event(pending))
@@ -412,8 +414,8 @@ class RealtimeSession:
                             if self.BARGE_DEBUG:
                                 print("[barge] 等旧 response 退出后再创建下一轮", flush=True)
                             await response_idle.wait()
-                        context_space = self.ACTIVE_SPACE
-                        memory_vm = self.vm
+                        from studio.core.utils.spaces.component import capture_space
+                        context_space, memory_vm = capture_space(self)
                         if input_continuation.held is not None:
                             held = input_continuation.held
                             base_pending = held.pending
@@ -432,7 +434,7 @@ class RealtimeSession:
                                     held.pending = base_pending
                                     flush_continuation()
                                     pending = incoming
-                                    context_space, memory_vm = self.ACTIVE_SPACE, self.vm
+                                    context_space, memory_vm = capture_space(self)
                         timeline = AudioTimeline(
                             prebuffer_seconds=0.08, rate_estimator=speech_rate, track_delivery=True)
                         timelines[timeline.output_id] = timeline
@@ -452,6 +454,7 @@ class RealtimeSession:
                                 pending, conn, sock.send_json, timeline,
                                 context_session=context_session,
                                 context_space=context_space,
+                                memory_vm=memory_vm,
                                 is_current=lambda output=timeline: turn["timeline"] is output)
                             if acoustic is not None:
                                 acoustic_tasks.add(acoustic)

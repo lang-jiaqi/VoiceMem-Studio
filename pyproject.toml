@@ -35,7 +35,7 @@ dependencies = [
     "accelerate",
     "funasr",             # Default streaming ASR.
     "modelscope",         # FunASR model acquisition.
-    "sherpa-onnx",        # ONNX VAD, speaker verification and fallback ASR.
+    "sherpa-onnx>=1.13.8", # ONNX VAD, speaker verification and local ASR.
     "sentence-transformers",   # Local memory and slot embeddings.
     "soundfile",          # Audio-file decoding beyond PCM WAV.
     "scipy",
@@ -107,3 +107,4 @@ include = ["voicemem*", "studio", "studio.core*", "studio.harness*", "studio.web
 "*" = ["data/*.txt"]
 "voicemem" = ["assets/*.wav"]
 "studio" = ["prompt/*.md", "prompt/*.json", "apps/component-catalog.json"]
+"studio.core.utils.asr" = ["*.config"]

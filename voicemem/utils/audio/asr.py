@@ -66,7 +66,11 @@ def _normal_case(text: str) -> str:
 
 
 class StreamingASR:
-    """sherpa-onnx 流式 zipformer，出实时 partial 文本。``VOICEMEM_ASR=sherpa`` 时启用。"""
+    """Decode incremental Zipformer audio with a CPU-default Sherpa provider.
+
+    An explicit provider string is forwarded to Sherpa, including its optional
+    session configuration path. Each instance owns its decoder stream.
+    """
     FINAL_PAD_SAMPLES = round(SAMPLE_RATE * 0.3)
 
     @staticmethod
@@ -84,7 +88,7 @@ class StreamingASR:
         return str(cands[0])
 
     def __init__(self, asr_dir: str, *, prefer_int8: bool = False,
-                 num_threads: int = 2, model_type: str = "") -> None:
+                 num_threads: int = 2, model_type: str = "", provider: str = "cpu") -> None:
         import sherpa_onnx          # 惰性：默认走 FunASR 时不拉 sherpa
         self.rec = sherpa_onnx.OnlineRecognizer.from_transducer(
             tokens=f"{asr_dir}/tokens.txt",
@@ -94,6 +98,7 @@ class StreamingASR:
             num_threads=num_threads, sample_rate=SAMPLE_RATE, feature_dim=80,
             decoding_method="greedy_search",
             model_type=model_type,
+            provider=provider,
         )
         self.reset()
 
@@ -342,9 +347,11 @@ class OfflineASR:
     An optional language allowlist returns an empty refinement for other or
     unknown language tags, allowing VoiceStream to retain streaming text.
     The default accepts every model language. No second decode is performed.
+    An explicit provider string is forwarded to Sherpa; the default is plain CPU.
     """
 
-    def __init__(self, model_dir: str, num_threads: int = 4, *, allowed_languages=None):
+    def __init__(self, model_dir: str, num_threads: int = 4, *, allowed_languages=None,
+                 provider: str = "cpu"):
         self.allowed_languages = (
             None if allowed_languages is None else frozenset(allowed_languages)
         )
@@ -361,7 +368,7 @@ class OfflineASR:
             model = d / "model.onnx"
         self.rec = sherpa_onnx.OfflineRecognizer.from_sense_voice(
             model=str(model), tokens=str(d / "tokens.txt"),
-            num_threads=num_threads, use_itn=True)   # use_itn：出标点和数字
+            num_threads=num_threads, use_itn=True, provider=provider)
 
     def transcribe(self, pcm16k) -> str:
         """整轮 float32 @16k → 文本。"""

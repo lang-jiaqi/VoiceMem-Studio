@@ -262,8 +262,9 @@ class Visualization:
         from voicemem.leftbrain.cognitive_graph.types import SlotV2
 
         from voicemem.utils.common.memory_changes import for_space
-        space = self.ACTIVE_SPACE
-        vm = getattr(self, "_SPACES", {}).get(space) or self.vm
+        from studio.core.utils.spaces.component import capture_space
+        space, vm = capture_space(self)
+        vm = getattr(self, "_SPACES", {}).get(space) or vm
         language = language or (self.space_language(space) if hasattr(self, "space_language") else self.SPACE_LANG)
         if language not in {'en', 'zh'}:
             raise ValueError('Display language must be en or zh')

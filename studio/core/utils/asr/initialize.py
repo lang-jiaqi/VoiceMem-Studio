@@ -1,5 +1,5 @@
 """Initialize the existing recognizers from verified local weights."""
-from .component import OfflineASR, XASRStreamingASR
+from .component import OfflineASR, XASRStreamingASR, cpu_provider
 from studio.paths import MODELS
 from functools import lru_cache
 from .profile import XASR
@@ -28,7 +28,7 @@ def streaming(language="auto"):
 @lru_cache(maxsize=1)
 def _final_model():
     return OfflineASR(str(MODELS / "asr/sensevoice-int8"),
-                      allowed_languages=("zh", "en", "yue"))
+                      allowed_languages=("zh", "en", "yue"), provider=cpu_provider())
 
 
 def final():

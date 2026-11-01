@@ -1,11 +1,72 @@
 """Studio spaces implementation."""
 import time
+import threading
+from dataclasses import dataclass, replace
 from pathlib import Path
 from studio.core.utils.dialogue.component import CONTEXT
 from studio.core.voicemem import open_memory
 from studio.paths import ROOT as _ROOT
 
+
+@dataclass(frozen=True)
+class SpaceSelection:
+    """An atomically published selection; preparing another Space leaves it intact."""
+
+    name: str = ""
+    memory: object = None
+    language: str = "en"
+    local_reply: object = None
+
+
+_EMPTY_SELECTION = SpaceSelection()
+
+
+def capture_space(owner):
+    """Capture matching Space and memory ownership, including injected agents."""
+    selected = getattr(owner, "_SPACE_SELECTION", None)
+    if isinstance(selected, SpaceSelection):
+        return selected.name, selected.memory
+    return owner.ACTIVE_SPACE, owner.vm
+
+
 class Spaces:
+    """Own Space preparation and publish selection without blocking readers."""
+
+    def _space_lock(self):
+        return self.__dict__.setdefault("_SPACES_LOCK", threading.RLock())
+
+    @property
+    def ACTIVE_SPACE(self):
+        return getattr(self, "_SPACE_SELECTION", _EMPTY_SELECTION).name
+
+    @ACTIVE_SPACE.setter
+    def ACTIVE_SPACE(self, value):
+        self._SPACE_SELECTION = replace(getattr(self, "_SPACE_SELECTION", _EMPTY_SELECTION), name=value)
+
+    @property
+    def vm(self):
+        return getattr(self, "_SPACE_SELECTION", _EMPTY_SELECTION).memory
+
+    @vm.setter
+    def vm(self, value):
+        self._SPACE_SELECTION = replace(getattr(self, "_SPACE_SELECTION", _EMPTY_SELECTION), memory=value)
+
+    @property
+    def SPACE_LANG(self):
+        return getattr(self, "_SPACE_SELECTION", _EMPTY_SELECTION).language
+
+    @SPACE_LANG.setter
+    def SPACE_LANG(self, value):
+        self._SPACE_SELECTION = replace(getattr(self, "_SPACE_SELECTION", _EMPTY_SELECTION), language=value)
+
+    @property
+    def _LOCAL_LLM(self):
+        return getattr(self, "_SPACE_SELECTION", _EMPTY_SELECTION).local_reply
+
+    @_LOCAL_LLM.setter
+    def _LOCAL_LLM(self, value):
+        self._SPACE_SELECTION = replace(getattr(self, "_SPACE_SELECTION", _EMPTY_SELECTION), local_reply=value)
+
     def _fixed_memory_root(self):
         """Keep an explicit memory_root as one database, never a Space parent."""
         configured = getattr(self, "CONFIG", {}).get("memory_root")
@@ -78,6 +139,10 @@ class Spaces:
 
     def get_space(self, name: str):
         """Open one memory instance per space, preserving its stored language."""
+        with self._space_lock():
+            return self._open_space(name)
+
+    def _open_space(self, name: str):
         directory, safe = self.space_dir(name)
         if safe not in self._SPACES:
             if not directory.exists() or not any(directory.iterdir()):
@@ -100,20 +165,21 @@ class Spaces:
                 self.CONFIG["reply"].set_system(self._rt_persona(lang))
             t0 = time.monotonic()
             inst = open_memory(cfg)
-            if self.ARGS.llm == "local":
-                self._LOCAL_LLM = inst._reply_src
             self._SPACES[safe] = inst
             print(f"[space] 打开「{safe}」用了 {time.monotonic()-t0:.1f}s", flush=True)
         return self._SPACES[safe]
 
     def use_space(self, name: str) -> str:
         """Select the active memory instance and its ambiguous-input fallback."""
-        self.vm = self.get_space(name)
-        _, self.ACTIVE_SPACE = self.space_dir(name)
-        self.SPACE_LANG = self.space_language(self.ACTIVE_SPACE)
-        if self._LOCAL_LLM is not None:
-            self._LOCAL_LLM.system = self._rt_persona(self.SPACE_LANG)
-        return self.ACTIVE_SPACE
+        with self._space_lock():
+            memory = self.get_space(name)
+            _, safe = self.space_dir(name)
+            language = self.space_language(safe)
+            local_reply = memory._reply_src if self.ARGS.llm == "local" else None
+            if local_reply is not None:
+                local_reply.system = self._rt_persona(language)
+            self._SPACE_SELECTION = SpaceSelection(safe, memory, language, local_reply)
+            return safe
 
     def list_spaces(self) -> list:
         """List available spaces and read their memory counts without model work."""
@@ -125,6 +191,7 @@ class Spaces:
         else:
             root = _ROOT / "voicemem_memoryspace"
             directories = [(d, d.name) for d in sorted(p for p in root.glob("*") if p.is_dir())]
+        active = self.ACTIVE_SPACE
         out = []
         for d, name in directories:
             n = 0
@@ -138,12 +205,16 @@ class Spaces:
             except Exception:
                 n = 0
             out.append({"id": name, "name": name, "count": n,
-                        "active": name == self.ACTIVE_SPACE, "open": name in self._SPACES,
+                        "active": name == active, "open": name in self._SPACES,
                         "language": self.space_language(name), "fixed": fixed is not None})
         return out
 
     def create_space(self, name: str, language: str = "") -> dict:
         """Create and warm an empty space; reject an existing nonempty space."""
+        with self._space_lock():
+            return self._create_space(name, language)
+
+    def _create_space(self, name: str, language: str) -> dict:
         if self._fixed_memory_root() is not None:
             raise ValueError("--memory_root 指定的是单个记忆库，不能新建空间")
         d, safe = self.space_dir(name)

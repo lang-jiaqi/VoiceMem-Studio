@@ -20,11 +20,13 @@ from voicemem.utils.audio.asr import OfflineASR
 class FinalAsrConfigTests(unittest.TestCase):
     def test_studio_accepts_both_input_languages_and_cantonese(self):
         from studio.core.utils.asr import initialize
+        initialize._final_model.cache_clear()
+        self.addCleanup(initialize._final_model.cache_clear)
         with patch.object(initialize, "OfflineASR") as create:
             initialize.final()
         create.assert_called_once_with(
             str(initialize.MODELS / "asr/sensevoice-int8"),
-            allowed_languages=("zh", "en", "yue"))
+            allowed_languages=("zh", "en", "yue"), provider=initialize.cpu_provider())
 
     def test_int8_directory_is_the_zero_config_default(self):
         name = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"

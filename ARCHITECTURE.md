@@ -217,6 +217,12 @@ Native command-line startup also binds loopback by default. The CUDA container
 explicitly binds `0.0.0.0` inside its isolated network namespace so Compose can
 publish the service on the host's loopback address.
 
+The transport checks browser `Origin` headers before all WebSocket handshakes
+and state-changing HTTP requests. Explicit origins must match the request's
+HTTP(S) scheme, host and effective port; opaque or malformed origins are rejected.
+Native clients without an Origin header remain supported. These checks do not
+replace deployment authentication or proxy TLS configuration.
+
 Apple Silicon retains native MLX deployment through the existing launch script;
 `studio/scripts/setup_mlx.sh` prepares the matching environment without replacing
 an existing environment or credential file. No Metal-in-Linux-container path or
@@ -330,6 +336,9 @@ replacement process starts.
 `/classic` retains the older demo. The desktop opens this same root and keeps its
 connection configuration window hidden on a successful startup; connection errors
 reveal configuration. Desktop clients require the updated backend assets.
+The classic demo inserts transcripts, perception tags and recalled memories as
+DOM text nodes, preserving its caret and graph controls without interpreting
+user or memory content as HTML.
 Electron owns the initial and style-navigation window bounds through
 `studio/apps/window-layout.cjs`. Home opens at 720×560 and conversation views
 prefer 1440×920; both are centered and constrained to the current display's work
@@ -372,6 +381,15 @@ lists are page-local and reset on refresh; opening a previous list item starts a
 new backend context for subsequent input. Both styles let each new chat choose a
 Memory Space. Chats retain that choice and share the Space's persistent memory;
 switching chats selects the corresponding backend Space before further turns.
+The browser serializes selection requests, including recovery after a failed
+request, and supplies its selected base language when creating a new Space.
+Existing Space metadata is never rewritten by a display-language change.
+Studio serializes Space creation, opening and switching in its off-loop worker
+boundary. Preparation leaves the prior selection visible; a successful switch
+publishes an immutable `SpaceSelection` containing name, memory instance,
+language and local reply owner. Reply, speculation, continuation and visualization
+consumers capture the matching name/instance pair through `capture_space`. Legacy scalar attributes
+remain available, while active reads do not wait for native model preparation.
 The technical and digital-human pages render assistant Markdown
 through one DOM-only preview, including headings, emphasis, lists, quotes, links,
 tables, code and delimited LaTeX math. Math is recognized before Markdown escapes
@@ -444,6 +462,9 @@ redraws when displayed content changes, including evidence or deletions. Its
 background canvas is redrawn on resize or view changes rather than every frame.
 
 The technical page's liquid orb owns its WebGPU device and animation loop.
+The conversation page exposes only live phases. Manual animation controls live
+in `tests/manual/orb-preview.html`, using the same renderer without a conversation
+or microphone connection.
 The shared client's live phases drive its actions: listening keeps the interior
 flow active even between microphone level reports; actual playback drives a
 vertical speaking rhythm. Either thinking phase lowers the orb and holds it
@@ -457,13 +478,10 @@ retains the current voice state and motion parameters. Unsupported WebGPU and
 shader compilation errors do not retry. Hidden, offscreen and settings views
 pause frames and pending retries. Page departure releases the device and uniform
 buffer, invalidates asynchronous initialization callbacks, and a restored page
-reinitializes on demand. The shader and voice-state motions are unchanged, but
-rendering is capped at 30 frames per second during active states/transitions and
-12 when settled at idle. Render density is capped at 1.25 and dimensions at 384
-pixels. A queue-completion fence permits only one outstanding submission from
-the orb; stalled GPU work does not accumulate animation frames. Stale completion
-callbacks cannot restart an abandoned device or hidden view. Adapter selection
-requests low power, and phase text follows the UI language.
+reinitializes on demand. Rendering follows the browser's animation frames without
+waiting for per-frame GPU completion. Render density is capped at 2 and canvas
+dimensions respect the device's texture limit. Adapter selection uses the browser
+default, and phase text follows the UI language.
 
 The panels show real per-turn recall results without demo records or rule replies. A local
 configuration page owns connection IPC. The Studio renderer has only the model-service
@@ -888,6 +906,14 @@ Each connection owns its decoder stream and cumulative text; model prototypes
 are shared across accounts and Spaces. Native streaming decodes report CPU ONNX
 runtime through the engine's audio service. Stateless final-ASR weights are
 reused as well. Deepgram and injected provider contracts remain independent.
+The two recommended recognizers use a packaged Sherpa CPU provider configuration
+that stops ONNX worker spinning after the last native `Run` returns and resumes
+it for the next run. Inference-time spinning and existing thread counts remain
+unchanged. Full streaming audio, decoder state, model parameters and final-ASR
+preference windows are retained. Studio requires Sherpa 1.13.8 or newer for
+forwarding these session options; the SDK's recognizers default to plain CPU
+unless a provider is supplied explicitly. Missing configuration fails before
+entering the native loader, and the configuration is included in Python wheels.
 X-ASR is Studio's only built-in streaming model. No local fallback or model
 selection is driven by `VOICEMEM_ASR`, `STUDIO_ASR_DEVICE` or
 `VOICEMEM_ASR_DEVICE`. The legacy `--asr-device` flag remains accepted for

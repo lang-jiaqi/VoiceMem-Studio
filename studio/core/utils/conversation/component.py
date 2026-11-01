@@ -296,8 +296,10 @@ class Conversation:
     def reset_output_state(self, pending, timeline, reply_state, *, memory_vm=None, context_space='') -> None:
         for task in self.acoustic_tasks:
             task.cancel()
-        memory_vm = memory_vm or self.agent.vm
-        context_space = context_space or self.agent.ACTIVE_SPACE
+        from studio.core.utils.spaces.component import capture_space
+        selected_space, selected_vm = capture_space(self.agent)
+        memory_vm = memory_vm or selected_vm
+        context_space = context_space or selected_space
         timeline.context_managed = True
         self.turn.update(t0=0.0, until=0.0, speech_end=pending.speech_end, play_started=False, reply=reply_state, timeline=timeline, measure_started=0.0, measure_recorded=False)
         self.turn.update(context_space=context_space, memory_vm=memory_vm)
@@ -530,8 +532,8 @@ class Conversation:
         result = st.memory if st.memory is not None else empty_result()
         emotion = self.owner.get('emotion', '')
         route = st.route
-        context_space = self.agent.ACTIVE_SPACE
-        memory_vm = self.agent.vm
+        from studio.core.utils.spaces.component import capture_space
+        context_space, memory_vm = capture_space(self.agent)
         routing_history = self.agent._SESSION_CONTEXT.messages(self.context_session, context_space, window=self.agent.HISTORY_TURNS)
         timeline = AudioTimeline(prebuffer_seconds=0.16, rate_estimator=self.speech_rate, track_delivery=True)
         timeline.context_managed = True
@@ -718,16 +720,17 @@ class Conversation:
 
     async def defer_unfinished_reply(self, pending):
         """Emit a short acknowledgement and arm the delayed continuation prompt."""
+        from studio.core.utils.spaces.component import capture_space
+        space, memory_vm = capture_space(self.agent)
         self.input_continuation.defer(
-            pending, AudioTimeline(track_delivery=True), self.agent.vm,
-            self.agent.ACTIVE_SPACE, self.owner)
+            pending, AudioTimeline(track_delivery=True), memory_vm, space, self.owner)
         ack = self.cached_ack(pending)
         if ack:
             await self.emit_filler(*ack)
-        task = asyncio.create_task(self.run_unfinished_followup(pending, self.agent.vm, self.agent.ACTIVE_SPACE))
+        task = asyncio.create_task(self.run_unfinished_followup(pending, memory_vm, space))
         self.unfinished_wait['pending'] = pending
-        self.unfinished_wait['space'] = self.agent.ACTIVE_SPACE
-        self.unfinished_wait['memory_vm'] = self.agent.vm
+        self.unfinished_wait['space'] = space
+        self.unfinished_wait['memory_vm'] = memory_vm
         self.unfinished_wait['task'] = task
         self.turn['continuation_task'] = task
         task.add_done_callback(self.reply_done)
@@ -781,7 +784,8 @@ class Conversation:
 
     async def route(self, pending):
         self.languages = getattr(self, 'languages', {})
-        space = self.agent.ACTIVE_SPACE
+        from studio.core.utils.spaces.component import capture_space
+        space, memory_vm = capture_space(self.agent)
         pending.language = pending.language or detect_language(
             pending.text, self.languages.get(space, self.agent.space_language(space)))
         self.languages[space] = pending.language
@@ -791,10 +795,10 @@ class Conversation:
             await self.drop_early('记忆空间已改变')
         if self.early['task'] is not None and pending.early_ok and (not self.agent._early_reply_compatible(self.early['text'], pending.text)):
             await self.drop_early('EOT 快照后还有实质续话，改用完整文本回复')
-        routing_history = self.agent._SESSION_CONTEXT.messages(self.context_session, self.agent.ACTIVE_SPACE, window=self.agent.HISTORY_TURNS)
+        routing_history = self.agent._SESSION_CONTEXT.messages(self.context_session, space, window=self.agent.HISTORY_TURNS)
         if hasattr(self, 'self_harness'):
             pending.self_harness_profile = self.self_harness.snapshot()
-        thinking_task = asyncio.create_task(self.agent.route_pending_thinking(pending, self.agent.vm, history=routing_history))
+        thinking_task = asyncio.create_task(self.agent.route_pending_thinking(pending, memory_vm, history=routing_history))
         self.stop_prewarm()
         try:
             if self.early['task'] is not None and pending.early_ok:
@@ -869,8 +873,8 @@ class Conversation:
         await self.drop_early('这一轮没赌成' if self.early['task'] else '')
         await thinking_task
         reply_state = {'text': ''}
-        context_space = self.agent.ACTIVE_SPACE
-        memory_vm = self.agent.vm
+        from studio.core.utils.spaces.component import capture_space
+        context_space, memory_vm = capture_space(self.agent)
         timeline = AudioTimeline(prebuffer_seconds=0.16, rate_estimator=self.speech_rate, track_delivery=True)
         self.reset_output_state(pending, timeline, reply_state, memory_vm=memory_vm, context_space=context_space)
         self_harness = getattr(self, 'self_harness', None)
@@ -935,12 +939,12 @@ class Conversation:
         if self.opening_started:
             return
         self.opening_started = True
-        context_space = self.agent.ACTIVE_SPACE
+        from studio.core.utils.spaces.component import capture_space
+        context_space, memory_vm = capture_space(self.agent)
         if (self.hearing() or self.prewarm['closed']
                 or self.agent._SESSION_CONTEXT.messages(
                     self.context_session, context_space, window=1)):
             return
-        memory_vm = self.agent.vm
         language = getattr(self, 'base_language', '') or self.agent.space_language(context_space)
         pending = Pending(opening_prompt(language), '', empty_result(),
                           spoken=False, route=gate.SHALLOW, reply_mode=DIRECT,

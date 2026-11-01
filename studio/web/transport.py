@@ -6,13 +6,14 @@ from pathlib import Path
 
 import anyio
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from studio.web.pet_bridge import PetHub, PetSupervisor, TeeSocket, loopback_ws_url
 from studio.core.voicemem import shared_embed_model
+from studio.web.origin import same_origin
 
 from voicemem.leftbrain.local_e5_embedder import LocalE5Embedder, shared_e5  # noqa: F401
 from voicemem.leftbrain.local_embedder import (  # noqa: F401
@@ -198,8 +199,17 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
     title = title or make_title_generator()
     pet, pet_hub = PetSupervisor(), PetHub()
 
+    @app.middleware("http")
+    async def check_browser_origin(request: Request, call_next):
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and not same_origin(request):
+            return JSONResponse({"detail": "Cross-origin requests are not allowed"}, status_code=403)
+        return await call_next(request)
+
     @app.websocket("/ws")
     async def ws(sock: WebSocket):
+        if not same_origin(sock):
+            await sock.close(code=1008)
+            return
         tee = TeeSocket(sock, pet_hub)
         try:
             await sock.accept()
@@ -215,6 +225,9 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
 
     @app.websocket("/ws-pet")
     async def ws_pet(sock: WebSocket):
+        if not same_origin(sock):
+            await sock.close(code=1008)
+            return
         await sock.accept()
         pet_hub.add(sock)
         try:
@@ -229,6 +242,9 @@ def build_app(mode, session, classify, snapshot=None, audio_of=None, spaces=None
     @app.websocket("/ws/memories")
     async def ws_memories(sock: WebSocket):
         """Observe one captured Space without opening a conversation or microphone."""
+        if not same_origin(sock):
+            await sock.close(code=1008)
+            return
         await sock.accept()
         if memory_changes is None:
             await sock.close(code=1000)

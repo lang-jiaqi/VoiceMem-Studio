@@ -1,7 +1,19 @@
 """Native VoiceMem recognizers; worker and epoch ownership stay in VoiceStream."""
 from voicemem.utils.audio.asr import StreamingASR, OfflineASR
+from pathlib import Path
 import re
 import numpy as np
+
+
+def cpu_provider():
+    """Return packaged CPU options that stop worker spinning after each native run.
+
+    Raises FileNotFoundError when the required session configuration is absent.
+    """
+    config = Path(__file__).with_name("cpu.config").resolve()
+    if not config.is_file():
+        raise FileNotFoundError("Missing ASR CPU session configuration")
+    return f"cpu:{config}"
 
 
 class XASRStreamingASR(StreamingASR):
@@ -10,7 +22,8 @@ class XASRStreamingASR(StreamingASR):
     FINAL_PAD_SAMPLES = 12800
 
     def __init__(self, directory):
-        super().__init__(directory, prefer_int8=True, num_threads=1, model_type='zipformer2')
+        super().__init__(directory, prefer_int8=True, num_threads=1,
+                         model_type='zipformer2', provider=cpu_provider())
 
     def reset(self):
         super().reset()

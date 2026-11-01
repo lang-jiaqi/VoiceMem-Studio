@@ -58,6 +58,8 @@ python -m http.server 8000 --bind 127.0.0.1
 
 在浏览器打开 `http://127.0.0.1:8000/tests/manual/markdown-typography.html`，检查不同界面与视口下的 Markdown 字体。此页面属于人工检查，不计入自动测试通过数量。
 
+`http://127.0.0.1:8000/tests/manual/orb-preview.html` 用于预览语音球各阶段的动作，不连接模型或麦克风。正式对话界面只跟随真实会话状态。
+
 ## 维护
 
 - 新用例放到对应功能分组；共用夹具放在 `helpers/`，不从另一个测试文件导入夹具。

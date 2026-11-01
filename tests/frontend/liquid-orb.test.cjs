@@ -207,25 +207,28 @@ test('reduced motion keeps all live states centered and does not spin continuous
   }
 });
 
-test('rendering has a bounded frame and pixel budget on a high refresh Retina display', async () => {
+test('rendering follows display frames at Retina density within the GPU texture limit', async () => {
   const f=fixture();await flush();f.window.liquidOrb.listening();
-  for(let time=100;time<=1100;time+=1000/120)await f.frame(time);
-  assert.ok(f.devices[0].submissions<=31);
-  assert.equal(f.canvas.width,350);assert.equal(f.canvas.height,350);
+  for(let frame=0;frame<120;frame++)await f.frame(100+frame*1000/120);
+  assert.equal(f.devices[0].submissions,120);
+  assert.equal(f.canvas.width,560);assert.equal(f.canvas.height,560);
   f.window.liquidOrb.setState('idle');await f.advance(2000);
-  const before=f.devices[0].submissions;await f.advance(1000);
-  assert.ok(f.devices[0].submissions-before<=13);
+  const before=f.devices[0].submissions;await f.frame(3300);
+  assert.equal(f.devices[0].submissions,before+1);
   f.canvas.clientWidth=f.canvas.clientHeight=1200;await f.advance(100);
-  assert.equal(f.canvas.width,384);assert.equal(f.canvas.height,384);
+  assert.equal(f.canvas.width,2400);assert.equal(f.canvas.height,2400);
+  f.canvas.clientWidth=f.canvas.clientHeight=3000;await f.advance(100);
+  assert.equal(f.canvas.width,4096);assert.equal(f.canvas.height,4096);
 });
 
-test('a busy GPU never accumulates orb submissions and resumes the latest state', async () => {
+test('animation does not wait for a per-frame GPU completion promise', async () => {
   const pending=deferred(),f=fixture({pendingGPU:pending});await flush();await f.frame(100);
-  f.window.liquidOrb.listening();await f.advance(500);
-  assert.equal(f.devices[0].submissions,1);assert.equal(f.frames.size,0);
-  pending.resolve();await flush();await f.frame(700);
-  assert.equal(f.devices[0].submissions,2);
+  f.window.liquidOrb.listening();await f.frame(116);await f.frame(132);
+  assert.equal(f.devices[0].submissions,3);assert.equal(f.frames.size,1);
   assert.equal(f.window.liquidOrb.getState(),'listening');
+  f.event('settings-open');await f.frame(148);
+  assert.equal(f.devices[0].submissions,3);assert.equal(f.frames.size,0);
+  pending.resolve();await flush();assert.equal(f.frames.size,0);
 });
 
 test('live phase labels follow the interface language', async () => {

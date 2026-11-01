@@ -236,7 +236,9 @@ with warnings.catch_warnings(), tempfile.TemporaryDirectory() as temporary:
                      "studio/resources/", "studio/models/", "prompt/logs/",
                      "voicemem_memoryspace/", "results/")
         self.assertFalse([file for file in self.metadata["files"]
-                          if file.startswith(forbidden)])
+                          if file.startswith(forbidden)
+                          and file != "studio/apps/component-catalog.json"])
+        self.assertIn("studio/apps/component-catalog.json", self.metadata["files"])
 
 
 if __name__ == "__main__":
