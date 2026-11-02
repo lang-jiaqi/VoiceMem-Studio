@@ -162,15 +162,14 @@ class Reply:
         from studio.core.utils.tts.buffering import PCMBuffer
         from studio.web.audio_flow import PlaybackBudget
         timeline.delivery_budget = PlaybackBudget()
-        from voicemem.lang import detect_language
         language = getattr(pending, "language", "") or getattr(self, "SPACE_LANG", "zh")
         control = {"head": True, "buf": ""}
         private_control = PrivateControlFilter()
         tone = {"tag": "", "head": True, "buf": ""}
-        from studio.core.utils.tts.markdown import MarkdownSpeech
+        from studio.core.utils.tts.markdown import MarkdownSpeech, prose_language
         from studio.core.utils.contracts.component import SpeechSynthesisError
         speech_markdown = MarkdownSpeech(
-            language, language_resolver=lambda: detect_language(reply, language, keep_short=False))
+            language, language_resolver=lambda: prose_language(reply, language))
         logged_instruction = object()
 
         qwen_voice = is_qwen36(getattr(self, "REPLY", None))
@@ -178,7 +177,7 @@ class Reply:
         def _synth_one(seg, text_start):
             nonlocal logged_instruction
             import json
-            segment_language = detect_language(seg, speech_markdown.language, keep_short=False)
+            segment_language = speech_markdown.segment_language(seg, text_start)
             segment_base = self._speak_base_env or self._by_lang(self._SPEAK_BASE, segment_language)
             from studio.harness.prompts import resolve
             segment_base = resolve(f"tts_{segment_language}", segment_base, prompt_overrides)

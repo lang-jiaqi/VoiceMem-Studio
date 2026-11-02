@@ -985,8 +985,12 @@ language estimate cannot be adopted. Partial recognition may select an eligible
 backchannel bank but does not commit the session's language fallback.
 
 Reply text follows the shared persona and user context naturally. TTS selects
-instructions from the actual generated segment, so an explicit user request to
+instructions from the actual generated prose, so an explicit user request to
 answer in another language works without a forced output-language control field.
+Studio's speech projection excludes marked formulas and code from language
+evidence, including unfinished structures in a streamed reply. Projected variables
+and viewing cues retain those structured spans through segmentation; their Latin
+letters cannot independently switch the TTS instruction language.
 Tone labels stay canonical; English tone and speech-rate instructions are
 localized at the speech boundary. Backchannel caches are keyed by language and
 voice. Missing matching clips stay silent rather than playing the other language
@@ -1558,7 +1562,9 @@ labelled `math`, `latex` or `tex` use formula cues. Delimited math (`$...$`,
 lookahead: short numeric expressions become spoken operators, short coordinate
 tuples become comma-separated values without delimiters, and complex
 expressions become viewing cues. Recognizable complex syntax can release a cue
-before the closing delimiter arrives. Inline code retains short identifiers and
+before the closing delimiter arrives. Pure numeric bodies longer than this
+lookahead use the bounded numeric reader, retaining every digit even inside math
+delimiters. Inline code retains short identifiers and
 simple expressions; long, multiline or symbol-dense snippets use an inline
 reference. Numeric expressions are parsed, never evaluated. Ordinary unmarked
 arithmetic remains unchanged, and currency text is preserved when distinguishable
@@ -1568,6 +1574,17 @@ in the generated prose language, falling back to the captured input language,
 without shared cross-session cue counters. Language detection reads the same
 accumulated reply lazily when a structured cue, arithmetic expression or TTS
 segment needs it; ordinary deltas do not repeatedly scan the growing reply.
+`studio/core/utils/tts/numbers.py` normalizes large standalone numbers in that
+speech projection, before sentence segmentation. Short ordinary numbers retain
+their provider reading. Larger integers use Chinese or English cardinal words
+through 16 digits; longer integers, explicit identifier contexts and leading-zero
+strings use grouped digit readings. Long decimal tails retain every digit,
+including zeros. No floating-point conversion, rounding or extra model request is
+used. The reader holds at most 256 numeric source characters and streams long
+digit tails incrementally. Cancellation discards pending digits. Numeric expansion
+keeps monotonic source boundaries, so display, history and heard-prefix ownership
+remain in the original Markdown. Local MLX, CUDA and injected speech providers
+receive the same projected text; their inference settings are unchanged.
 Repeated
 block cues require 64 new prose characters and are capped at three per type per
 reply; adjacent blocks do not each add another announcement. Short inline

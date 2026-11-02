@@ -7,18 +7,26 @@ import string
 from dataclasses import dataclass
 from typing import Callable
 
+from .numbers import NumberReader, number_text
+
 
 _PREFIX = re.compile(r"^ {0,3}(?:#{1,6}[ \t]+|>[ \t]?|[-+*][ \t]+|\d{1,9}[.)][ \t]+)")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _RULE = re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*(?:\n|$)")
 _LINK = re.compile(r"^!?\[([^\]\n]{0,256})\]\(")
 _TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
-_NUMBER = r"-?\d+(?:\.\d+)?"
+_NUMBER = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
 _MATH_ATOM = rf"(?:{_NUMBER}|[A-Za-z][A-Za-z0-9_]{{0,15}})"
 _MATH_TUPLE = re.compile(rf"^\s*{_MATH_ATOM}(?:\s*,\s*{_MATH_ATOM}){{1,7}}\s*$")
 _SIMPLE_MATH = re.compile(rf"^({_NUMBER})(?:\s*([+\-*/×÷=])\s*({_NUMBER})){{1,3}}$")
 _MATH_SYNTAX = re.compile(r"\\[A-Za-z]|[=+*/^_{}<>∑∫√×÷]|[A-Za-z]\s*-")
 _COMPLEX_MATH = re.compile(r"\\[A-Za-z]|[{}^∑∫]|[A-Za-z]\w*\(")
+_LANGUAGE_STRUCTURES = re.compile(
+    r"(?P<fence>`{3,}|~{3,})[\s\S]*?(?:(?P=fence)|\Z)"
+    r"|(?P<ticks>`+)[^\n]*?(?:(?P=ticks)|\Z)"
+    r"|(?<!\\)\$\$[\s\S]*?(?:\$\$|\Z)"
+    r"|(?<!\\)\$[^$\n]*(?:\$|(?=\n)|\Z)"
+    r"|\\\[[\s\S]*?(?:\\\]|\Z)|\\\([\s\S]*?(?:\\\)|\Z)")
 _CUES = {
     "zh": {
         "code": ("代码放在对话里了。", "这段实现可以在对话里查看。", "具体代码我写在对话里。", "代码部分可以看对话。", "这段代码留在界面里供你查看。"),
@@ -35,22 +43,31 @@ _CUES = {
 }
 
 
+def prose_language(text: str, fallback: str = "zh") -> str:
+    """Infer speech language without complete or still-streaming marked structures."""
+    from voicemem.lang import detect_language
+    return detect_language(_LANGUAGE_STRUCTURES.sub(" ", text), fallback, keep_short=False)
+
+
 def _simple_math(text: str, language: str) -> str | None:
     """Speak bounded numbers, identifiers and tuples without evaluating output."""
     text = text.strip()
     if (text[:1] + text[-1:] in ("()", "[]")
             and _MATH_TUPLE.fullmatch(text[1:-1])):
         return ("，" if language == "zh" else ", ").join(
-            item.strip() for item in text[1:-1].split(","))
+            number_text(item.strip(), language)[0] for item in text[1:-1].split(","))
     if re.fullmatch(_NUMBER, text) or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,15}", text):
-        return text
+        return number_text(text, language)[0]
     if not _SIMPLE_MATH.fullmatch(text):
         return None
     words = ({"+": "加", "-": "减", "*": "乘以", "/": "除以", "×": "乘以", "÷": "除以", "=": "等于"}
              if language == "zh" else
              {"+": " plus ", "-": " minus ", "*": " times ", "/": " divided by ", "×": " times ", "÷": " divided by ", "=": " equals "})
-    number = lambda value: (("负" if language == "zh" else "negative ") + value[1:]
-                            if value.startswith("-") else value)
+    def number(value):
+        spoken = number_text(value, language)[0]
+        if spoken != value or not value.startswith('-'):
+            return spoken
+        return ("负" if language == "zh" else "negative ") + value[1:]
     first = re.match(_NUMBER, text)
     spoken = number(first.group())
     for operation in re.finditer(rf"([+\-*/×÷=])\s*({_NUMBER})", text[first.end():]):
@@ -125,10 +142,17 @@ class MarkdownSpeech:
         self.math_start = 0
         self.math_inline = False
         self.math_skipped = False
+        self._math_numbers: NumberReader | None = None
+        self._math_number_language = self._language
         self.emphasis: list[str] = []
         self.link_depth = 0
         self.table_rows = False
         self.heading = False
+        self._numbers = NumberReader()
+        self._number_language: str | None = None
+        self._number_context = ""
+        self._speech_offset = 0
+        self._structured_spans: list[tuple[int, int]] = []
 
     @property
     def language(self) -> str:
@@ -139,6 +163,19 @@ class MarkdownSpeech:
     @language.setter
     def language(self, value: str) -> None:
         self._language = "en" if value == "en" else "zh"
+
+    def segment_language(self, text: str, start: int) -> str:
+        """Select instructions from segment prose, excluding projected structures."""
+        from voicemem.lang import detect_language
+        masked = list(text)
+        stop = start + len(text)
+        for begin, end in self._structured_spans:
+            if begin >= stop:
+                break
+            if end > start:
+                left, right = max(0, begin - start), min(len(text), end - start)
+                masked[left:right] = " " * (right - left)
+        return detect_language("".join(masked), self.language, keep_short=False)
 
     def _cue(self, kind: str, *, inline: bool = False) -> str:
         """Rotate per-reply wording and avoid narrating every adjacent block."""
@@ -156,10 +193,15 @@ class MarkdownSpeech:
         output, ends = [], []
         previous_end = self.offset
 
-        def consume(count, text=None, positions=None, *, prose=True):
+        def consume(count, text=None, positions=None, *, prose=True, structured=False, spans=(),
+                    numeric=False):
             nonlocal previous_end
             raw = self.pending[:count]
             if text is not None:
+                begin = self._speech_offset + len(output)
+                self._structured_spans.extend(
+                    [(begin, begin + len(text))] if structured and text else
+                    [(begin + left, begin + right) for left, right in spans])
                 if not output and text:
                     previous_end = self.offset
                 output.extend(text)
@@ -172,6 +214,10 @@ class MarkdownSpeech:
             self.pending = self.pending[count:]
             self.offset += count
             if raw:
+                if not numeric:
+                    self._numbers.mode, self._numbers.count = '', 0
+                    self._number_language = None
+                self._number_context = (self._number_context + raw)[-48:]
                 self.previous = raw[-1]
                 self.line_start = raw.endswith("\n")
                 if self.line_start:
@@ -181,15 +227,16 @@ class MarkdownSpeech:
             spoken = self._cue(kind, inline=inline)
             begin = max(self.offset, start or 0)
             positions = [begin] * max(0, len(spoken) - 1) + ([self.offset + count] if spoken else [])
-            consume(count, spoken, positions, prose=False)
+            consume(count, spoken, positions, prose=False, structured=True)
 
         def math_finished(count):
             spoken = _simple_math(self.math_content, self.language)
             if spoken is not None:
                 positions = [self.offset] * max(0, len(spoken) - 1) + ([self.offset + count] if spoken else [])
-                consume(count, spoken, positions)
+                consume(count, spoken, positions, structured=True)
             elif self.math_open == "$" and not _MATH_SYNTAX.search(self.math_content):
-                literal = self.math_open + self.math_content + (self.math_close if count > len(self.math_content) else "")
+                content = MarkdownSpeech(self.language).feed(self.math_content, final=True).text
+                literal = self.math_open + content + (self.math_close if count > len(self.math_content) else "")
                 consume(count, literal, [self.offset + count] * len(literal))
             else:
                 reference(count, "math", inline=self.math_inline, start=self.math_start)
@@ -197,18 +244,22 @@ class MarkdownSpeech:
             self.math_content = ""
 
         def math_literal(count):
-            spoken = self.math_open + self.math_content
+            content = MarkdownSpeech(self.language).feed(self.math_content, final=True).text
+            spoken = self.math_open + content
             consume(count, spoken, [self.offset + count] * len(spoken))
             self.math_close = ""
             self.math_content = ""
 
         def table_row(line, count):
-            spoken, positions = [], []
+            spoken, positions, structured = [], [], []
             spans = _table_cells(line)
             for index, (start, end) in enumerate(spans):
                 cell = line[start:end]
                 leading = len(cell) - len(cell.lstrip())
-                parsed = MarkdownSpeech(self.language, cue_offset=self.cue_offset).feed(cell.strip(), final=True)
+                child = MarkdownSpeech(self.language, cue_offset=self.cue_offset)
+                parsed = child.feed(cell.strip(), final=True)
+                structured.extend((len(spoken) + begin, len(spoken) + end)
+                                  for begin, end in child._structured_spans)
                 spoken.extend(parsed.text)
                 positions.extend(self.offset + start + leading + end for end in parsed.source_ends)
                 if index < len(spans) - 1:
@@ -217,11 +268,36 @@ class MarkdownSpeech:
             if count > len(line):
                 spoken.append("\n")
                 positions.append(self.offset + count)
-            consume(count, "".join(spoken), positions)
+            consume(count, "".join(spoken), positions, spans=structured)
 
         while self.pending:
             text = self.pending
             if self.math_close:
+                if self._math_numbers is not None:
+                    if text.startswith(self.math_close):
+                        consume(len(self.math_close))
+                        self.math_close, self._math_numbers = "", None
+                        continue
+                    if not final and self.math_close.startswith(text):
+                        break
+                    if text[0].isspace():
+                        consume(len(text) - len(text.lstrip()))
+                        continue
+                    end = text.find(self.math_close)
+                    content = text[:end] if end >= 0 else text
+                    number = self._math_numbers.read(
+                        content, self._math_number_language, final=final or end >= 0)
+                    if number is not None:
+                        count, spoken, positions = number
+                        if not count:
+                            break
+                        consume(count, spoken or None, [self.offset + end for end in positions],
+                                structured=True)
+                        continue
+                    self._math_numbers = None
+                    reference(0, "math", inline=self.math_inline, start=self.math_start)
+                    self.math_skipped = True
+                    continue
                 if self.math_skipped:
                     if text.startswith(self.math_close):
                         consume(len(self.math_close))
@@ -234,6 +310,11 @@ class MarkdownSpeech:
                 end = text.find(self.math_close)
                 newline = text.find("\n") if self.math_open == "$" else -1
                 content = text[:end] if end >= 0 else text[:256]
+                if (len(text) > 256 and (end < 0 or end > 256)
+                        and re.fullmatch(r'[+-]?[0-9][0-9,.]*', content[:256])):
+                    self._math_numbers = NumberReader()
+                    self._math_number_language = self.language
+                    continue
                 if _COMPLEX_MATH.search(content):
                     reference(0, "math", inline=self.math_inline, start=self.math_start)
                     self.math_skipped = True
@@ -286,7 +367,7 @@ class MarkdownSpeech:
                                      if spoken == content else [self.offset] * len(spoken))
                         if positions:
                             positions[-1] = self.offset + marker.end()
-                        consume(marker.end(), spoken, positions)
+                        consume(marker.end(), spoken, positions, structured=True)
                     self.inline_ticks = ""
                 elif len(text) > 48 or "\n" in text:
                     trailing = len(text) - len(text.rstrip("`"))
@@ -294,7 +375,8 @@ class MarkdownSpeech:
                     reference(min(49, safe), "code", inline=True, start=self.inline_start)
                     self.inline_skipped = True
                 elif final:
-                    consume(len(text), text, range(self.offset + 1, self.offset + len(text) + 1))
+                    consume(len(text), text, range(self.offset + 1, self.offset + len(text) + 1),
+                            structured=True)
                     self.inline_ticks = ""
                 else:
                     break
@@ -424,8 +506,10 @@ class MarkdownSpeech:
                 if link:
                     label = link.group(1)
                     base = self.offset + link.start(1)
-                    spoken = MarkdownSpeech(self.language, cue_offset=self.cue_offset).feed(label, final=True)
-                    consume(link.end(), spoken.text, [base + end for end in spoken.source_ends])
+                    child = MarkdownSpeech(self.language, cue_offset=self.cue_offset)
+                    spoken = child.feed(label, final=True)
+                    consume(link.end(), spoken.text, [base + end for end in spoken.source_ends],
+                            spans=child._structured_spans)
                     self.link_depth = 1
                     continue
                 closing = text.find("]")
@@ -454,9 +538,21 @@ class MarkdownSpeech:
                     continue
                 consume(size, marker, range(self.offset + 1, self.offset + size + 1))
                 continue
+            if self._numbers.mode or char.isascii() and (char.isdigit() or char in '+-'):
+                if self._number_language is None:
+                    self._number_language = self.language
+                number = self._numbers.read(text, self._number_language, previous=self.previous,
+                                            context=self._number_context, final=final)
+                if number is not None:
+                    count, spoken, positions = number
+                    if not count:
+                        break
+                    consume(count, spoken or None, [self.offset + end for end in positions], numeric=True)
+                    continue
             consume(1, char)
         if final:
             self.math_close = ""
             self.inline_ticks = ""
+        self._speech_offset += len(output)
         return SpeechText("".join(output), tuple(ends), self.offset,
                           previous_end if output else self.offset)
